@@ -14,6 +14,7 @@ use surge_orchestrator::engine::{Engine, EngineConfig};
 use surge_persistence::runs::Storage;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
+use tracing::instrument::WithSubscriber;
 
 async fn request(socket: &Path, command: Value) -> Value {
     request_frame(
@@ -150,14 +151,17 @@ async fn daemon_gate_answer_requires_durable_acceptance_before_success_in_home(h
         session_commit_check: None,
     });
     let (engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     request(&socket, serde_json::to_value(start).unwrap()).await;
     let path = home
         .path()
         .join("runs")
         .join(attempt.run.to_string())
         .join("events.sqlite");
-    let conn = rusqlite::Connection::open(path).unwrap();
+    wait_for_provider_session(home, &storage, attempt.run).await;
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .unwrap();
     let original = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let rows: Vec<Vec<u8>> = conn
@@ -202,6 +206,8 @@ async fn daemon_gate_answer_requires_durable_acceptance_before_success_in_home(h
             .await;
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
+        settle_fixture_wire(bridge).await;
         panic!("daemon acknowledged an answer whose durable append was rejected: {rejected}");
     }
     assert_eq!(
@@ -245,6 +251,8 @@ async fn daemon_gate_answer_requires_durable_acceptance_before_success_in_home(h
     .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -310,7 +318,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements_
     );
     cancel.cancel();
     server.await.unwrap().unwrap();
-    drop(engine);
+    drop(unwrap_settled_fixture_owner(engine).await);
     drop(storage);
     // Reopen the registry and create a genuinely new daemon/engine owner.
     let storage = Storage::open(home.path()).await.unwrap();
@@ -360,7 +368,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements_
             if let Some(prompt) = bridge.last_prompt().await {
                 break prompt;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -399,6 +407,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements_
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 async fn reserve_fixture(
@@ -624,18 +633,27 @@ async fn cold_host_with_config(
     } else {
         format!("cold-{endpoint}.sock")
     });
-    let mut server = tokio::spawn(surge_daemon::run_runs_only(
-        surge_daemon::ServerConfig {
-            socket_path: socket.clone(),
-            max_active: 8,
-            max_queue: 2,
-        },
-        Arc::new(LocalEngineFacade::new(engine.clone())),
-        surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage),
-        Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
-        Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
-        cancel.clone(),
-    ));
+    let trace = std::fs::File::create(socket.with_extension("trace.log")).unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::sync::Mutex::new(trace))
+        .finish();
+    let mut server = tokio::spawn(
+        surge_daemon::run_runs_only(
+            surge_daemon::ServerConfig {
+                socket_path: socket.clone(),
+                max_active: 8,
+                max_queue: 2,
+            },
+            Arc::new(LocalEngineFacade::new(engine.clone())),
+            surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage),
+            Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
+            Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
+            cancel.clone(),
+        )
+        .with_subscriber(subscriber),
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if server.is_finished() {
@@ -657,6 +675,67 @@ async fn cold_host_with_config(
     .expect("cold host must accept a connection within its readiness deadline");
     (engine, cancel, server, socket)
 }
+async fn unwrap_settled_fixture_owner<T>(mut owner: Arc<T>) -> T {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match Arc::try_unwrap(owner) {
+            Ok(value) => return value,
+            Err(retained) => owner = retained,
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fixture owner still retained by {} actual tasks",
+            Arc::strong_count(&owner)
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn fixture_cleanup_waits_for_actual_retained_owner() {
+    let owner = Arc::new(());
+    let retained = owner.clone();
+    let mut settled = Box::pin(unwrap_settled_fixture_owner(owner));
+    assert!(futures::poll!(&mut settled).is_pending());
+    drop(retained);
+    settled.await;
+}
+
+async fn settle_fixture_wire(bridge: Arc<wire_bridge::WireBridge>) {
+    let bridge = unwrap_settled_fixture_owner(bridge).await;
+    bridge.bridge.shutdown().await.unwrap();
+}
+
+async fn wait_for_provider_session(home: &FixtureHome, storage: &Storage, run: surge_core::RunId) {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let wire = std::fs::read_to_string(home.path().join("commit-provider-wire.jsonl"))
+                .unwrap_or_default();
+            if provider_session_requested(&wire) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| panic!("accepted run must initialize its writer before requesting a provider session: {error}; attempt={:?}; wire={}", storage.work_items().for_run(run).map(|attempt| attempt.map(|attempt| (attempt.state, attempt.diagnostic))), bounded_child_log(&home.path().join("commit-provider-wire.jsonl"))));
+}
+
+fn provider_session_requested(wire: &str) -> bool {
+    wire.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| entry["operation"] == "new_session")
+}
+
+#[test]
+fn provider_readiness_requires_complete_new_session_receipt() {
+    assert!(!provider_session_requested(
+        "{\"operation\":\"new_session\""
+    ));
+    assert!(!provider_session_requested(r#"{"operation":"initialize"}"#));
+    assert!(provider_session_requested(r#"{"operation":"new_session"}"#));
+}
+
 async fn write_owned_startup(
     storage: &Arc<Storage>,
     attempt: &surge_core::work_item::WorkItemAttempt,
@@ -687,16 +766,16 @@ async fn write_owned_startup(
         .unwrap()
         .clone();
     let context = WorkItemContext::new(attempt.binding.clone(), requirements).unwrap();
+    let writer = storage
+        .create_run(attempt.run, &workspace.path, None)
+        .await
+        .unwrap();
     let artifact = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
         .put(
             attempt.run,
             "accepted_requirements",
             &serde_json::to_vec(context.requirements().unwrap()).unwrap(),
         )
-        .await
-        .unwrap();
-    let writer = storage
-        .create_run(attempt.run, &workspace.path, None)
         .await
         .unwrap();
     let mut events = vec![
@@ -769,22 +848,44 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
         reserve_fixture(home.path(), project.path(), true).await;
     write_owned_startup(&storage, &attempt, &workspace, true, true).await;
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (engine, cancel, server, _socket) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     let observed = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if bridge.last_prompt().await.is_some() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
     assert!(
         observed.is_ok(),
-        "cold resume diagnostic: {:?}; journal: {:?}",
-        storage.work_items().for_run(attempt.run).unwrap(),
-        storage.inspect_run(attempt.run).await.unwrap()
+        "cold resume diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        storage
+            .work_items()
+            .for_run(attempt.run)
+            .map(|value| value.map(|attempt| (attempt.state, attempt.diagnostic))),
+        storage
+            .inspect_run(attempt.run)
+            .await
+            .map(|inspection| match inspection.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =>
+                    events
+                        .into_iter()
+                        .rev()
+                        .take(32)
+                        .map(|event| (event.seq, event.kind))
+                        .collect::<Vec<_>>(),
+                surge_persistence::runs::inspection::RunDatabaseInspection::Absent => Vec::new(),
+            }),
+        storage
+            .work_items()
+            .execution_control(attempt.run)
+            .map(|value| value.map(|control| (control.state, control.generation))),
+        tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await,
+        server.is_finished(),
+        bounded_child_log(&socket.with_extension("trace.log"))
     );
 
     let prompt = tokio::time::timeout(Duration::from_secs(3), async {
@@ -838,6 +939,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -906,6 +1008,7 @@ async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains
     }
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
     assert_eq!(
         prompted,
         version == 12,
@@ -1003,7 +1106,7 @@ async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_
         .unwrap();
     }
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (_engine, cancel, server, socket) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge).await;
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert_eq!(
@@ -1060,8 +1163,20 @@ async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_
         storage.work_items().show(attempt.item).unwrap().usage.runs,
         1
     );
+    let stopped = engine
+        .stop_run(attempt.run, "fixture cleanup after retry assertions".into())
+        .await;
+    assert!(
+        match &stopped {
+            Ok(()) => true,
+            Err(surge_orchestrator::engine::EngineError::RunNotFound(run)) => *run == attempt.run,
+            Err(_) => false,
+        },
+        "fixture run stop failed: {stopped:?}"
+    );
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1151,7 +1266,7 @@ async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run_i
             if bridge.last_prompt().await.is_some() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1182,6 +1297,7 @@ async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run_i
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1466,7 +1582,7 @@ async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn_in_
     request(&first_socket, serde_json::to_value(start).unwrap()).await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while first_bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1506,6 +1622,8 @@ async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn_in_
     second_cancel.cancel();
     first_server.await.unwrap().unwrap();
     second_server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(first).await);
+    drop(unwrap_settled_fixture_owner(second).await);
     assert!(
         !duplicate,
         "a distinct live Engine resumed an already executing task after start returned"
@@ -1767,7 +1885,7 @@ async fn live_tracking_error_with_conflicting_terminals_retains_task_ownership_i
     request(&socket, serde_json::to_value(start).unwrap()).await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1860,7 +1978,7 @@ async fn child_execution_host_probe() {
     assert_eq!(response["method"], "work_item_ok", "{response}");
     tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -2015,6 +2133,15 @@ async fn wait_for_continue_confirmation(
     }
 }
 
+fn bounded_child_log(path: &Path) -> String {
+    use std::io::Read;
+    let mut log = String::new();
+    match std::fs::File::open(path).and_then(|file| file.take(16 * 1024).read_to_string(&mut log)) {
+        Ok(_) => log,
+        Err(error) => format!("child log unavailable: {error}"),
+    }
+}
+
 async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: bool) {
     let home = FixtureHome::new().unwrap();
     committed_continue_fixture_in_home(&home, crash_ack, successor_gate).await;
@@ -2037,6 +2164,7 @@ async fn committed_continue_fixture_in_home(
     )
     .unwrap();
     let barrier = home.path().join("control-close-barrier");
+    let ack_barrier = home.path().join("continuation-ack-barrier");
     let child_log = home.path().join("control-child.log");
     let child_output = std::fs::File::create(&child_log).unwrap();
     let mut child = ContinueFixtureChild(
@@ -2049,6 +2177,7 @@ async fn committed_continue_fixture_in_home(
             .env("SURGE_TEST_COMMIT_HOME", home.path())
             .env("SURGE_TEST_COMMIT_PROJECT", project.path())
             .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
+            .env("SURGE_CONTINUE_ACK_BARRIER", &ack_barrier)
             .stdout(child_output.try_clone().unwrap())
             .stderr(child_output)
             .spawn()
@@ -2058,8 +2187,9 @@ async fn committed_continue_fixture_in_home(
         while !barrier.with_extension("ready").exists() {
             if let Some(status) = child.try_wait().unwrap() {
                 panic!(
-                    "owned child exited {status}; retained log={}",
-                    child_log.display()
+                    "owned child exited {status}; log={}; contents={}",
+                    child_log.display(),
+                    bounded_child_log(&child_log)
                 );
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2070,8 +2200,9 @@ async fn committed_continue_fixture_in_home(
         let _ = child.kill();
         let _ = child.wait();
         panic!(
-            "owned child did not reach close barrier; retained log={}",
-            child_log.display()
+            "owned child did not reach close barrier; log={}; contents={}",
+            child_log.display(),
+            bounded_child_log(&child_log)
         );
     }
     let command = WorkItemCommand::Suspend {
@@ -2134,9 +2265,10 @@ async fn committed_continue_fixture_in_home(
         .join("events.sqlite");
     let conn = rusqlite::Connection::open(&path).unwrap();
     if let Some(after_journal_ack) = crash_ack {
-        // The fixture's SQLite computation exposes the real committed route /
-        // uncommitted continuation interval; assertions observe journal facts.
-        conn.execute_batch("CREATE TRIGGER fixture_ack_interval BEFORE INSERT ON events WHEN NEW.kind='RunContinued' BEGIN SELECT sum(x) FROM (WITH RECURSIVE delay(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM delay WHERE x<5000000) SELECT x FROM delay); END;").unwrap();
+        assert!(
+            !ack_barrier.with_extension("ready").exists(),
+            "ordinary Start and suspension must not enter restored Continue acknowledgement"
+        );
         let continue_operation = WorkItemOperationId::new();
         let continue_command = WorkItemCommand::Continue {
             operation_id: continue_operation,
@@ -2170,6 +2302,7 @@ async fn committed_continue_fixture_in_home(
                 ])
                 .env("SURGE_TEST_COMMIT_HOME", home.path())
                 .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+                .env("SURGE_CONTINUE_ACK_BARRIER", &ack_barrier)
                 .stdout(diagnostic.try_clone().unwrap())
                 .stderr(diagnostic)
                 .spawn()
@@ -2191,7 +2324,14 @@ async fn committed_continue_fixture_in_home(
                         |row| row.get(0),
                     )
                     .unwrap();
-                if routes == 1 {
+                if ack_barrier.with_extension("ready").exists() {
+                    assert_eq!(routes, 1, "barrier must follow the actual committed route");
+                    let generation: u64 =
+                        std::fs::read_to_string(ack_barrier.with_extension("ready"))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                    assert_eq!(generation, paused.generation + 1);
                     assert_eq!(
                         acknowledgements, 0,
                         "fixture failed to expose the pre-ack crash interval"
@@ -2206,6 +2346,7 @@ async fn committed_continue_fixture_in_home(
         let registry_barrier = if cut.is_ok() && after_journal_ack {
             let registry = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
             registry.execute_batch("BEGIN IMMEDIATE").unwrap();
+            std::fs::write(&ack_barrier, b"release").unwrap();
             let continued = tokio::time::timeout(
                 Duration::from_secs(8),
                 wait_for_event_count(&conn, "RunContinued", 1),
@@ -2250,15 +2391,13 @@ async fn committed_continue_fixture_in_home(
             .unwrap(),
             u64::from(after_journal_ack)
         );
-        conn.execute_batch("DROP TRIGGER fixture_ack_interval")
-            .unwrap();
         let bridge = Arc::new(wire_bridge::WireBridge {
             bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
             flags: commit_wire_flags(home.path()),
             session_commit_check: None,
         });
         let (recovered_engine, cancel, server, socket) =
-            cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+            cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
         if successor_gate {
             tokio::time::timeout(Duration::from_secs(8), async {
                 wait_for_active_run(&conn, &recovered_engine, attempt.run).await;
@@ -2385,6 +2524,8 @@ async fn committed_continue_fixture_in_home(
             );
             cancel.cancel();
             server.await.unwrap().unwrap();
+            drop(unwrap_settled_fixture_owner(recovered_engine).await);
+            settle_fixture_wire(bridge).await;
             return;
         }
         tokio::time::timeout(Duration::from_secs(8), async {
@@ -2408,6 +2549,8 @@ async fn committed_continue_fixture_in_home(
         );
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(recovered_engine).await);
+        settle_fixture_wire(bridge).await;
         for kind in [
             "StageOutcomeCommitted",
             "StageRouteCommitted",
@@ -2464,8 +2607,8 @@ async fn committed_continue_fixture_in_home(
         flags: commit_wire_flags(home.path()),
         session_commit_check: None,
     });
-    let (_engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+    let (engine, cancel, server, socket) =
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     let continue_command = || WorkItemCommand::Continue {
         operation_id: WorkItemOperationId::new(),
         item: attempt.item,
@@ -2539,6 +2682,8 @@ async fn committed_continue_fixture_in_home(
     .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
     for kind in [
         "StageOutcomeCommitted",
         "StageRouteCommitted",
@@ -2619,22 +2764,29 @@ async fn cold_committed_fixture_in_home(
     )
     .unwrap();
     let barrier = home.path().join("close-barrier");
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-    .args([
-        "--exact",
-        "child_committed_outcome_host_probe",
-        "--nocapture",
-    ])
-    .env("SURGE_TEST_COMMIT_HOME", home.path())
-    .env("SURGE_TEST_COMMIT_PROJECT", project.path())
-    .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
-    .stdout(std::process::Stdio::null())
-    // Inherited so nextest shows a child panic; the probe emits no tracing output.
-    .stderr(std::process::Stdio::inherit())
-    .spawn()
-    .unwrap();
+    let child_log = home.path().join("committed-child.log");
+    let child_output = std::fs::File::create(&child_log).unwrap();
+    let mut child = ContinueFixtureChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "child_committed_outcome_host_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_TEST_COMMIT_HOME", home.path())
+            .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+            .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
+            .stdout(child_output.try_clone().unwrap())
+            .stderr(child_output)
+            .spawn()
+            .unwrap(),
+    );
+    let mut observed_events = Vec::new();
     let ready = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("committed child exited {status}; events={observed_events:?}; child={}; provider={}", bounded_child_log(&child_log), bounded_child_log(&home.path().join("commit-provider-wire.jsonl")));
+            }
             if !barrier.with_extension("ready").exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
@@ -2646,7 +2798,10 @@ async fn cold_committed_fixture_in_home(
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             };
-            if events
+            observed_events = events.iter().rev().take(64).map(|event| {
+                format!("{:?}", event.payload.payload()).split([' ', '{', '(']).next().unwrap().to_owned()
+            }).collect();
+            if barrier.with_extension("ready").exists() && events
                 .iter()
                 .filter(|event| {
                     matches!(
@@ -2663,6 +2818,44 @@ async fn cold_committed_fixture_in_home(
         }
     })
     .await;
+    if ready.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let journal =
+            tokio::time::timeout(Duration::from_secs(1), storage.inspect_run(attempt.run)).await;
+        let journal_diagnostic = match journal {
+            Ok(Ok(inspected)) => match inspected.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                    format!(
+                        "{:?}",
+                        events
+                            .iter()
+                            .rev()
+                            .take(64)
+                            .map(|event| format!("{:?}", event.payload.payload())
+                                .split([' ', '{', '('])
+                                .next()
+                                .unwrap()
+                                .to_owned())
+                            .collect::<Vec<_>>()
+                    )
+                },
+                other => format!("{other:?}"),
+            },
+            Ok(Err(error)) => format!("inspection failed: {error}"),
+            Err(error) => format!("inspection timed out: {error}"),
+        };
+        panic!(
+            "real ACP turn did not reach its durable post-commit/pre-route close barrier; marker={}; events={observed_events:?}; journal={journal_diagnostic}; attempt={:?}; child={}; provider={}",
+            barrier.with_extension("ready").exists(),
+            storage
+                .work_items()
+                .for_run(attempt.run)
+                .map(|attempt| attempt.map(|attempt| (attempt.state, attempt.diagnostic))),
+            bounded_child_log(&child_log),
+            bounded_child_log(&home.path().join("commit-provider-wire.jsonl"))
+        );
+    }
     let registry_barrier = if after_route && ready.is_ok() {
         // Fixture-only SQLite writer lock prevents the registry settlement while
         // allowing the independent per-run accepted route transaction to commit.
@@ -2763,7 +2956,7 @@ async fn cold_committed_fixture_in_home(
     )));
     // Only the fixture-owned actual process is killed; this is not production containment evidence.
     let pid = std::fs::read_to_string(home.path().join("commit-provider.pid")).unwrap();
-    let identity = events
+    let container = events
         .iter()
         .find_map(|event| match event.payload.payload() {
             surge_core::EventPayload::SessionOpened {
@@ -2773,11 +2966,22 @@ async fn cold_committed_fixture_in_home(
                 .execution_writer
                 .as_ref()
                 .and_then(|writer| writer.container())
-                .map(|container| container.identity()),
+                .cloned(),
             _ => None,
         })
         .unwrap();
+    let identity = container.identity();
     assert_eq!(identity.pid(), pid.trim().parse::<u32>().unwrap());
+    #[cfg(windows)]
+    {
+        let stopped = tokio::task::spawn_blocking(move || {
+            surge_acp::process_evidence::stop_group(&container, Duration::from_secs(5))
+        })
+        .await
+        .unwrap();
+        assert_eq!(stopped, surge_acp::process_evidence::GroupState::Empty);
+    }
+    #[cfg(unix)]
     if matches!(surge_acp::process_evidence::observe(identity.pid()), Ok((current, _)) if &current == identity)
     {
         let _ = std::process::Command::new("kill")
@@ -2789,8 +2993,8 @@ async fn cold_committed_fixture_in_home(
         flags: commit_wire_flags(home.path()),
         session_commit_check: None,
     });
-    let (_engine, cancel, server, _) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+    let (engine, cancel, server, _) =
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let state = storage
@@ -2810,6 +3014,8 @@ async fn cold_committed_fixture_in_home(
     .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
     let wire: Vec<Value> = std::fs::read_to_string(home.path().join("commit-provider-wire.jsonl"))
         .unwrap()
         .lines()
@@ -2994,15 +3200,29 @@ async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_ho
     assert!(ready.is_ok(), "child failed to reach first ACP turn");
     assert!(held, "live execution did not retain launch ownership");
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (engine, cancel, server, _) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let resumed = tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap();
+    .await;
+    assert!(
+        resumed.is_ok(),
+        "killed owner resume: attempt={:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        storage
+            .work_items()
+            .for_run(attempt.run)
+            .map(|value| value.map(|attempt| (attempt.state, attempt.diagnostic))),
+        storage
+            .work_items()
+            .execution_control(attempt.run)
+            .map(|value| value.map(|control| (control.state, control.generation))),
+        tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await,
+        server.is_finished(),
+        bounded_child_log(&socket.with_extension("trace.log"))
+    );
     assert_eq!(
         storage
             .work_items()
@@ -3022,6 +3242,7 @@ async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_ho
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 /// Actual ACP subprocess opening is the anchor for provider-session continuity.
@@ -3082,8 +3303,8 @@ async fn task_provider_identity_is_durable_before_first_real_acp_prompt_in_home(
         .await;
     cancel.cancel();
     server.await.unwrap().unwrap();
-    drop(engine);
-    drop(bridge);
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
     assert!(
         observed.is_ok(),
         "fixture did not reach actual first prompt: {encoded}"
@@ -3194,7 +3415,7 @@ async fn suspend_continue_wire_in_home(
         flags: flags.clone(),
     });
     let (engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     request(&socket, serde_json::to_value(start).unwrap()).await;
     tokio::time::timeout(Duration::from_secs(8), async {
         while !marker.exists() {
@@ -3260,7 +3481,8 @@ async fn suspend_continue_wire_in_home(
         std::fs::read_to_string(workspace.path.join("retained-untracked")).unwrap(),
         "preserve on pause"
     );
-    drop(engine);
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
     std::fs::write(&capability_policy, restored_capabilities).unwrap();
     let reopened = Storage::open(home.path()).await.unwrap();
     let retained_claim = if manual_wins {
@@ -3273,8 +3495,13 @@ async fn suspend_continue_wire_in_home(
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
         flags: flags.clone(),
     });
-    let (engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), reopened.clone(), bridge).await;
+    let (engine, cancel, server, socket) = cold_wire_host(
+        home.path(),
+        project.path(),
+        reopened.clone(),
+        bridge.clone(),
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
         engine.snapshot_active_runs().await.is_empty(),
@@ -3323,6 +3550,8 @@ async fn suspend_continue_wire_in_home(
         let reply = request(&socket, serde_json::to_value(manual).unwrap()).await;
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
+        settle_fixture_wire(bridge).await;
         assert_eq!(
             reply["method"], "work_item_ok",
             "manual pause must supersede a reserved, undispatched Continue: {reply}"
@@ -3351,8 +3580,13 @@ async fn suspend_continue_wire_in_home(
             bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
             flags,
         });
-        let (engine, cancel, server, socket) =
-            cold_wire_host(home.path(), project.path(), reopened.clone(), bridge).await;
+        let (engine, cancel, server, socket) = cold_wire_host(
+            home.path(),
+            project.path(),
+            reopened.clone(),
+            bridge.clone(),
+        )
+        .await;
         let replay = request(&socket, serde_json::to_value(&original_continue).unwrap()).await;
         assert_eq!(
             replay["method"], "work_item_ok",
@@ -3393,6 +3627,8 @@ async fn suspend_continue_wire_in_home(
         );
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
+        settle_fixture_wire(bridge).await;
         return;
     }
     let continued = request(
@@ -3472,6 +3708,8 @@ async fn suspend_continue_wire_in_home(
         );
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
+        settle_fixture_wire(bridge).await;
         return;
     }
     assert_eq!(
@@ -3547,6 +3785,8 @@ async fn suspend_continue_wire_in_home(
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3566,7 +3806,7 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
         session_commit_check: None,
     });
     let (engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     assert_eq!(
         request(&socket, serde_json::to_value(start).unwrap()).await["method"],
         "work_item_ok"
@@ -3576,7 +3816,10 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
         .join("runs")
         .join(attempt.run.to_string())
         .join("events.sqlite");
-    let conn = rusqlite::Connection::open(path).unwrap();
+    wait_for_provider_session(home, &storage, attempt.run).await;
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .unwrap();
     let original = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let rows: Vec<Vec<u8>> = conn
@@ -3621,6 +3864,8 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
             .await;
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
+        settle_fixture_wire(bridge).await;
         panic!("daemon acknowledged an answer whose durable append was rejected: {rejected}");
     }
     assert_eq!(
@@ -3670,14 +3915,16 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
     assert_eq!(request_frame(&socket, conflicting).await["method"], "error");
     cancel.cancel();
     server.await.unwrap().unwrap();
-    drop(engine);
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
+
     let bridge = Arc::new(wire_bridge::WireBridge {
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
         flags: commit_wire_flags(home.path()),
         session_commit_check: None,
     });
-    let (_engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+    let (engine, cancel, server, socket) =
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     assert_eq!(
         request_frame(&socket, serde_json::to_value(&command).unwrap()).await["method"],
         "resolve_human_input_ok",
@@ -3694,6 +3941,8 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
     );
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3723,18 +3972,20 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     )
     .unwrap();
     let diagnostic = std::fs::File::create(home.path().join("gate-child.log")).unwrap();
-    let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "child_committed_outcome_host_probe",
-            "--nocapture",
-        ])
-        .env("SURGE_TEST_COMMIT_HOME", home.path())
-        .env("SURGE_TEST_COMMIT_PROJECT", project.path())
-        .stdout(diagnostic.try_clone().unwrap())
-        .stderr(diagnostic)
-        .spawn()
-        .unwrap();
+    let mut owner = ContinueFixtureChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "child_committed_outcome_host_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_TEST_COMMIT_HOME", home.path())
+            .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+            .stdout(diagnostic.try_clone().unwrap())
+            .stderr(diagnostic)
+            .spawn()
+            .unwrap(),
+    );
     let path = home
         .path()
         .join("runs")
@@ -3765,7 +4016,17 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|error| {
+        panic!(
+            "gate request readiness: {error}; attempt={:?}; child={}; provider={}",
+            storage
+                .work_items()
+                .for_run(attempt.run)
+                .map(|attempt| attempt.map(|attempt| (attempt.state, attempt.diagnostic))),
+            bounded_child_log(&home.path().join("gate-child.log")),
+            bounded_child_log(&home.path().join("commit-provider-wire.jsonl"))
+        )
+    });
     let surge_core::EventPayload::HumanInputRequested {
         node,
         call_id: Some(call_id),
@@ -3878,8 +4139,8 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         flags: commit_wire_flags(home.path()),
         session_commit_check: None,
     });
-    let (_engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+    let (engine, cancel, server, socket) =
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     tokio::time::timeout(Duration::from_secs(8), async {
         while storage
             .work_items()
@@ -3940,6 +4201,8 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     )));
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4149,7 +4412,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         expired.then_some(1),
     )
     .await;
-    let (_, cancel, server, socket) = cold_host(
+    let (engine, cancel, server, socket) = cold_host(
         home.path(),
         project.path(),
         storage.clone(),
@@ -4194,6 +4457,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
     let response = request(&socket, serde_json::to_value(suspend).unwrap()).await;
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
     assert_eq!(response["method"], "work_item_ok", "{response}");
     assert_eq!(
         conn.query_row(
@@ -4255,7 +4519,16 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
             error.contains("waiting human gate contradicts its original decision"),
             "{error}"
         );
-        let (_, cancel, server, socket) = cold_host(
+        // Hold the real owner fence across admission: Continue acknowledges
+        // intent before either explicit launch or reconciliation can execute it.
+        let held_claim = storage.work_items().claim(attempt.run).unwrap();
+        let prior_control = storage
+            .work_items()
+            .execution_control(attempt.run)
+            .unwrap()
+            .unwrap();
+        let operation = surge_core::id::WorkItemOperationId::new();
+        let (engine, cancel, server, socket) = cold_host(
             home.path(),
             project.path(),
             storage.clone(),
@@ -4263,7 +4536,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         )
         .await;
         let command = surge_core::work_item::WorkItemCommand::Continue {
-            operation_id: surge_core::id::WorkItemOperationId::new(),
+            operation_id: operation,
             item: attempt.item,
             expected_version: storage
                 .work_items()
@@ -4276,9 +4549,33 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         let response = request(&socket, serde_json::to_value(command).unwrap()).await;
         assert_eq!(response["method"], "work_item_ok", "{response}");
         assert_eq!(
-            response["result"]["value"]["state"], "attention",
+            response["result"]["value"]["state"], "continue_reserved",
             "{response}"
         );
+        assert_eq!(
+            response["result"]["value"]["generation"],
+            prior_control.generation + 1,
+            "{response}"
+        );
+        assert_eq!(
+            response["result"]["value"]["operation"],
+            serde_json::to_value(operation).unwrap(),
+            "{response}"
+        );
+        assert_eq!(
+            response["result"]["value"]["diagnostic"], "task launch already claimed",
+            "{response}"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='RunContinued'",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        drop(held_claim);
         tokio::time::timeout(Duration::from_secs(8), async {
             while storage
                 .work_items()
@@ -4293,6 +4590,51 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         })
         .await
         .unwrap();
+        let refused = storage
+            .work_items()
+            .execution_control(attempt.run)
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.generation, prior_control.generation + 1);
+        assert_eq!(refused.operation, operation);
+        assert_eq!(
+            refused.state,
+            surge_core::execution_recovery::ExecutionControlState::Attention
+        );
+        assert!(
+            refused
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic
+                    .contains("waiting human gate contradicts its original decision")),
+            "{refused:?}"
+        );
+        for kind in [
+            "HumanInputResolved",
+            "SessionOpened",
+            "GateStageOutcomeCommitted",
+            "GateStageRouteCommitted",
+            "StageCompleted",
+            "EdgeTraversed",
+        ] {
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM events WHERE kind=?1", [kind], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .unwrap(),
+                0,
+                "corruption must not authorize {kind}"
+            );
+        }
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
         assert_eq!(
             conn.query_row(
                 "SELECT COUNT(*) FROM events WHERE kind='RunContinued'",
@@ -4313,13 +4655,14 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         );
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
         return;
     }
     #[cfg(unix)]
     if socket.exists() {
         std::fs::remove_file(&socket).unwrap();
     }
-    let (_, cancel, server, socket) = cold_host(
+    let (engine, cancel, server, socket) = cold_host(
         home.path(),
         project.path(),
         storage.clone(),
@@ -4384,6 +4727,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         );
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
         return;
     }
     if answer_while_suspended {
@@ -4432,6 +4776,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         if response["method"] != "resolve_human_input_ok" {
             cancel.cancel();
             server.await.unwrap().unwrap();
+            drop(unwrap_settled_fixture_owner(engine).await);
             panic!("original operator answer must remain actionable while suspended: {response}");
         }
         assert_eq!(
@@ -4511,10 +4856,31 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         gate_request_id: surge_core::id::GateRequestId::from_event_call_id(call_id).unwrap(),
         response: json!({"outcome":"approve","comment":"same gate"}),
     };
-    assert_eq!(
-        request_frame(&socket, serde_json::to_value(answer).unwrap()).await["method"],
-        "resolve_human_input_ok"
-    );
+    let request_id = surge_core::id::GateRequestId::from_event_call_id(call_id).unwrap();
+    if !answer_while_suspended {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while !engine
+                .gate_waiter_is_ready_for_test(attempt.run, node, request_id)
+                .await
+            {
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'",
+                        [],
+                        |row| row.get::<_, u64>(0)
+                    )
+                    .unwrap(),
+                    1,
+                    "Continue must restore the original gate rather than replace it"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Continue must install the exact original gate waiter");
+    }
+    let response = request_frame(&socket, serde_json::to_value(answer).unwrap()).await;
+    assert_eq!(response["method"], "resolve_human_input_ok", "{response}");
     tokio::time::timeout(Duration::from_secs(8), async {
         while storage
             .work_items()
@@ -4573,6 +4939,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         let result = storage.inspect_folded_run(attempt.run).await;
         cancel.cancel();
         server.await.unwrap().unwrap();
+        drop(unwrap_settled_fixture_owner(engine).await);
         assert!(
             matches!(result,Err(error) if error.to_string().contains("routing edge contradicts accepted graph and traversal policy")),
             "self-consistent route identity must not authorize a forged route kind"
@@ -4581,6 +4948,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
     }
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4594,7 +4962,7 @@ async fn revisited_human_gate_requires_new_occurrence_and_new_decision_in_home(h
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) =
         reserve_fixture_graph(home.path(), project.path(), false, true, true).await;
-    let (_, cancel, server, socket) = cold_host(
+    let (engine, cancel, server, socket) = cold_host(
         home.path(),
         project.path(),
         storage.clone(),
@@ -4622,6 +4990,7 @@ async fn revisited_human_gate_requires_new_occurrence_and_new_decision_in_home(h
         if observed.as_ref().is_err() || observed.as_ref().is_ok_and(|(seq, _)| *seq == 0) {
             cancel.cancel();
             server.await.unwrap().unwrap();
+            drop(unwrap_settled_fixture_owner(engine).await);
             panic!(
                 "visit {index} must produce a fresh actionable decision; state={:?}",
                 storage.work_items().for_run(attempt.run).unwrap()
@@ -4687,6 +5056,7 @@ async fn revisited_human_gate_requires_new_occurrence_and_new_decision_in_home(h
     );
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 async fn wait_for_listener(

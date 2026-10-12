@@ -419,3 +419,161 @@ async fn canceled_caller_leaves_the_real_blocking_worker_as_preparation_owner() 
     }
     home.close().expect("close runtime home");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owned_flow_reconciliation_claim_preserves_new_manual_control() {
+    let home = FixtureHome::new().unwrap();
+    let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+    let store = storage.work_items();
+    let (receipt, claim) = accepted(&store, home.path(), WorkItemOperationId::new());
+    let manifest = store.owned_flow_manifest(receipt.run).unwrap().unwrap();
+    // SQL authority oracle only; host integration verifies actual startup.
+    store
+        .acknowledge_owned_flow_startup(&claim, &manifest)
+        .unwrap();
+    let observed = store.for_run(receipt.run).unwrap().unwrap();
+    let command = WorkItemCommand::Suspend {
+        operation_id: WorkItemOperationId::new(),
+        item: receipt.item,
+        expected_version: store.show(receipt.item).unwrap().item.version,
+    };
+    store.mutate(&command, None, None, "operator", 3).unwrap();
+    drop(claim);
+    let before = crate::work_items::reconciliation_tests::snapshot(&store);
+    assert!(
+        store
+            .claim_reconciliation(&observed, None)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        crate::work_items::reconciliation_tests::snapshot(&store),
+        before
+    );
+    let current = store.execution_control(receipt.run).unwrap().unwrap();
+    let accepted = store
+        .claim_reconciliation(&observed, Some(&current))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.validate_claim(&accepted).unwrap().binding,
+        observed.binding
+    );
+    drop(accepted);
+    drop(store);
+    drop(storage);
+    home.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_public_flow_replay_precedes_unavailable_private_storage() {
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+        let store = storage.work_items();
+        let operation = WorkItemOperationId::new();
+        // HostDefault is a public request whose first host resolution is private.
+        let mut preparation = begin(&store, operation, b"public HostDefault body");
+        preparation
+            .freeze_source(&source(home.path(), &preparation), None)
+            .unwrap();
+        let preparation_identity = || -> (String, String, String) {
+            store.pool.get().unwrap().query_row(
+                "SELECT request_identity,operation_lock_identity,token FROM owned_flow_operations WHERE operation=?",
+                [operation.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap()
+        };
+        let original_owner = preparation_identity();
+        assert!(matches!(
+            store.begin_owned_flow(operation, b"public HostDefault body", false, 3),
+            Err(WorkItemError::Busy)
+        ));
+        let server = surge_core::mcp_config::McpServerRef::new(
+            "private-host-default".into(),
+            surge_core::mcp_config::McpTransportConfig::stdio(
+                "private-provider.exe".into(),
+                vec!["private-argument".into()],
+                [("PRIVATE_TOKEN".into(), "private-value".into())]
+                    .into_iter()
+                    .collect(),
+            ),
+            Some(vec!["allowed".into()]),
+            std::time::Duration::from_secs(7),
+            false,
+        );
+        let manifest = preparation
+            .freeze_startup(
+                r#"{"mcp_servers":[]}"#,
+                OwnedFlowMcpSelection::HostDefault,
+                &[server],
+            )
+            .unwrap();
+        assert!(matches!(manifest.mcp(), FrozenOwnedFlowMcp::Private { .. }));
+        assert_eq!(
+            preparation_identity(),
+            original_owner,
+            "private upgrade replaced the retained preparation owner"
+        );
+        assert!(matches!(
+            store.begin_owned_flow(operation, b"public HostDefault body", false, 4),
+            Err(WorkItemError::Busy)
+        ));
+
+        preparation.retain_launch_ownership().unwrap();
+        let (receipt, claim) = preparation.finalize(2).unwrap().into_parts();
+        assert_eq!(
+            store
+                .hydrate_owned_flow_inputs(&claim)
+                .unwrap()
+                .unwrap()
+                .servers()
+                .len(),
+            1
+        );
+        drop(claim);
+        let audit = || -> (i64, i64, String, String, String) {
+            store.pool.get().unwrap().query_row(
+                "SELECT (SELECT COUNT(*) FROM owned_flow_operations), \
+                 (SELECT COUNT(*) FROM work_item_attempts), o.receipt,o.inputs_manifest,a.claim_token \
+                 FROM owned_flow_operations o JOIN work_item_attempts a ON a.run=o.run WHERE o.operation=?",
+                [operation.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            ).unwrap()
+        };
+        let before = audit();
+        let namespace = home.path().join("work-items/private-flow-inputs");
+        let displaced = home.path().join("displaced-private-flow-inputs");
+        assert!(namespace.join("host-key-v1").is_file());
+        std::fs::rename(&namespace, &displaced).unwrap();
+        std::fs::write(&namespace, b"private namespace unavailable").unwrap();
+        // Any accidental authentication/object lookup now encounters a file,
+        // rather than a directory, and cannot silently recreate the namespace.
+        assert!(std::fs::read(namespace.join("host-key-v1")).is_err());
+        assert_eq!(
+            store
+                .replay_owned_flow(operation, b"public HostDefault body", false)
+                .unwrap(),
+            Some(receipt.clone()),
+        );
+        let OwnedFlowPreparationResult::Replay(replayed) = store
+            .begin_owned_flow(operation, b"public HostDefault body", false, 99)
+            .unwrap()
+        else {
+            panic!("receipt replay issued new preparation authority");
+        };
+        assert_eq!(replayed, receipt);
+        assert_eq!(
+            audit(),
+            before,
+            "replay changed an accepted operation, attempt or claim token"
+        );
+        assert_eq!(
+            std::fs::read(&namespace).unwrap(),
+            b"private namespace unavailable"
+        );
+        assert!(displaced.join("host-key-v1").is_file());
+        std::fs::remove_file(&namespace).unwrap();
+        std::fs::rename(displaced, namespace).unwrap();
+    }
+    home.close().unwrap();
+}

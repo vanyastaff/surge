@@ -38,6 +38,22 @@ async fn reserve_graph(
     graph: surge_core::Graph,
     policy: Option<surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy>,
 ) -> (Arc<Storage>, WorkItemAttempt, WorkItemWorkspace) {
+    let (storage, attempt, workspace, _) =
+        reserve_graph_with_start(home, project, graph, policy).await;
+    (storage, attempt, workspace)
+}
+
+async fn reserve_graph_with_start(
+    home: &Path,
+    project: &Path,
+    graph: surge_core::Graph,
+    policy: Option<surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy>,
+) -> (
+    Arc<Storage>,
+    WorkItemAttempt,
+    WorkItemWorkspace,
+    WorkItemCommand,
+) {
     let repo = git2::Repository::init(project).unwrap();
     let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
     let tree_id = repo.index().unwrap().write_tree().unwrap();
@@ -85,7 +101,7 @@ async fn reserve_graph(
     else {
         panic!("attempt")
     };
-    (storage, *attempt, workspace)
+    (storage, *attempt, workspace, start)
 }
 
 async fn write_startup(
@@ -116,16 +132,16 @@ async fn write_startup(
         .unwrap()
         .clone();
     let context = WorkItemContext::new(attempt.binding.clone(), requirements).unwrap();
+    let writer = storage
+        .create_run(attempt.run, &workspace.path, None)
+        .await
+        .unwrap();
     let artifact = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
         .put(
             attempt.run,
             "accepted_requirements",
             &serde_json::to_vec(context.requirements().unwrap()).unwrap(),
         )
-        .await
-        .unwrap();
-    let writer = storage
-        .create_run(attempt.run, &workspace.path, None)
         .await
         .unwrap();
     let mut events = vec![
@@ -260,6 +276,7 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     engine.validate_work_item_startup(&claim).await.unwrap();
     drop(claim);
     let journal_before = journal(&storage, attempt.run).await;
+    let claim_before = registry_claim_token(&storage, attempt.run);
     let tracking = TrackingContext::new(engine.clone(), storage.clone());
     reconcile_candidate(
         captured,
@@ -269,6 +286,11 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        registry_claim_token(&storage, attempt.run),
+        claim_before,
+        "confirmed manual suspension must not receive a generic launch claim"
+    );
     let after = store.for_run(attempt.run).unwrap().unwrap();
     assert_eq!(
         after.state,
@@ -292,6 +314,95 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     drop(store);
     drop(storage);
     home.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciliation_does_not_claim_unstarted_reservation_before_explicit_start() {
+    for empty_journal in [false, true] {
+        let home = FixtureHome::new().unwrap();
+        unstarted_reservation_requires_explicit_start(home.path(), empty_journal).await;
+        home.close().unwrap();
+    }
+}
+
+async fn unstarted_reservation_requires_explicit_start(home: &Path, empty_journal: bool) {
+    let project = tempfile::tempdir().unwrap();
+    let graph =
+        toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+    let (storage, attempt, workspace, start) =
+        reserve_graph_with_start(home, project.path(), graph, None).await;
+    if empty_journal {
+        storage
+            .create_run(attempt.run, &workspace.path, None)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let engine = Arc::new(Engine::new(
+        bridge.clone(),
+        storage.clone(),
+        Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+        EngineConfig::default(),
+    ));
+    let tracking = TrackingContext::new(engine.clone(), storage.clone());
+    let admission = Arc::new(AdmissionController::new(1, 1));
+    let broadcasts = Arc::new(BroadcastRegistry::new());
+    let token_before = registry_claim_token(&storage, attempt.run);
+    reconcile_candidate(attempt.clone(), &tracking, &admission, &broadcasts)
+        .await
+        .unwrap();
+    assert_eq!(
+        registry_claim_token(&storage, attempt.run),
+        token_before,
+        "startup reconciliation must not claim a reservation requiring explicit Start; empty={empty_journal}"
+    );
+    assert_eq!(
+        serde_json::to_value(storage.work_items().for_run(attempt.run).unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&attempt).unwrap()
+    );
+    assert!(bridge.recorded_calls.lock().await.is_empty());
+    let result = execute(&start, &tracking, &admission, &broadcasts)
+        .await
+        .unwrap();
+    assert!(matches!(result, WorkItemResult::Attempt(ref actual) if actual.run == attempt.run));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while storage
+            .work_items()
+            .for_run(attempt.run)
+            .unwrap()
+            .unwrap()
+            .state
+            != WorkItemAttemptState::Completed
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("explicit Start must complete the same terminal-only run");
+    drop(tracking);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while Arc::strong_count(&engine) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("actual supervisor must release engine before fixture cleanup");
+    drop(engine);
+}
+
+fn registry_claim_token(storage: &Storage, run: RunId) -> Option<String> {
+    storage
+        .acquire_registry_conn()
+        .unwrap()
+        .query_row(
+            "SELECT claim_token FROM work_item_attempts WHERE run=?",
+            [run.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
 }
 
 async fn journal(storage: &Arc<Storage>, run: RunId) -> Vec<(u64, serde_json::Value)> {
@@ -462,6 +573,53 @@ async fn suspension_after_eligibility_survives_inner_dispatch_refusal() {
     drop(tracking);
     drop(engine);
     drop(store);
+    drop(storage);
+    home.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suspended_attempt_requires_a_durable_continue_for_reconciliation() {
+    use surge_core::execution_recovery::{
+        ExecutionControlState as State, WorkItemExecutionControl,
+    };
+    let home = FixtureHome::new().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let (storage, mut attempt, _) = reserve(home.path(), project.path()).await;
+    attempt.state = WorkItemAttemptState::Suspended;
+    let mut authority = ReconciliationAuthority {
+        attempt,
+        control: None,
+    };
+    assert!(!reconciliation_eligible(&authority));
+    for state in [
+        State::Executing,
+        State::SuspendRequested,
+        State::Suspended,
+        State::Attention,
+        State::ContinueReserved,
+    ] {
+        authority.control = Some(WorkItemExecutionControl {
+            item: authority.attempt.item,
+            run: authority.attempt.run,
+            attempt_generation: authority.attempt.binding.generation,
+            generation: 2,
+            operation: WorkItemOperationId::new(),
+            state,
+            fence: None,
+            allow_new_session: false,
+            diagnostic: None,
+        });
+        for attempt_state in [
+            WorkItemAttemptState::Suspended,
+            WorkItemAttemptState::Attention,
+        ] {
+            authority.attempt.state = attempt_state;
+            assert_eq!(
+                reconciliation_eligible(&authority),
+                state == State::ContinueReserved
+            );
+        }
+    }
     drop(storage);
     home.close().unwrap();
 }

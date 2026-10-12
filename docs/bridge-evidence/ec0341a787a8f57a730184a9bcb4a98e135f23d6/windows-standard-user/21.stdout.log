@@ -1,0 +1,11 @@
+
+running 1 test
+test windows_job::tests::inherited_command_preserves_casefolded_overrides_removals_and_inherited_values ... ok
+
+successes:
+
+successes:
+    windows_job::tests::inherited_command_preserves_casefolded_overrides_removals_and_inherited_values
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.10s
+

@@ -1,0 +1,11 @@
+
+running 1 test
+test windows_job::tests::native_child_cannot_break_away_from_job ... ok
+
+successes:
+
+successes:
+    windows_job::tests::native_child_cannot_break_away_from_job
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.12s
+

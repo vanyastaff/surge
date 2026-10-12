@@ -80,6 +80,7 @@ pub mod stage_tool;
 pub mod subgraph_config;
 pub mod terminal_config;
 pub mod untrusted;
+pub mod usage;
 pub mod validation;
 
 // ── Legacy re-exports (kept stable) ──
@@ -160,6 +161,9 @@ pub use run_status::{ParseRunStatusError, RunStatus};
 pub use runtime::{RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy};
 pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};
 pub use sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow, default_matrix};
+pub use usage::{
+    ContextUsage, SessionCost, TokenUsageCounters, TokenUsageObservation, UsageUnavailableReason,
+};
 pub use validation::{
     NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind,
     ValidationReport, validate, validate_with_resolver,

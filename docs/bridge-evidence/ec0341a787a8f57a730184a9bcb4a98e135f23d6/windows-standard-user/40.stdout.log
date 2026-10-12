@@ -1,0 +1,17 @@
+
+running 1 test
+test work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed ... 
+running 1 test
+
+running 1 test
+
+running 1 test
+ok
+
+successes:
+
+successes:
+    work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.64s
+

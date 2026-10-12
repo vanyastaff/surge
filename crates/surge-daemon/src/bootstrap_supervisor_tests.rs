@@ -12,6 +12,12 @@ use surge_orchestrator::{
 };
 use tokio::sync::broadcast;
 
+// This waits for the whole parent+child operation, including both worktree
+// preparations, planning approvals, implementation startup, and durable
+// settlement. Native Windows preparation alone took nearly 8s before the
+// first planning event; allow bounded margin for both workflows to finish.
+const BOOTSTRAP_OPERATION_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
+
 const DESCRIPTION: &str = "## Goal\nBuild the app.\n## Context\nExisting project.\n## Requirements\nTest behavior.\n## Out of Scope\nDeployment.\n";
 const ROADMAP: &str = "## Milestones\n1. Complete app.\n## Dependencies\nNone.\n## Risks\nNone.\n";
 const ROADMAP_TOML: &str = r#"schema_version = 2
@@ -358,7 +364,7 @@ impl Fixture {
         })
     }
     async fn terminal(&self, id: RunId) -> BootstrapOperationStatus {
-        let result = tokio::time::timeout(Duration::from_secs(8), async {
+        let result = tokio::time::timeout(BOOTSTRAP_OPERATION_COMPLETION_TIMEOUT, async {
             loop {
                 let status = self.owner.status(id).unwrap();
                 if status.state.phase().is_none()

@@ -69,3 +69,38 @@ impl Storage {
         Ok(selected.into_iter().map(|(_, witness)| witness).collect())
     }
 }
+
+/// Non-owning observation of a captured registry namespace's final teardown.
+/// This does not observe unrelated readers, writers or other Storage owners.
+#[cfg(windows)]
+pub struct RegistryPoolWitness {
+    owner: Weak<()>,
+}
+
+#[cfg(windows)]
+impl RegistryPoolWitness {
+    /// True until actual SQLite close and all captured native handles settle.
+    #[must_use]
+    pub fn is_retained(&self) -> bool {
+        self.owner.strong_count() != 0
+    }
+}
+
+#[cfg(windows)]
+impl Storage {
+    /// Capture a test-only observation without retaining the registry pool.
+    /// Drop all Engine/Storage and other owners before waiting for release.
+    ///
+    /// # Errors
+    /// Returns an error if a registry connection cannot be acquired or has no
+    /// native namespace owner.
+    pub fn registry_pool_witness(&self) -> Result<RegistryPoolWitness, OpenError> {
+        let connection = self
+            .acquire_registry_conn()
+            .map_err(|error| OpenError::Pool(error.to_string()))?;
+        let owner = connection.settlement_marker().ok_or_else(|| {
+            OpenError::Config("registry connection has no native namespace owner".into())
+        })?;
+        Ok(RegistryPoolWitness { owner })
+    }
+}

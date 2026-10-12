@@ -155,3 +155,61 @@ async fn load_history_cannot_authorize_a_permission_before_a_new_prompt() {
     bridge.close_session(restored.session).await.unwrap();
     bridge.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_usage_does_not_charge_unknown_provider_history() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        for mode in ["resume", "load"] {
+            check_restored_usage(mode).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn check_restored_usage(mode: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let bridge = AcpBridge::with_defaults().unwrap();
+    let mut events = bridge.subscribe();
+    let usage_config = || {
+        let mut request = config(root.path(), mode);
+        if let AgentKind::Custom { args, .. } = &mut request.agent_kind {
+            args.push("--usage".into());
+        }
+        request
+    };
+    let first = bridge.open_session(usage_config()).await.unwrap();
+    bridge.close_session(first.session).await.unwrap();
+    let mut request = usage_config();
+    request.invocation = first.descriptor.invocation();
+    request.opening = SessionOpening::Continue(first.descriptor);
+    let restored = bridge.open_session(request).await.unwrap();
+    for _ in 0..2 {
+        bridge
+            .send_message(restored.session, MessageContent::Text("continued".into()))
+            .await
+            .unwrap();
+    }
+    bridge.close_session(restored.session).await.unwrap();
+    let mut reports = vec![];
+    loop {
+        match events.recv().await.unwrap() {
+            BridgeEvent::ProviderUsageObserved { session, usage }
+                if session == restored.session =>
+            {
+                reports.push(usage)
+            },
+            BridgeEvent::SessionEnded { session, .. } if session == restored.session => break,
+            _ => {},
+        }
+    }
+    use surge_core::usage::{
+        TokenUsageObservation as Observation, UsageUnavailableReason as Reason,
+    };
+    assert_eq!(reports.len(), 2);
+    assert!(
+        matches!(&reports[0], Observation::Unavailable { reason: Reason::BaselineUnknown, reported: Some(raw) } if raw.total_tokens == 100)
+    );
+    assert!(matches!(&reports[1], Observation::Reported { delta, .. } if delta.total_tokens == 0));
+    bridge.shutdown().await.unwrap();
+}

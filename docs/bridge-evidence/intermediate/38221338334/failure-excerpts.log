@@ -1,0 +1,98 @@
+2026-10-12T08:24:04.2841803Z         PASS [   3.507s] (1868/3939) surge-daemon::work_item_route_test durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership
+2026-10-12T08:24:05.3427148Z         PASS [   2.876s] (1869/3939) surge-daemon::work_item_route_test expired_suspended_gate_answer_cannot_reset_original_deadline
+2026-10-12T08:24:05.3714672Z         FAIL [   9.222s] (1870/3939) surge-daemon::work_item_route_test committed_gate_effects_survive_owner_death_before_route_without_repetition
+2026-10-12T08:24:05.4382213Z   stdout ───
+2026-10-12T08:24:05.4382944Z 
+2026-10-12T08:24:05.4383147Z     running 1 test
+2026-10-12T08:24:05.4383850Z     test committed_gate_effects_survive_owner_death_before_route_without_repetition ... FAILED
+2026-10-12T08:24:05.4384441Z 
+2026-10-12T08:24:05.4384575Z     failures:
+2026-10-12T08:24:05.4384796Z 
+2026-10-12T08:24:05.4384960Z     failures:
+2026-10-12T08:24:05.4385504Z         committed_gate_effects_survive_owner_death_before_route_without_repetition
+2026-10-12T08:24:05.4386014Z 
+2026-10-12T08:24:05.4386527Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 9.19s
+2026-10-12T08:24:05.4387489Z     
+2026-10-12T08:24:05.4387957Z   stderr ───
+2026-10-12T08:24:05.4388305Z 
+2026-10-12T08:24:05.4389327Z     thread 'committed_gate_effects_survive_owner_death_before_route_without_repetition' (9176) panicked at crates\surge-daemon\tests\work_item_route_test.rs:4020:9:
+2026-10-12T08:24:05.4391988Z     gate request readiness: deadline has elapsed; attempt=Ok(Some((Rejected, Some("storage error: state-home SQLite sidefile observation: SQLite sidefile \"events.sqlite-shm\" observation failed: native security validation refused: unsafe native object type or identity")))); child=
+2026-10-12T08:24:05.4393965Z     running 1 test
+2026-10-12T08:24:05.4394632Z     ; provider=child log unavailable: The system cannot find the file specified. (os error 2)
+2026-10-12T08:24:05.4395335Z     stack backtrace:
+2026-10-12T08:24:05.4395810Z        0: std::panicking::panic_handler
+2026-10-12T08:24:05.4396865Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T08:24:05.4397645Z        1: core::panicking::panic_fmt
+2026-10-12T08:24:05.4398358Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T08:24:05.4399313Z        2: work_item_route_test::gate_answer_crash_fixture_in_home::async_fn$0::closure$1
+2026-10-12T08:24:05.4400009Z                  at .\tests\work_item_route_test.rs:4020
+2026-10-12T08:24:05.4401505Z        3: core::result::Result::unwrap_or_else<surge_core::run_event::VersionedEventPayload,tokio::time::error::Elapsed,work_item_route_test::gate_answer_crash_fixture_in_home::async_fn$0::closure_env$1>
+2026-10-12T08:24:05.4406112Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\result.rs:1621
+2026-10-12T08:24:05.4407048Z        4: work_item_route_test::gate_answer_crash_fixture_in_home::async_fn$0
+2026-10-12T08:24:05.4407822Z                  at .\tests\work_item_route_test.rs:4019
+2026-10-12T08:24:05.4408467Z        5: work_item_route_test::gate_answer_crash_fixture::async_fn$0
+2026-10-12T08:24:05.4409114Z                  at .\tests\work_item_route_test.rs:3960
+2026-10-12T08:24:05.4410004Z        6: work_item_route_test::committed_gate_effects_survive_owner_death_before_route_without_repetition::async_block$0
+2026-10-12T08:24:05.4411215Z                  at .\tests\work_item_route_test.rs:3955
+2026-10-12T08:24:05.4412055Z        7: core::future::future::impl$1::poll<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > >
+2026-10-12T08:24:05.4449346Z     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+2026-10-12T08:24:05.4449896Z 
+2026-10-12T08:24:06.1253568Z         FAIL [   1.930s] (1871/3939) surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue
+2026-10-12T08:24:06.1256146Z   stdout ───
+2026-10-12T08:24:06.1256709Z 
+2026-10-12T08:24:06.1256932Z     running 1 test
+2026-10-12T08:24:06.1293305Z     test forged_suspended_human_gate_request_cannot_authorize_cold_continue ... FAILED
+2026-10-12T08:24:06.1302599Z 
+2026-10-12T08:24:06.1302815Z     failures:
+2026-10-12T08:24:06.1303114Z 
+2026-10-12T08:24:06.1303299Z     failures:
+2026-10-12T08:24:06.1303942Z         forged_suspended_human_gate_request_cannot_authorize_cold_continue
+2026-10-12T08:24:06.1304475Z 
+2026-10-12T08:24:06.1305048Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 1.89s
+2026-10-12T08:24:06.1306430Z     
+2026-10-12T08:24:06.1307112Z   stderr ───
+2026-10-12T08:24:06.1307460Z 
+2026-10-12T08:24:06.1308798Z     thread 'forged_suspended_human_gate_request_cannot_authorize_cold_continue' (4124) panicked at crates\surge-daemon\tests\work_item_route_test.rs:4542:9:
+2026-10-12T08:24:06.1313254Z     assertion `left == right` failed: {"method":"work_item_ok","request_id":1,"result":{"kind":"control","value":{"item":"01M4QKCDVB04GNKMWD5M31N9TJ","run":"01M4QKCDWSERAQ7VCDZWQE2PCB","attempt_generation":1,"generation":2,"operation":"01M4QKCEN5EKJPZQHB147DR2VY","state":"continue_reserved","fence":{"control_generation":1,"snapshot_seq":7,"pending_stage":{"phase":"waiting_human_gate","node":"end","request":"01M4QKCEC3KB5W222YY8DTP760","stage_entry_seq":6,"requested_seq":7},"cleanup_confirmed":true,"reason":{"kind":"manual"}},"allow_new_session":false,"diagnostic":"task launch already claimed"}}}
+2026-10-12T08:24:06.1316438Z       left: String("continue_reserved")
+2026-10-12T08:24:06.1316952Z      right: "attention"
+2026-10-12T08:24:06.1317352Z     stack backtrace:
+2026-10-12T08:24:06.1317759Z        0: std::panicking::panic_handler
+2026-10-12T08:24:06.1318508Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T08:24:06.1319249Z        1: core::panicking::panic_fmt
+2026-10-12T08:24:06.1320335Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T08:24:06.1321150Z        2: core::panicking::assert_failed_inner
+2026-10-12T08:24:06.1321971Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:447
+2026-10-12T08:24:06.1322919Z        3: core::panicking::assert_failed<enum2$<serde_json::value::Value>,ref$<str$> >
+2026-10-12T08:24:06.1323840Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:407
+2026-10-12T08:24:06.1324747Z        4: work_item_route_test::pure_gate_suspension_fixture_deadline_in_home::async_fn$0
+2026-10-12T08:24:06.1325443Z                  at .\tests\work_item_route_test.rs:4542
+2026-10-12T08:24:06.1326439Z        5: work_item_route_test::pure_gate_suspension_fixture_deadline::async_fn$0
+2026-10-12T08:24:06.1327086Z                  at .\tests\work_item_route_test.rs:4394
+2026-10-12T08:24:06.1327722Z        6: work_item_route_test::pure_gate_suspension_fixture::async_fn$0
+2026-10-12T08:24:06.1328328Z                  at .\tests\work_item_route_test.rs:4367
+2026-10-12T08:24:06.1330073Z        7: work_item_route_test::forged_suspended_human_gate_request_cannot_authorize_cold_continue::async_block$0
+2026-10-12T08:28:33.6702123Z         PASS [  21.387s] (3939/3939) surge-telegram::production_callbacks bot_api_failure_does_not_roll_back_accepted_engine_decision
+2026-10-12T08:28:33.6733825Z ────────────
+2026-10-12T08:28:33.6734862Z      Summary [ 468.794s] 3939 tests run: 3937 passed (1 slow), 2 failed, 55 skipped
+2026-10-12T08:28:33.6736156Z         FAIL [   9.222s] (1870/3939) surge-daemon::work_item_route_test committed_gate_effects_survive_owner_death_before_route_without_repetition
+2026-10-12T08:28:33.6737200Z         FAIL [   1.930s] (1871/3939) surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue
+2026-10-12T08:28:33.6894108Z error: test run failed
+2026-10-12T08:28:34.1957265Z ##[error]Process completed with exit code 1.
+2026-10-12T08:28:34.2714197Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T08:28:34.2714925Z ./scripts/windows-native-probe.ps1
+2026-10-12T08:28:34.2812040Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T08:28:34.2812440Z env:
+2026-10-12T08:28:34.2812918Z   CARGO_TERM_COLOR: always
+2026-10-12T08:28:34.2813206Z   RUST_BACKTRACE: 1
+2026-10-12T08:28:34.2813582Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T08:28:34.2814066Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T08:28:34.2814548Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T08:28:34.2814985Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T08:28:34.2815404Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T08:28:34.2815771Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T08:28:34.2816055Z   CARGO_INCREMENTAL: 0
+2026-10-12T08:28:34.2816396Z ##[endgroup]
+2026-10-12T08:28:43.7928873Z    Compiling serde_core v1.0.228
+2026-10-12T08:28:43.7972967Z    Compiling windows-sys v0.61.2
+2026-10-12T08:28:43.8000476Z    Compiling num-traits v0.2.19

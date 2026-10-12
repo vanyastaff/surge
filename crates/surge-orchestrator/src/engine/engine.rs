@@ -1290,6 +1290,7 @@ impl Engine {
         use tokio::sync::broadcast;
         let capacity_continue = claim.is_some() && self.capacity_continue_reserved(run_id)?;
         let (writer, mut replayed, was_parked) = self.prepare_run_resume(run_id, claim).await?;
+        tracing::debug!(%run_id, "resume replay completed");
 
         // If the run already reached a terminal state, return a handle that
         // resolves immediately without re-executing any stages.
@@ -1315,10 +1316,13 @@ impl Engine {
         // mcp_servers and the frozen budget survive a daemon restart + resume.
         // Falls back to defaults (empty mcp list, unlimited budget) for runs that
         // predate those fields.
+        tracing::debug!(%run_id, "resume configuration restoration began");
         let resume_run_config = match self.restored_run_config(claim, &replayed) {
             Ok(config) => config,
             Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
         };
+
+        tracing::debug!(%run_id, "resume configuration restoration completed");
 
         // Build a per-run McpRegistry exactly like start_run does.
         let effect_fence = match self.owned_flow_effect_fence(&resume_run_config, claim) {
@@ -1345,7 +1349,9 @@ impl Engine {
             Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
         };
 
+        tracing::debug!(%run_id, "resume active registration began");
         let registration = self.register_active_run(run_id).await;
+        tracing::debug!(%run_id, "resume active registration completed");
         let params = RunTaskParams {
             work_item_claim: claim.cloned(),
             pending_suspension: None,
@@ -1508,6 +1514,26 @@ impl Engine {
             },
             None => Err(EngineError::MissingGateRequestIdentity),
         }
+    }
+
+    /// Observe an exact live gate waiter without submitting or mutating an answer.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn gate_waiter_is_ready_for_test(
+        &self,
+        run_id: RunId,
+        node: &surge_core::NodeKey,
+        request: surge_core::id::GateRequestId,
+    ) -> bool {
+        let runs = self.runs.read().await;
+        let Some(active) = runs.get(&run_id) else {
+            return false;
+        };
+        active
+            .gate_resolutions
+            .lock()
+            .await
+            .get(node)
+            .is_some_and(|pending| pending.request_id == request)
     }
 
     /// Consume only the exact registered gate; never fall back to run-only input.

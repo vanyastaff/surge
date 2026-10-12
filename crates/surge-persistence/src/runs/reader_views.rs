@@ -23,7 +23,7 @@ pub fn stage_executions(
 ) -> Result<Vec<StageExecution>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT node_id, attempt, started_seq, ended_seq, started_at, ended_at,
-                outcome, cost_usd, tokens_in, tokens_out, known_cost_usd, cost_unknown
+                outcome, cost_usd, tokens_in, tokens_out, known_cost_usd, cost_unknown, tokens_unknown
          FROM stage_executions ORDER BY started_seq",
     )?;
     let iter = stmt.query_map([], |row| {
@@ -44,6 +44,7 @@ pub fn stage_executions(
             tokens_out: row.get::<_, i64>(9)? as u64,
             known_cost_usd: row.get(10)?,
             cost_unknown: row.get::<_, bool>(11)?,
+            tokens_unknown: row.get(12)?,
         })
     })?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -115,23 +116,45 @@ pub fn pending_approvals(
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
-/// Aggregate the `cost_summary` view into a single `CostSummary`.
+/// Fold durable usage evidence into exact totals, avoiding REAL metric precision loss.
 pub fn cost_summary(
     conn: &PooledConnection<SqliteConnectionManager>,
 ) -> Result<CostSummary, StorageError> {
     let mut summary = CostSummary::default();
-    let mut stmt = conn.prepare("SELECT metric, value FROM cost_summary")?;
+    let mut stmt = conn.prepare("SELECT schema_version,payload FROM events ORDER BY seq")?;
     let iter = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        Ok((row.get::<_, u32>(0)?, row.get::<_, Vec<u8>>(1)?))
     })?;
-    for r in iter {
-        let (metric, value) = r?;
-        match metric.as_str() {
-            "tokens_in" => summary.tokens_in = value as u64,
-            "tokens_out" => summary.tokens_out = value as u64,
-            "cache_hits" => summary.cache_hits = value as u64,
-            "cost_usd" => summary.cost_usd = value,
-            _ => {},
+    for row in iter {
+        let (version, blob) = row?;
+        let payload = surge_core::migrate_payload(version, &blob)
+            .map_err(|error| StorageError::OperationRejected(error.to_string()))?;
+        if let Some((_, input, output, cost)) = payload.token_delta() {
+            summary.tokens_in = summary.tokens_in.checked_add(input).ok_or_else(|| {
+                StorageError::OperationRejected("input token total overflow".into())
+            })?;
+            summary.tokens_out = summary.tokens_out.checked_add(output).ok_or_else(|| {
+                StorageError::OperationRejected("output token total overflow".into())
+            })?;
+            if let Some(cost) = cost {
+                summary.cost_usd += cost;
+            } else {
+                summary.cost_unknown = true;
+            }
+        } else if matches!(
+            payload,
+            surge_core::EventPayload::ProviderUsageObserved { .. }
+        ) {
+            summary.usage_unknown = true;
+            summary.cost_unknown = true;
+        }
+        if let surge_core::EventPayload::TokensConsumed { cache_hits, .. } = payload {
+            summary.cache_hits = summary
+                .cache_hits
+                .checked_add(u64::from(cache_hits))
+                .ok_or_else(|| {
+                    StorageError::OperationRejected("cache-hit total overflow".into())
+                })?;
         }
     }
     Ok(summary)

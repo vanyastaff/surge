@@ -287,7 +287,19 @@ pub enum SurgeEvent {
     SpecLoaded { spec_id: SpecId },
 
     // --- Usage events ---
-    /// Token usage reported by an agent at the end of a prompt turn.
+    /// Raw ACP prompt-response consumption evidence, including unavailable usage.
+    ProviderUsageObserved {
+        /// ACP session associated with the evidence.
+        session_id: String,
+        /// Agent that processed the prompt.
+        agent_name: String,
+        /// Original counters and accepted delta, or explicit uncertainty.
+        usage: crate::usage::TokenUsageObservation,
+    },
+    /// Accepted token-consumption delta since the last trustworthy observation.
+    ///
+    /// This interval may span multiple prompt turns when intervening responses
+    /// omit counters. Missing optional categories remain unknown rather than zero.
     ///
     /// Aggregation, budgeting, and cost calculation are handled by
     /// `surge-persistence`. `estimated_cost_usd` is `None` until pricing
@@ -301,11 +313,11 @@ pub enum SurgeEvent {
         spec_id: Option<SpecId>,
         /// Subtask context if this turn was part of a subtask execution.
         subtask_id: Option<SubtaskId>,
-        /// Total input tokens for this turn.
+        /// Input tokens consumed during the accepted observation interval.
         input_tokens: u64,
-        /// Total output/generation tokens for this turn.
+        /// Output tokens consumed during the accepted observation interval.
         output_tokens: u64,
-        /// Extended thinking/reasoning tokens (Anthropic models).
+        /// Reasoning tokens in the interval, when reported.
         thought_tokens: Option<u64>,
         /// Cache-read tokens — reduce billing on repeated prompts.
         cached_read_tokens: Option<u64>,

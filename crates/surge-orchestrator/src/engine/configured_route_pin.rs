@@ -7,18 +7,18 @@ use std::{
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RoutePinError {
     #[error("route snapshot unsupported on this platform")]
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     Unsupported,
     #[error("unsafe route key location")]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     UnsafeLocation,
     #[error("invalid route key")]
     InvalidKey,
     #[error("route key I/O failed")]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     KeyIo,
     #[error("secure random generation failed")]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Random,
     #[error("declared route source unavailable")]
     SourceUnavailable,
@@ -36,14 +36,18 @@ impl std::fmt::Debug for RoutePinKey {
 }
 impl RoutePinKey {
     /// Load the durable host-local key, creating it with restrictive atomic publication.
-    /// A corrupt or unsafe existing key is never replaced. Linux/macOS are supported;
-    /// other platforms return a typed unsupported error until their ACL rules are verified.
+    /// A corrupt or unsafe existing key is never replaced. Linux, macOS and local
+    /// protected Windows NTFS homes are supported; other platforms return unsupported.
     pub fn load_or_create(host_home: &Path) -> Result<Self, RoutePinError> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             unix_key::load_or_create(host_home).map(Self)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            windows_key::load_or_create(host_home).map(Self)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = host_home;
             Err(RoutePinError::Unsupported)
@@ -91,6 +95,7 @@ fn frame(mac: &mut hmac::Hmac<sha2::Sha256>, bytes: &[u8]) {
     mac.update(bytes);
 }
 
+#[cfg(not(windows))]
 fn fingerprint_source(
     mac: &mut hmac::Hmac<sha2::Sha256>,
     path: &Path,
@@ -152,6 +157,14 @@ fn fingerprint_source(
     Ok(())
 }
 
+#[cfg(windows)]
+#[path = "configured_route_pin/windows.rs"]
+mod windows_key;
+#[cfg(windows)]
+use windows_key::fingerprint_source;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+mod key_format;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_key {
     use super::RoutePinError;
@@ -168,17 +181,7 @@ mod unix_key {
     };
 
     const NAME: &CStr = c"configured-route-pin.key";
-    const MAGIC: &[u8] = b"surge/route-pin-key/v1\0";
-    const KEY_FILE_LEN: usize = MAGIC.len() + 32 + 32;
-
-    fn checksum(key: &[u8]) -> [u8; 32] {
-        use sha2::Digest;
-        let mut digest = sha2::Sha256::new();
-        digest.update(b"surge/route-pin-key-integrity/v1\0");
-        digest.update(MAGIC);
-        digest.update(key);
-        digest.finalize().into()
-    }
+    use super::key_format::{KEY_FILE_LEN, MAGIC, checksum, decode};
     fn uid() -> u32 {
         // SAFETY: geteuid takes no pointers and has no preconditions.
         unsafe { libc::geteuid() }
@@ -319,13 +322,7 @@ mod unix_key {
         if file.read(&mut extra).map_err(|_| RoutePinError::KeyIo)? != 0 {
             return Err(RoutePinError::InvalidKey);
         }
-        let (magic, rest) = stored.split_at(MAGIC.len());
-        let (key_bytes, integrity) = rest.split_at(32);
-        if magic != MAGIC || integrity != checksum(key_bytes) {
-            return Err(RoutePinError::InvalidKey);
-        }
-        let key = <[u8; 32]>::try_from(key_bytes).map_err(|_| RoutePinError::InvalidKey)?;
-        Ok(key)
+        decode(&stored)
     }
     fn unlink(dir: &File, name: &CStr) -> Result<(), RoutePinError> {
         // SAFETY: live directory descriptor, valid NUL terminated name, unlink regular entry only.

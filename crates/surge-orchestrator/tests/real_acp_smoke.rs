@@ -360,10 +360,11 @@ async fn flow_minimal_agent_against_real_acp_agent() {
             "real ACP smoke completed without a persisted RunCompleted event: {events:?}"
         );
         assert!(
-            events
-                .iter()
-                .any(|ev| matches!(ev.payload.payload, EventPayload::TokensConsumed { .. })),
-            "real ACP smoke completed without a persisted TokensConsumed event: {events:?}"
+            events.iter().any(|ev| matches!(
+                ev.payload.payload,
+                EventPayload::ProviderUsageObserved { .. }
+            )),
+            "real ACP smoke completed without a persisted ProviderUsageObserved event: {events:?}"
         );
     }
     home.close().unwrap();

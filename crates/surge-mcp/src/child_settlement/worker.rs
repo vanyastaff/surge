@@ -1,4 +1,4 @@
-//! Only this thread polls or kills the retained plain standard child.
+//! Only this thread polls or kills the retained native child owner.
 use super::{
     ChildParcel, panic_boundary,
     tracker::{self, Completion, Start},
@@ -57,7 +57,8 @@ pub(super) fn settle_owned(owned: &mut Option<ChildParcel>, control: &AtomicU8) 
         }
         match panic_boundary::protected(|| parcel.child.try_wait()) {
             Ok(Some(_status)) => {
-                // Direct leader exit alone is not descendant containment proof.
+                // Windows native owners also observe an empty retained job here.
+                // Unix leader exit alone is not descendant containment proof.
                 panic_boundary::protected(|| drop(owned.take()));
                 return;
             },

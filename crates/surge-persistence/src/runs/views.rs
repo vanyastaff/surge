@@ -149,25 +149,20 @@ pub fn maintain(
                 ],
             )?;
         },
-        TokensConsumed {
-            session,
-            prompt_tokens,
-            output_tokens,
-            cache_hits,
-            cost_usd,
-            ..
-        } => {
-            tx.execute(
-                "UPDATE stage_executions SET cost_usd = cost_usd + ?, known_cost_usd = CASE WHEN ? IS NULL THEN known_cost_usd ELSE COALESCE(known_cost_usd, 0) + ? END, cost_unknown = CASE WHEN ? IS NULL THEN 1 ELSE cost_unknown END, tokens_in = tokens_in + ?, tokens_out = tokens_out + ? WHERE session_id = ?",
-                rusqlite::params![cost_usd.unwrap_or(0.0), cost_usd, cost_usd, cost_usd, i64::from(*prompt_tokens), i64::from(*output_tokens), session.as_ulid().to_string()],
-            )?;
-            upsert_metric(tx, "tokens_in", f64::from(*prompt_tokens), timestamp_ms)?;
-            upsert_metric(tx, "tokens_out", f64::from(*output_tokens), timestamp_ms)?;
-            upsert_metric(tx, "cache_hits", f64::from(*cache_hits), timestamp_ms)?;
-            if let Some(cost) = cost_usd {
-                upsert_metric(tx, "cost_usd", *cost, timestamp_ms)?;
+        TokensConsumed { .. } | EventPayload::ProviderUsageObserved { .. } => {
+            if let Some((session, input, output, cost)) = payload.token_delta() {
+                apply_token_delta(tx, session, input, output, cost, timestamp_ms)?;
+            } else if let EventPayload::ProviderUsageObserved { session, .. } = payload {
+                tx.execute(
+                    "UPDATE stage_executions SET cost_unknown=1,tokens_unknown=1 WHERE session_id=?",
+                    [session.as_ulid().to_string()],
+                )?;
+            }
+            if let TokensConsumed { cache_hits, .. } = payload {
+                upsert_metric(tx, "cache_hits", f64::from(*cache_hits), timestamp_ms)?;
             }
         },
+        EventPayload::ContextUsageObserved { .. } => {},
         ApprovalRequested {
             gate,
             channel,
@@ -623,6 +618,50 @@ pub fn maintain(
                  about the new one instead of relying on this arm"
             );
         },
+    }
+    Ok(())
+}
+
+fn apply_token_delta(
+    tx: &Transaction<'_>,
+    session: surge_core::SessionId,
+    input: u64,
+    output: u64,
+    cost: Option<f64>,
+    ts: i64,
+) -> Result<(), WriterError> {
+    let mut representable = i64::try_from(input).is_ok() && i64::try_from(output).is_ok();
+    let mut stmt =
+        tx.prepare("SELECT tokens_in,tokens_out FROM stage_executions WHERE session_id=?")?;
+    let rows = stmt.query_map([session.as_ulid().to_string()], |row| {
+        Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))
+    })?;
+    for row in rows {
+        let (previous_input, previous_output) = row?;
+        representable &= previous_input
+            .checked_add(input)
+            .is_some_and(|value| i64::try_from(value).is_ok())
+            && previous_output
+                .checked_add(output)
+                .is_some_and(|value| i64::try_from(value).is_ok());
+    }
+    tx.execute("UPDATE stage_executions SET cost_usd=cost_usd+?,known_cost_usd=CASE WHEN ? IS NULL THEN known_cost_usd ELSE COALESCE(known_cost_usd,0)+? END,cost_unknown=CASE WHEN ? IS NULL THEN 1 ELSE cost_unknown END WHERE session_id=?", rusqlite::params![cost.unwrap_or(0.0),cost,cost,cost,session.as_ulid().to_string()])?;
+    if representable {
+        tx.execute("UPDATE stage_executions SET tokens_in=tokens_in+?,tokens_out=tokens_out+? WHERE session_id=?", rusqlite::params![input,output,session.as_ulid().to_string()])?;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            upsert_metric(tx, "tokens_in", input as f64, ts)?;
+            upsert_metric(tx, "tokens_out", output as f64, ts)?;
+        }
+    } else {
+        tracing::warn!(%session, input, output, "token projection exceeds SQLite integer range; raw evidence retained");
+        tx.execute(
+            "UPDATE stage_executions SET tokens_unknown=1 WHERE session_id=?",
+            [session.as_ulid().to_string()],
+        )?;
+    }
+    if let Some(cost) = cost {
+        upsert_metric(tx, "cost_usd", cost, ts)?;
     }
     Ok(())
 }
@@ -1089,6 +1128,100 @@ mod tests {
             .unwrap();
         // INSERT OR IGNORE preserved the prior size; did not zero it.
         assert_eq!(size, 12345);
+    }
+
+    #[test]
+    fn provider_deltas_do_not_charge_context_or_repeat_cumulative_totals() {
+        use surge_core::usage::{
+            ContextUsage, TokenUsageCounters, TokenUsageObservation, UsageUnavailableReason,
+        };
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        let session = SessionId::new();
+        let counters = |input, output| TokenUsageCounters {
+            total_tokens: input + output,
+            input_tokens: input,
+            output_tokens: output,
+            thought_tokens: None,
+            cached_read_tokens: Some(3),
+            cached_write_tokens: None,
+        };
+        for (seq, payload) in [
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(10, 5),
+                    delta: counters(10, 5),
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(10, 5),
+                    delta: counters(0, 0),
+                },
+            },
+            EventPayload::ContextUsageObserved {
+                session,
+                usage: ContextUsage {
+                    used: 900,
+                    size: 1000,
+                    cost: None,
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Unavailable {
+                    reason: UsageUnavailableReason::Missing,
+                    reported: None,
+                },
+            },
+        ]
+        .iter()
+        .enumerate()
+        {
+            maintain(&tx, EventSeq(seq as u64 + 1), 1, payload).unwrap();
+        }
+        let input: f64 = tx
+            .query_row(
+                "SELECT value FROM cost_summary WHERE metric='tokens_in'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let output: f64 = tx
+            .query_row(
+                "SELECT value FROM cost_summary WHERE metric='tokens_out'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((input, output), (10.0, 5.0));
+        let cost_rows: u64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM cost_summary WHERE metric IN ('cost_usd','cache_hits')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cost_rows, 0);
+    }
+
+    #[test]
+    fn provider_delta_outside_sqlite_integer_range_keeps_known_subtotal() {
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        let session = SessionId::new();
+        tx.execute("INSERT INTO stage_executions (node_id,attempt,started_seq,started_at,session_id,tokens_in,tokens_out) VALUES ('impl',1,1,1,?,7,3)", [session.as_ulid().to_string()]).unwrap();
+        super::apply_token_delta(&tx, session, u64::MAX, 0, None, 1).unwrap();
+        let projected: (u64, u64, bool) = tx
+            .query_row(
+                "SELECT tokens_in,tokens_out,tokens_unknown FROM stage_executions",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(projected, (7, 3, true));
     }
 
     #[test]

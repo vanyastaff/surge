@@ -340,6 +340,9 @@ fn cost_lines(cost: &CostTotals) -> String {
         "- Prompt tokens: {}\n- Output tokens: {}\n- Cache hits: {}\n- Cost (USD): {:.4}{cost_note}\n",
         cost.prompt_tokens, cost.output_tokens, cost.cache_hits, cost.cost_usd,
     ));
+    if cost.usage_unknown {
+        out.push_str("- Token usage is partial or unavailable; counters above are known lower bounds, not exact totals.\n");
+    }
     if cost.budget_warning_raised {
         out.push_str("- ⚠ Budget warning threshold was crossed.\n");
     }
@@ -723,9 +726,12 @@ fn render_cost_section(cost: &CostTotals) -> String {
     if cost.budget_exceeded {
         warnings.push_str("<li class=\"bad\">Budget limit was exceeded.</li>");
     }
+    if cost.usage_unknown {
+        warnings.push_str("<li class=\"warn\">Token usage is partial or unavailable; counters above are known lower bounds, not exact totals.</li>");
+    }
     let uncosted = if cost.uncosted_token_events > 0 {
         format!(
-            "<li class=\"warn\">{} event(s) recorded token spend with no price — the cost \
+            "<li class=\"warn\">{} event(s) have unavailable token spend or no price — the cost \
              figure above is a floor, not the true total.</li>",
             cost.uncosted_token_events
         )

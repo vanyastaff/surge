@@ -1,0 +1,7 @@
+
+running 1 test
+test state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal ... stage1 unsafe WAL and hardlinked database unchanged refusal=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.16s
+

@@ -59,6 +59,9 @@ pub struct StageExecution {
     /// Whether any usage event for this attempt omitted its cost.
     #[serde(default)]
     pub cost_unknown: bool,
+    /// Token subtotal is incomplete or outside SQLite numeric range.
+    #[serde(default)]
+    pub tokens_unknown: bool,
     /// Cumulative input tokens for this attempt.
     pub tokens_in: u64,
     /// Cumulative output tokens for this attempt.
@@ -152,9 +155,15 @@ pub struct RoadmapPatchRecord {
     pub updated_at_ms: i64,
 }
 
-/// Summary of cost-related metrics from the `cost_summary` view.
+/// Exact usage totals folded from durable events.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CostSummary {
+    /// Some token spend was unavailable.
+    #[serde(default)]
+    pub usage_unknown: bool,
+    /// Some token reports had no USD cost.
+    #[serde(default)]
+    pub cost_unknown: bool,
     /// Total input tokens accumulated across the run.
     pub tokens_in: u64,
     /// Total output tokens accumulated across the run.

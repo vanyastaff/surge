@@ -244,23 +244,21 @@ mod tests {
     }
 
     #[test]
-    fn short_is_alphanumeric_and_distinct() {
-        let a = RunId::new();
-        let b = RunId::new();
+    fn short_preserves_known_prefixes_and_allows_collisions() {
+        let a: RunId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let b: RunId = "01ARZ3NDEKTTV4RRFFQ69G5FAV".parse().unwrap();
+        let same_prefix: RunId = "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap();
         let sa = a.short();
         let sb = b.short();
+        assert_eq!(sa, "01ARZ3NDEKTS");
+        assert_eq!(sb, "01ARZ3NDEKTT");
         assert_eq!(sa.len(), 12);
         assert_eq!(sb.len(), 12);
         assert!(sa.chars().all(|c| c.is_ascii_alphanumeric()));
         assert!(sb.chars().all(|c| c.is_ascii_alphanumeric()));
-        // Note: we deliberately don't assert that adjacent ULIDs share a timestamp
-        // prefix. On fast hardware, two `Ulid::new()` calls back-to-back can land
-        // on different millisecond boundaries, which makes any prefix-equality
-        // assertion racy (observed flaking on macOS CI).
-        // Randomness chars (positions 10..12) almost always differ — collision is ~1/1024.
-        assert_ne!(
-            sa, sb,
-            "two distinct ULIDs should produce distinct short forms"
-        );
+        assert_ne!(sa, sb);
+        // Short forms omit most randomness and do not promise uniqueness.
+        assert_ne!(a, same_prefix);
+        assert_eq!(sa, same_prefix.short());
     }
 }

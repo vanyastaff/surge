@@ -447,6 +447,36 @@ mod tests {
     use super::*;
     use crate::runs::clock::MockClock;
 
+    fn settle_pool(pool: Pool<SqliteConnectionManager>) {
+        #[cfg(windows)]
+        let settlement = pool.get().unwrap().settlement().unwrap();
+        drop(pool);
+        #[cfg(windows)]
+        settlement.wait();
+    }
+
+    #[test]
+    fn bootstrap_journal_exists_after_registry_reopen() {
+        let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let clock = MockClock::new(1);
+        // r2d2 build may return before the final connect worker releases its
+        // SharedPool Arc. Pool drop alone does not establish SQLite close.
+        settle_pool(open_registry_pool(temp.path(), &clock).unwrap());
+        let pool = open_registry_pool(temp.path(), &clock).unwrap();
+        let connection = pool.get().unwrap();
+        let table: Option<String> = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bootstrap_operations'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(table.as_deref(), Some("bootstrap_operations"));
+        drop(connection);
+        settle_pool(pool);
+        temp.close().expect("close runtime home");
+    }
+
     fn fixture_summary(id: RunId, pid: Option<i32>) -> RunSummary {
         RunSummary {
             id,

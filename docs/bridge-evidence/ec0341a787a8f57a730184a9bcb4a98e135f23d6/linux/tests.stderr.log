@@ -1,0 +1,389 @@
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+────────────
+[32;1m Nextest run[0m ID [1m66b8b270-1b21-44bc-9794-8ae0806b04d0[0m with nextest profile: [1mbridge-portability[0m
+[32;1m    Starting[0m [1m383[0m tests across [1m34[0m binaries ([1m4[0m tests [33;1mskipped[0m)
+[32;1m        PASS[0m [   0.005s] (  1/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mdefault_fills_a_missing_source[0m
+[32;1m        PASS[0m [   0.005s] (  2/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mempty_source_falls_back_to_default[0m
+[32;1m        PASS[0m [   0.005s] (  3/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1minjected_values_never_appear_in_the_error[0m
+[32;1m        PASS[0m [   0.006s] (  4/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1minjection_reads_the_source_variable_at_spawn_time[0m
+[32;1m        PASS[0m [   0.005s] (  5/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mmissing_optional_source_is_omitted_not_failed[0m
+[32;1m        PASS[0m [   0.006s] (  6/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mliteral_resolves_verbatim[0m
+[32;1m        PASS[0m [   0.006s] (  7/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mmissing_required_source_is_a_typed_error_naming_var_and_agent[0m
+[32;1m        PASS[0m [   0.006s] (  8/383) [35;1msurge-acp[0m [36mbridge::acp_bridge::tests[0m[36m::[0m[34;1mdrop_without_shutdown_does_not_deadlock[0m
+[32;1m        PASS[0m [   0.012s] (  9/383) [35;1msurge-acp[0m [36mbridge::acp_bridge::tests[0m[36m::[0m[34;1mspawn_then_shutdown_clean[0m
+[32;1m        PASS[0m [   0.014s] ( 10/383) [35;1msurge-acp[0m [36mbridge::acp_bridge::tests[0m[36m::[0m[34;1mopen_session_returns_skeleton_error[0m
+[32;1m        PASS[0m [   0.004s] ( 11/383) [35;1msurge-acp[0m [36mbridge::client::tests[0m[36m::[0m[34;1mpermission_selection_never_invents_ids_or_persistent_grants[0m
+[32;1m        PASS[0m [   0.004s] ( 12/383) [35;1msurge-acp[0m [36mbridge::client::tests[0m[36m::[0m[34;1mpermission_selection_uses_kind_not_misleading_id[0m
+[32;1m        PASS[0m [   0.006s] ( 13/383) [35;1msurge-acp[0m [36mbridge::client::tests[0m[36m::[0m[34;1mrequest_permission_allow_returns_allow_option[0m
+[32;1m        PASS[0m [   0.004s] ( 14/383) [35;1msurge-acp[0m [36mbridge::error::tests[0m[36m::[0m[34;1mbridge_error_is_send_sync[0m
+[32;1m        PASS[0m [   0.004s] ( 15/383) [35;1msurge-acp[0m [36mbridge::error::tests[0m[36m::[0m[34;1mopen_no_outcomes_renders[0m
+[32;1m        PASS[0m [   0.005s] ( 16/383) [35;1msurge-acp[0m [36mbridge::error::tests[0m[36m::[0m[34;1mclose_graceful_timeout_renders_with_killed_flag[0m
+[32;1m        PASS[0m [   0.004s] ( 17/383) [35;1msurge-acp[0m [36mbridge::event::tests[0m[36m::[0m[34;1moutcome_reported_serde_round_trip[0m
+[32;1m        PASS[0m [   0.005s] ( 18/383) [35;1msurge-acp[0m [36mbridge::event::tests[0m[36m::[0m[34;1msession_end_reason_serde_round_trip[0m
+[32;1m        PASS[0m [   0.004s] ( 19/383) [35;1msurge-acp[0m [36mbridge::event::tests[0m[36m::[0m[34;1mtool_result_payload_unsupported_round_trip[0m
+[32;1m        PASS[0m [   0.005s] ( 20/383) [35;1msurge-acp[0m [36mbridge::facade_smoke[0m[36m::[0m[34;1macp_bridge_impls_facade[0m
+[32;1m        PASS[0m [   0.004s] ( 21/383) [35;1msurge-acp[0m [36mbridge::sandbox::tests[0m[36m::[0m[34;1malways_allow_boxed_clone_round_trip[0m
+[32;1m        PASS[0m [   0.004s] ( 22/383) [35;1msurge-acp[0m [36mbridge::sandbox::tests[0m[36m::[0m[34;1mdeny_list_denies_named_mcp_server[0m
+[32;1m        PASS[0m [   0.048s] ( 23/383) [35;1msurge-acp[0m [36magent_env::tests[0m[36m::[0m[34;1mliteral_that_looks_like_a_key_is_flagged[0m
+[32;1m        PASS[0m [   0.005s] ( 24/383) [35;1msurge-acp[0m [36mbridge::sandbox::tests[0m[36m::[0m[34;1malways_allow_visibility_and_call_both_allow[0m
+[32;1m        PASS[0m [   0.004s] ( 25/383) [35;1msurge-acp[0m [36mbridge::sandbox::tests[0m[36m::[0m[34;1mdeny_list_denies_named_tool[0m
+[32;1m        PASS[0m [   0.005s] ( 26/383) [35;1msurge-acp[0m [36mbridge::sandbox::tests[0m[36m::[0m[34;1mdeny_list_visibility_and_allows_tool_parity[0m
+[32;1m        PASS[0m [   0.005s] ( 27/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1mcustom_mode_short_circuits_matrix_lookup[0m
+[32;1m        PASS[0m [   0.004s] ( 28/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1mcustom_mode_with_empty_allowlists_returns_custom_invalid[0m
+[32;1m        PASS[0m [   0.004s] ( 29/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1mdoctor_context_does_not_relax_unsupported_combo[0m
+[32;1m        PASS[0m [   0.005s] ( 30/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1mmissing_row_is_unsupported_combo[0m
+[32;1m        PASS[0m [   0.005s] ( 31/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1munverified_row_accepted_in_doctor_context[0m
+[32;1m        PASS[0m [   0.004s] ( 32/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1munverified_row_refuses_in_run_context[0m
+[32;1m        PASS[0m [   0.005s] ( 33/383) [35;1msurge-acp[0m [36mbridge::sandbox_resolver::tests[0m[36m::[0m[34;1mverified_row_returns_flags[0m
+[32;1m        PASS[0m [   0.004s] ( 34/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1mrejects_duplicate_tool_names[0m
+[32;1m        PASS[0m [   0.007s] ( 35/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1maccepts_minimal_valid_config[0m
+[32;1m        PASS[0m [   0.005s] ( 36/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1mrejects_empty_outcomes[0m
+[32;1m        PASS[0m [   0.004s] ( 37/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1mrejects_oversized_bindings[0m
+[32;1m        PASS[0m [   0.005s] ( 38/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1mrejects_reserved_tool_name[0m
+[32;1m        PASS[0m [   0.004s] ( 39/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1mcontext_cost_preserves_currency_and_rejects_invalid_amounts[0m
+[32;1m        PASS[0m [   0.064s] ( 40/383) [35;1msurge-acp[0m [36mbridge::acp_bridge::tests[0m[36m::[0m[34;1msubscribe_yields_no_events_on_idle_bridge[0m
+[32;1m        PASS[0m [   0.005s] ( 41/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1moptional_counters_remain_unknown_when_missing_new_or_regressed[0m
+[32;1m        PASS[0m [   0.005s] ( 42/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1moptional_regression_does_not_charge_old_tokens_on_recovery[0m
+[32;1m        PASS[0m [   0.006s] ( 43/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1mreports_cumulative_deltas_without_resetting_on_missing_or_regression[0m
+[32;1m        PASS[0m [   0.006s] ( 44/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1mrestored_provider_history_is_not_charged_as_new_spend[0m
+[32;1m        PASS[0m [   0.005s] ( 45/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1msdk_drops_malformed_usage_and_tracker_preserves_unknown[0m
+[32;1m        PASS[0m [   0.006s] ( 46/383) [35;1msurge-acp[0m [36mbridge::tokens::tests[0m[36m::[0m[34;1msdk_keeps_required_spend_when_optional_counter_is_malformed[0m
+[32;1m        PASS[0m [   0.005s] ( 47/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mbuild_injected_tools_includes_human_input_when_enabled[0m
+[32;1m        PASS[0m [   0.005s] ( 48/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mbuild_injected_tools_skips_human_input_when_disabled[0m
+[32;1m        PASS[0m [   0.005s] ( 49/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mmcp_category_returns_id[0m
+[32;1m        PASS[0m [   0.005s] ( 50/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mreport_stage_outcome_includes_dynamic_enum[0m
+[32;1m        PASS[0m [   0.005s] ( 51/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mreport_stage_outcome_is_marked_injected[0m
+[32;1m        PASS[0m [   0.005s] ( 52/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mrequest_human_input_is_static_shape[0m
+[32;1m        PASS[0m [   0.006s] ( 53/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mbuild_agent_command_sets_resolved_env_on_the_child[0m
+[32;1m        PASS[0m [   0.005s] ( 54/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_401_wins_over_rate_limit_vocabulary[0m
+[32;1m        PASS[0m [   0.005s] ( 55/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_bare_retry_after_prose_without_rate_limit_keyword_is_not_recognized[0m
+[32;1m        PASS[0m [   0.054s] ( 56/383) [35;1msurge-acp[0m [36mbridge::session::tests[0m[36m::[0m[34;1mstage_descriptor_diagnostics_hide_environment_values[0m
+[32;1m        PASS[0m [   0.005s] ( 57/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_captured_claude_limit[0m
+[32;1m        PASS[0m [   0.005s] ( 58/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_captured_codex_usage_limit[0m
+[32;1m        PASS[0m [   0.006s] ( 59/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_keeps_non_auth_as_bridge_error[0m
+[32;1m        PASS[0m [   0.005s] ( 60/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_maps_401_to_agent_auth_failed[0m
+[32;1m        PASS[0m [   0.006s] ( 61/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_maps_unsupported_model_to_its_own_variant[0m
+[32;1m        PASS[0m [   0.005s] ( 62/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclassify_prompt_error_rate_limit_shape_measurement[0m
+[32;1m        PASS[0m [   0.006s] ( 63/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mclaude_kind_injects_acp_flag_before_extra_args[0m
+[32;1m        PASS[0m [   0.005s] ( 64/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mcodex_kind_uses_acp_subcommand_not_flag[0m
+[32;1m        PASS[0m [   0.005s] ( 65/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mconfig_selection_matches_value_or_name_within_its_category[0m
+[32;1m        PASS[0m [   0.005s] ( 66/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mconfig_selection_the_agent_does_not_offer_is_refused_with_its_choices[0m
+[32;1m        PASS[0m [   0.005s] ( 67/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mcustom_kind_passes_args_verbatim_no_injected_flag[0m
+[32;1m        PASS[0m [   0.005s] ( 68/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mfilter_removes_denied_tools[0m
+[32;1m        PASS[0m [   0.005s] ( 69/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mgemini_kind_injects_acp_flag[0m
+[32;1m        PASS[0m [   0.063s] ( 70/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1mreport_stage_outcome_schema_snapshot[0m
+[32;1m        PASS[0m [   0.007s] ( 71/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mforced_cleanup_closes_descendant_processes[0m
+[32;1m        PASS[0m [   0.005s] ( 72/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mresolve_program_falls_back_to_original_when_missing[0m
+[32;1m        PASS[0m [   0.005s] ( 73/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mresolve_program_finds_path_extension_shim[0m
+[32;1m        PASS[0m [   0.086s] ( 74/383) [35;1msurge-acp[0m [36mbridge::tools::tests[0m[36m::[0m[34;1moutcome_enum_serializable_for_any_size[0m
+[32;1m        PASS[0m [   0.012s] ( 75/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_dangerous_command_detection[0m
+[32;1m        PASS[0m [   0.014s] ( 76/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_dangerous_command_edge_cases[0m
+[32;1m        PASS[0m [   0.005s] ( 77/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_interactive_policy_returns_none[0m
+[32;1m        PASS[0m [   0.005s] ( 78/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_new_with_nonexistent_path_does_not_panic[0m
+[32;1m        PASS[0m [   0.005s] ( 79/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_path_traversal_rejected[0m
+[32;1m        PASS[0m [   0.005s] ( 80/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_permission_policy_auto_approve[0m
+[32;1m        PASS[0m [   0.005s] ( 81/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_smart_policy_delete_denied[0m
+[32;1m        PASS[0m [   0.006s] ( 82/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_smart_policy_read_approved[0m
+[32;1m        PASS[0m [   0.012s] ( 83/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_smart_policy_dangerous_bash_denied[0m
+[32;1m        PASS[0m [   0.010s] ( 84/383) [35;1msurge-acp[0m [36mclient::tests[0m[36m::[0m[34;1mtest_smart_policy_safe_bash_approved[0m
+[32;1m        PASS[0m [   0.007s] ( 85/383) [35;1msurge-acp[0m [36mconnection::tests[0m[36m::[0m[34;1mkill_joins_legacy_driver_and_closes_transport[0m
+[32;1m        PASS[0m [   0.021s] ( 86/383) [35;1msurge-acp[0m [36mconnection::tests::shutdown[0m[36m::[0m[34;1mtest_kill_unix_process[0m
+[32;1m        PASS[0m [   0.004s] ( 87/383) [35;1msurge-acp[0m [36mconnection::tests[0m[36m::[0m[34;1mtest_surge_client_capabilities[0m
+[32;1m        PASS[0m [   0.004s] ( 88/383) [35;1msurge-acp[0m [36mconnection::tests[0m[36m::[0m[34;1mtest_surge_client_capabilities_smart_read_only[0m
+[32;1m        PASS[0m [   0.004s] ( 89/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mfrom_standard_paths_resolves_npx_launcher_for_any_user_configured_entry_too[0m
+[32;1m        PASS[0m [   0.004s] ( 90/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mfrom_standard_paths_resolves_npx_launcher_for_entry_with_no_cli_binary[0m
+[32;1m        PASS[0m [   0.004s] ( 91/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_discovery_cache[0m
+[32;1m        PASS[0m [   0.004s] ( 92/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_discovery_new[0m
+[32;1m        PASS[0m [   0.004s] ( 93/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_env_detection[0m
+[32;1m        PASS[0m [   0.004s] ( 94/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_platform_detection[0m
+[32;1m        PASS[0m [   0.004s] ( 95/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_platform_paths[0m
+[32;1m        PASS[0m [   0.004s] ( 96/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_platform_standard_paths[0m
+[32;1m        PASS[0m [   0.106s] ( 97/383) [35;1msurge-acp[0m [36mconnection::tests::shutdown[0m[36m::[0m[34;1mtest_wait_or_kill_grace_period[0m
+[32;1m        PASS[0m [   0.006s] ( 98/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_version_detection[0m
+[32;1m        PASS[0m [   0.004s] ( 99/383) [35;1msurge-acp[0m [36mdisplay::tests[0m[36m::[0m[34;1mtest_all_agents_have_metadata[0m
+[32;1m        PASS[0m [   0.004s] (100/383) [35;1msurge-acp[0m [36mdisplay::tests[0m[36m::[0m[34;1mtest_extract_version[0m
+[32;1m        PASS[0m [   0.004s] (101/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1manthropic_overload_is_unclassified_instead_of_quota_exhaustion[0m
+[32;1m        PASS[0m [   0.004s] (102/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_clears_on_recovery_not_stuck_exhausted_forever[0m
+[32;1m        PASS[0m [   0.004s] (103/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_known_via_record_failure_with_retry_after[0m
+[32;1m        PASS[0m [   0.004s] (104/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_never_observed_before_any_failure[0m
+[32;1m        PASS[0m [   0.004s] (105/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_resets_at_unknown_without_retry_after[0m
+[32;1m        PASS[0m [   0.004s] (106/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_unclassified_for_a_failure_that_is_not_a_rate_limit[0m
+[32;1m        PASS[0m [   0.004s] (107/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_capacity_status_unclassified_from_heartbeat_failures_alone[0m
+[32;1m        PASS[0m [   0.004s] (108/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_error_rate[0m
+[32;1m        PASS[0m [   0.005s] (109/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_fallback_routing[0m
+[32;1m        PASS[0m [   0.004s] (110/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_degraded_before_offline[0m
+[32;1m        PASS[0m [   0.004s] (111/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_degraded_high_error_rate[0m
+[32;1m        PASS[0m [   0.004s] (112/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_degraded_rate_limited[0m
+[32;1m        PASS[0m [   0.004s] (113/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_healthy[0m
+[32;1m        PASS[0m [   0.004s] (114/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_offline[0m
+[32;1m        PASS[0m [   0.004s] (115/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_health_status_recovery_from_offline[0m
+[32;1m        PASS[0m [   0.004s] (116/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_healthy_by_default[0m
+[32;1m        PASS[0m [   0.004s] (117/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_heartbeat_failure_tracking[0m
+[32;1m        PASS[0m [   0.004s] (118/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_heartbeat_recovery[0m
+[32;1m        PASS[0m [   0.004s] (119/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_is_rate_limited_for_routing_rejects_bare_too_many[0m
+[32;1m        PASS[0m [   0.005s] (120/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_latency_percentiles[0m
+[32;1m        PASS[0m [   0.005s] (121/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_latency_percentiles_with_no_data[0m
+[32;1m        PASS[0m [   0.005s] (122/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_latency_samples_bounded_to_100[0m
+[32;1m        PASS[0m [   0.004s] (123/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_parse_retry_after_various_formats[0m
+[32;1m        PASS[0m [   0.004s] (124/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_rate_limit_detection[0m
+[32;1m        PASS[0m [   0.004s] (125/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_rate_limit_with_retry_after[0m
+[32;1m        PASS[0m [   0.005s] (126/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_rate_limit_without_retry_after[0m
+[32;1m        PASS[0m [   0.007s] (127/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_record_connect_failure_is_observed_but_not_a_request[0m
+[32;1m        PASS[0m [   0.005s] (128/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_record_connect_failure_still_classifies_subscription_quota_shape[0m
+[32;1m        PASS[0m [   0.004s] (129/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_record_failure_capacity_shape_does_not_set_rate_limited_for_routing[0m
+[32;1m        PASS[0m [   0.004s] (130/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_success_recording[0m
+[32;1m        PASS[0m [   0.005s] (131/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_unhealthy_on_high_errors[0m
+[32;1m        PASS[0m [   0.308s] (132/383) [35;1msurge-acp[0m [36mbridge::worker::tests[0m[36m::[0m[34;1mkilling_an_exited_unreaped_child_is_not_an_error[0m
+[32;1m        PASS[0m [   0.005s] (133/383) [35;1msurge-acp[0m [36monboarding::default_agent_selection_tests[0m[36m::[0m[34;1ma_launcher_only_runtime_never_becomes_the_default[0m
+[32;1m        PASS[0m [   0.014s] (134/383) [35;1msurge-acp[0m [36mhealth::tests[0m[36m::[0m[34;1mtest_uptime_tracking[0m
+[32;1m        PASS[0m [   0.006s] (135/383) [35;1msurge-acp[0m [36monboarding::default_agent_selection_tests[0m[36m::[0m[34;1ma_preferred_agent_wins_even_when_listed_later[0m
+[32;1m        PASS[0m [   0.006s] (136/383) [35;1msurge-acp[0m [36monboarding::default_agent_selection_tests[0m[36m::[0m[34;1man_installed_runtime_outside_the_preference_list_still_wins[0m
+[32;1m        PASS[0m [   0.005s] (137/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mparse_retry_after_behavior_is_unchanged_by_task_12[0m
+[32;1m        PASS[0m [   0.105s] (138/383) [35;1msurge-acp[0m [36mpool::tests::shutdown[0m[36m::[0m[34;1mtest_drop_cleanup[0m
+[32;1m        PASS[0m [   0.105s] (139/383) [35;1msurge-acp[0m [36mpool::tests::shutdown[0m[36m::[0m[34;1mtest_pool_initializes_pid_directory[0m
+[32;1m        PASS[0m [   0.006s] (140/383) [35;1msurge-acp[0m [36mpool::tests::shutdown[0m[36m::[0m[34;1mtest_shutdown_cleanup[0m
+[32;1m        PASS[0m [   0.005s] (141/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_agent_pool_creation[0m
+[32;1m        PASS[0m [   0.005s] (142/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_agent_pool_invalid_default[0m
+[32;1m        PASS[0m [   0.004s] (143/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_auto_reconnect[0m
+[32;1m        PASS[0m [   0.004s] (144/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_exponential[0m
+[32;1m        PASS[0m [   0.004s] (145/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_exponential_capped[0m
+[32;1m        PASS[0m [   0.004s] (146/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_exponential_overflow_protection[0m
+[32;1m        PASS[0m [   0.004s] (147/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_jitter[0m
+[32;1m        PASS[0m [   0.004s] (148/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_jitter_distribution[0m
+[32;1m        PASS[0m [   0.004s] (149/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_linear[0m
+[32;1m        PASS[0m [   0.004s] (150/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_zero_initial_delay[0m
+[32;1m        PASS[0m [   0.004s] (151/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_calculate_backoff_zero_max_delay[0m
+[32;1m        PASS[0m [   0.004s] (152/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_api_key[0m
+[32;1m        PASS[0m [   0.004s] (153/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_authentication_error[0m
+[32;1m        PASS[0m [   0.004s] (154/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_case_insensitive[0m
+[32;1m        PASS[0m [   0.004s] (155/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_http_401[0m
+[32;1m        PASS[0m [   0.004s] (156/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_negative_cases[0m
+[32;1m        PASS[0m [   0.004s] (157/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_auth_failure_unauthorized[0m
+[32;1m        PASS[0m [   0.004s] (158/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_case_insensitive[0m
+[32;1m        PASS[0m [   0.004s] (159/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_excludes_capacity_only_patterns[0m
+[32;1m        PASS[0m [   0.004s] (160/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_http_429[0m
+[32;1m        PASS[0m [   0.005s] (161/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_negative_cases[0m
+[32;1m        PASS[0m [   0.005s] (162/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_quota[0m
+[32;1m        PASS[0m [   0.004s] (163/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_is_rate_limit_rate_limit_text[0m
+[32;1m        PASS[0m [   0.004s] (164/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_parse_retry_after_default[0m
+[32;1m        PASS[0m [   0.004s] (165/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_parse_retry_after_mixed_content[0m
+[32;1m        PASS[0m [   0.004s] (166/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_parse_retry_after_out_of_range[0m
+[32;1m        PASS[0m [   0.004s] (167/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_parse_retry_after_seconds[0m
+[32;1m        PASS[0m [   0.004s] (168/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_parse_retry_after_with_suffix[0m
+[32;1m        PASS[0m [   0.005s] (169/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_pool_capacity_status_reflects_observed_429[0m
+[32;1m        PASS[0m [   0.004s] (170/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_pool_drop_requests_cleanup[0m
+[32;1m        PASS[0m [   0.004s] (171/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_session_handle[0m
+[32;1m        PASS[0m [   0.004s] (172/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_token_validation[0m
+[32;1m        PASS[0m [   0.005s] (173/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_try_health_degrades_to_none_when_lock_is_held[0m
+[32;1m        PASS[0m [   0.005s] (174/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_try_health_reflects_recorded_success[0m
+[32;1m        PASS[0m [   0.005s] (175/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_try_health_unknown_agent_is_none[0m
+[32;1m        PASS[0m [   0.004s] (176/383) [35;1msurge-acp[0m [36mpool::tests[0m[36m::[0m[34;1mtest_warm_up_does_not_block[0m
+[32;1m        PASS[0m [   0.005s] (177/383) [35;1msurge-acp[0m [36mprocess_evidence::tests[0m[36m::[0m[34;1mstop_group_never_signals_an_already_empty_group[0m
+[32;1m        PASS[0m [   0.005s] (178/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_cleanup_all[0m
+[32;1m        PASS[0m [   0.005s] (179/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_drop_cleans_up[0m
+[32;1m        PASS[0m [   0.004s] (180/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_is_running_invalid_pid[0m
+[32;1m        PASS[0m [   0.004s] (181/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_is_running_self[0m
+[32;1m        PASS[0m [   0.004s] (182/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_is_running_tracked[0m
+[32;1m        PASS[0m [   0.004s] (183/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_is_running_untracked[0m
+[32;1m        PASS[0m [   0.005s] (184/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_is_tracked[0m
+[32;1m        PASS[0m [   0.005s] (185/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_list_tracked[0m
+[32;1m        PASS[0m [   0.004s] (186/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_new_creates_directory[0m
+[32;1m        PASS[0m [   0.004s] (187/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_read_pid[0m
+[32;1m        PASS[0m [   0.004s] (188/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_read_pid_nonexistent[0m
+[32;1m        PASS[0m [   0.005s] (189/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_track_overwrites_existing_pid[0m
+[32;1m        PASS[0m [   0.004s] (190/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_track_writes_pid_file[0m
+[32;1m        PASS[0m [   0.004s] (191/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_untrack_idempotent[0m
+[32;1m        PASS[0m [   0.004s] (192/383) [35;1msurge-acp[0m [36mprocess_tracker::tests[0m[36m::[0m[34;1mtest_untrack_removes_pid_file[0m
+[32;1m        PASS[0m [   0.004s] (193/383) [35;1msurge-acp[0m [36mquota_observation::tests[0m[36m::[0m[34;1mmalformed_account_and_observation_cannot_decode[0m
+[32;1m        PASS[0m [   0.004s] (194/383) [35;1msurge-acp[0m [36mquota_observation::tests[0m[36m::[0m[34;1mtyped_rejection_retains_unknown_reset_and_account[0m
+[32;1m        PASS[0m [   0.004s] (195/383) [35;1msurge-acp[0m [36mquota_observation::tests[0m[36m::[0m[34;1munsupported_probe_does_not_claim_available[0m
+[32;1m        PASS[0m [   0.004s] (196/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mbuiltin_entries_carry_runtime_mapping[0m
+[32;1m        PASS[0m [   0.005s] (197/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mdsh_pinned_version_matches_declared_policy[0m
+[32;1m        PASS[0m [   0.005s] (198/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mfor_run_puts_user_agents_ahead_of_builtins[0m
+[32;1m        PASS[0m [   0.005s] (199/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mis_installed_for_npx_only_entry_checks_the_launcher_not_a_same_named_binary[0m
+[32;1m        PASS[0m [   0.004s] (200/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mollama_entry_declares_model_env_and_settings_seed[0m
+[32;1m        PASS[0m [   0.004s] (201/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mregistry_entry_parses_with_runtime_field[0m
+[32;1m        PASS[0m [   0.004s] (202/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mregistry_entry_parses_without_runtime_field[0m
+[32;1m        PASS[0m [   0.004s] (203/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_all_are_code_capable[0m
+[32;1m        PASS[0m [   0.004s] (204/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_builtin_agent_count[0m
+[32;1m        PASS[0m [   0.004s] (205/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_capability_metadata_parsing[0m
+[32;1m        PASS[0m [   0.359s] (206/383) [35;1msurge-acp[0m [36mprocess_evidence::tests[0m[36m::[0m[34;1mstop_group_escalates_to_kill_and_reports_an_empty_group[0m
+[32;1m        PASS[0m [   0.006s] (207/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_dsh_alias_normalizes_to_dsh_acp[0m
+[32;1m        PASS[0m [   0.005s] (208/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_dynamic_registry_end_to_end[0m
+[32;1m        PASS[0m [   0.004s] (209/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_find_claude[0m
+[32;1m        PASS[0m [   0.005s] (210/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_find_codex[0m
+[32;1m        PASS[0m [   0.004s] (211/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_find_copilot[0m
+[32;1m        PASS[0m [   0.004s] (212/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_find_dsh[0m
+[32;1m        PASS[0m [   0.005s] (213/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_find_gemini[0m
+[32;1m        PASS[0m [   0.004s] (214/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_from_config[0m
+[32;1m        PASS[0m [   0.005s] (215/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_installed_checks_cli_binary[0m
+[32;1m        PASS[0m [   0.005s] (216/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_load_from_toml[0m
+[32;1m        PASS[0m [   0.004s] (217/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_merged_builtin_takes_priority_on_id_collision[0m
+[32;1m        PASS[0m [   0.004s] (218/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_merged_empty_remote[0m
+[32;1m        PASS[0m [   0.004s] (219/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_merged_remote_only_entries_appended[0m
+[32;1m        PASS[0m [   0.004s] (220/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_merged_three_way[0m
+[32;1m        PASS[0m [   0.004s] (221/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_ollama_alias_normalizes_to_ollama_acp[0m
+[32;1m        PASS[0m [   0.006s] (222/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_refresh_discovery[0m
+[32;1m        PASS[0m [   0.005s] (223/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_search[0m
+[32;1m        PASS[0m [   0.004s] (224/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_to_agent_config[0m
+[32;1m        PASS[0m [   0.005s] (225/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_which_cache_works[0m
+[32;1m        PASS[0m [   0.005s] (226/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_which_finds_git[0m
+[32;1m        PASS[0m [   0.005s] (227/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_which_not_found[0m
+[32;1m        PASS[0m [   0.004s] (228/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_complexity_routing[0m
+[32;1m        PASS[0m [   0.004s] (229/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_default_routing[0m
+[32;1m        PASS[0m [   0.004s] (230/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_fallback_to_default[0m
+[32;1m        PASS[0m [   0.004s] (231/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_phase_routing[0m
+[32;1m        PASS[0m [   0.004s] (232/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_route_with_capability_capable_agent[0m
+[32;1m        PASS[0m [   0.004s] (233/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_route_with_capability_incapable_agent_falls_back[0m
+[32;1m        PASS[0m [   0.004s] (234/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_route_with_capability_none_is_passthrough[0m
+[32;1m        PASS[0m [   0.004s] (235/383) [35;1msurge-acp[0m [36mrouter::tests[0m[36m::[0m[34;1mtest_route_with_capability_unknown_agent_assumed_capable[0m
+[32;1m        PASS[0m [   0.007s] (236/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mall_admitted_effect_methods_reach_the_actual_peer_and_typed_response[0m
+[32;1m        PASS[0m [   0.718s] (237/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mall_effect_methods_refuse_after_readiness_without_retry_or_cleanup_blocking[0m
+[32;1m        PASS[0m [   0.028s] (238/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mblocked_owner_applies_transport_backpressure[0m
+[32;1m        PASS[0m [   0.043s] (239/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mcompleted_notification_and_prompt_response_survive_immediate_eof[0m
+[32;1m        PASS[0m [   2.007s] (240/383) [35;1msurge-acp[0m [36mconnection::tests[0m[36m::[0m[34;1mcleanup_driver_errors_reach_connection_caller[0m
+[32;1m        PASS[0m [   0.018s] (241/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mincoming_line_limit_counts_fragmented_and_multiple_frames[0m
+[32;1m        PASS[0m [   0.108s] (242/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1minitialize_rechecks_host_after_driver_readiness_before_wire_admission[0m
+[32;1m        PASS[0m [   0.209s] (243/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mprompt_response_waits_for_notification_processing[0m
+[32;1m        PASS[0m [   0.006s] (244/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mpump_read_failure_reaches_driver[0m
+[32;1m        PASS[0m [   0.006s] (245/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mstop_joins_outstanding_notification_callback[0m
+[32;1m        PASS[0m [   0.108s] (246/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mstop_remains_responsive_when_valid_frame_queue_is_saturated[0m
+[32;1m        PASS[0m [   0.129s] (247/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1mvalid_frame_burst_is_backpressured_until_owner_processes[0m
+[32;1m        PASS[0m [   0.005s] (248/383) [35;1msurge-acp[0m [36msdk_v1::transport::tests[0m[36m::[0m[34;1mclosed_channel_ends_producer[0m
+[32;1m        PASS[0m [   0.004s] (249/383) [35;1msurge-acp[0m [36msdk_v1::transport::tests[0m[36m::[0m[34;1mmalformed_and_batch_frames_never_enter_sdk_channel[0m
+[32;1m        PASS[0m [   0.034s] (250/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_anthropic_key_redacted[0m
+[32;1m        PASS[0m [   0.036s] (251/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_aws_key_redacted[0m
+[32;1m        PASS[0m [   0.036s] (252/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_generic_api_key_env_redacted[0m
+[32;1m        PASS[0m [   0.037s] (253/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_github_pat_redacted[0m
+[32;1m        PASS[0m [   0.036s] (254/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_jwt_redacted[0m
+[32;1m        PASS[0m [   0.038s] (255/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_mongodb_dsn_redacted[0m
+[32;1m        PASS[0m [   0.037s] (256/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_multiple_secrets_all_redacted[0m
+[32;1m        PASS[0m [   0.035s] (257/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_no_secrets_unchanged[0m
+[32;1m        PASS[0m [   0.036s] (258/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_ollama_key_pattern_leaves_ordinary_dotted_text_alone[0m
+[32;1m        PASS[0m [   0.037s] (259/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_ollama_key_redacted_whole[0m
+[32;1m        PASS[0m [   0.036s] (260/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_postgres_dsn_redacted[0m
+[32;1m        PASS[0m [   0.036s] (261/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_private_key_header_redacted[0m
+[32;1m        PASS[0m [   0.035s] (262/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_slack_token_redacted[0m
+[32;1m        PASS[0m [   0.036s] (263/383) [35;1msurge-acp[0m [36msecrets::tests[0m[36m::[0m[34;1mtest_stripe_key_redacted[0m
+[32;1m        PASS[0m [   0.005s] (264/383) [35;1msurge-acp[0m [36msettings_seed::tests[0m[36m::[0m[34;1mempty_declaration_is_a_noop[0m
+[32;1m        PASS[0m [   0.004s] (265/383) [35;1msurge-acp[0m [36msettings_seed::tests[0m[36m::[0m[34;1mnever_clobbers_an_existing_file[0m
+[32;1m        PASS[0m [   0.004s] (266/383) [35;1msurge-acp[0m [36msettings_seed::tests[0m[36m::[0m[34;1mrefuses_absolute_and_parent_paths[0m
+[32;1m        PASS[0m [   0.004s] (267/383) [35;1msurge-acp[0m [36msettings_seed::tests[0m[36m::[0m[34;1mrefuses_to_write_through_a_symlinked_parent[0m
+[32;1m        PASS[0m [   0.004s] (268/383) [35;1msurge-acp[0m [36msettings_seed::tests[0m[36m::[0m[34;1mwrites_a_declared_file[0m
+[32;1m        PASS[0m [   0.004s] (269/383) [35;1msurge-acp[0m [36mshared::content_block::tests[0m[36m::[0m[34;1mtext_block_round_trip[0m
+[32;1m        PASS[0m [   0.004s] (270/383) [35;1msurge-acp[0m [36mshared::content_block::tests[0m[36m::[0m[34;1mtext_vec_yields_single_element[0m
+[32;1m        PASS[0m [   0.004s] (271/383) [35;1msurge-acp[0m [36mshared::path_guard::tests[0m[36m::[0m[34;1maccepts_path_inside_worktree[0m
+[32;1m        PASS[0m [   0.004s] (272/383) [35;1msurge-acp[0m [36mshared::path_guard::tests[0m[36m::[0m[34;1mrejects_path_escaping_worktree_via_dotdot[0m
+[32;1m        PASS[0m [   0.004s] (273/383) [35;1msurge-acp[0m [36mshared::path_guard::tests[0m[36m::[0m[34;1mrejects_relative_path[0m
+[32;1m        PASS[0m [   0.035s] (274/383) [35;1msurge-acp[0m [36mshared::secrets::tests[0m[36m::[0m[34;1minherited_stage_credential_is_redacted_and_absent_from_debug[0m
+[32;1m        PASS[0m [   0.034s] (275/383) [35;1msurge-acp[0m [36mshared::secrets::tests[0m[36m::[0m[34;1mredacts_a_known_pattern[0m
+[32;1m        PASS[0m [   0.005s] (276/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_concurrent_terminals[0m
+[32;1m        PASS[0m [   0.005s] (277/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_default_output_byte_limit[0m
+[32;1m        PASS[0m [   0.004s] (278/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_kill_terminal[0m
+[32;1m        PASS[0m [   0.004s] (279/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_not_found[0m
+[32;1m        PASS[0m [   0.056s] (280/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_output_byte_limit[0m
+[32;1m        PASS[0m [   0.006s] (281/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_release_terminal[0m
+[32;1m        PASS[0m [   0.059s] (282/383) [35;1msurge-acp[0m [36mterminal::tests[0m[36m::[0m[34;1mtest_spawn_and_wait[0m
+[32;1m        PASS[0m [   0.006s] (283/383) [35;1msurge-acp[0m [36mtransport::tests[0m[36m::[0m[34;1mtest_serialize_mcp_config_empty[0m
+[32;1m        PASS[0m [   0.006s] (284/383) [35;1msurge-acp[0m [36mtransport::tests[0m[36m::[0m[34;1mtest_serialize_mcp_config_preserves_env[0m
+[32;1m        PASS[0m [   0.005s] (285/383) [35;1msurge-acp[0m [36mtransport::tests[0m[36m::[0m[34;1mtest_serialize_mcp_config_single_server[0m
+[32;1m        PASS[0m [   0.006s] (286/383) [35;1msurge-acp[0m [36mtransport::tests[0m[36m::[0m[34;1mtest_tcp_transport_returns_error[0m
+[32;1m        PASS[0m [   2.008s] (287/383) [35;1msurge-acp[0m [36msdk_v1::lifecycle_tests[0m[36m::[0m[34;1meof_joins_outstanding_callback[0m
+[32;1m        PASS[0m [   0.096s] (288/383) [35;1msurge-acp::bridge_concurrent_sessions[0m [34;1mfive_concurrent_sessions_complete_independently[0m
+[32;1m        PASS[0m [   0.033s] (289/383) [35;1msurge-acp::bridge_config[0m [34;1mlegacy_constructors_remain_usable_and_shutdown[0m
+[32;1m        PASS[0m [   0.005s] (290/383) [35;1msurge-acp::bridge_config[0m [34;1mrejects_each_zero_capacity_and_timeout[0m
+[32;1m        PASS[0m [   0.016s] (291/383) [35;1msurge-acp::bridge_config_options[0m [34;1ma_best_effort_option_the_agent_does_not_offer_is_skipped[0m
+[32;1m        PASS[0m [   0.018s] (292/383) [35;1msurge-acp::bridge_config_options[0m [34;1ma_model_the_agent_does_not_offer_keeps_the_session_closed[0m
+[32;1m        PASS[0m [   0.022s] (293/383) [35;1msurge-acp::bridge_config_options[0m [34;1mchosen_model_and_reasoning_level_are_set_on_the_agent_session[0m
+[32;1m        PASS[0m [   0.035s] (294/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1madvertised_filesystem_capabilities_follow_permission_policy[0m
+[32;1m        PASS[0m [   5.444s] (295/383) [35;1msurge-acp[0m [36mdiscovery::tests[0m[36m::[0m[34;1mtest_registry_integration[0m
+[32;1m        PASS[0m [   1.522s] (296/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mboth_handshake_phases_have_deadlines_and_reap[0m
+[32;1m        PASS[0m [   0.054s] (297/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mchild_exit_during_prompt_does_not_panic_worker[0m
+[32;1m        PASS[0m [   0.033s] (298/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mclose_sends_wire_cancel_before_transport_teardown[0m
+[32;1m        PASS[0m [   0.099s] (299/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mcallback_overload_preserves_pending_permission_and_stop[0m
+[32;1m        PASS[0m [   5.222s] (300/383) [35;1msurge-acp[0m [36mregistry::tests[0m[36m::[0m[34;1mtest_detect_with_discovery[0m
+[32;1m        PASS[0m [   0.018s] (301/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mdropped_option_caller_settles_child_and_shutdown_promptly[0m
+[32;1m        PASS[0m [   0.047s] (302/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mexit_before_handshake_response_never_announces_established[0m
+[32;1m        PASS[0m [   0.521s] (303/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mconfig_option_phase_shares_deadline_reaps_and_allows_next_open[0m
+[32;1m        PASS[0m [   0.520s] (304/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1minitialize_only_handshake_hang_is_retried_once_and_opens[0m
+[32;1m        PASS[0m [   0.164s] (305/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mnoisy_startup_is_drained_before_handshake[0m
+[32;1m        PASS[0m [   0.706s] (306/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mpermission_reply_and_busy_response_work_during_prompt[0m
+[32;1m        PASS[0m [   0.050s] (307/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mspoofed_reserved_notification_has_no_outcome_authority[0m
+[32;1m        PASS[0m [   0.515s] (308/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1muncertain_session_operation_is_never_automatically_reissued[0m
+[32;1m        PASS[0m [   0.047s] (309/383) [35;1msurge-acp::bridge_crash_detection[0m [34;1mcrash_after_n_tool_calls_surfaces_within_2s[0m
+[32;1m        PASS[0m [   0.004s] (310/383) [35;1msurge-acp::bridge_dynamic_outcome_enum[0m [34;1msession_catalogs_have_exact_distinct_outcome_enums[0m
+[32;1m        PASS[0m [   0.012s] (311/383) [35;1msurge-acp::bridge_effect_fence[0m [34;1mcancelled_awaiter_does_not_drop_the_queued_worker_capability[0m
+[32;1m        PASS[0m [   0.063s] (312/383) [35;1msurge-acp::bridge_effect_fence[0m [34;1mpermission_grant_is_checked_after_approval_await_and_automatic_allow[0m
+[32;1m        PASS[0m [   0.028s] (313/383) [35;1msurge-acp::bridge_effect_fence[0m [34;1mqueued_prompt_checks_stored_session_fence_and_close_remains_available[0m
+[32;1m        PASS[0m [   0.068s] (314/383) [35;1msurge-acp::bridge_effect_fence[0m [34;1mworker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission[0m
+[32;1m        PASS[0m [   0.044s] (315/383) [35;1msurge-acp::bridge_handshake_failure[0m [34;1mhandshake_failure_returns_open_session_error[0m
+[32;1m        PASS[0m [   0.043s] (316/383) [35;1msurge-acp::bridge_mock_discovery[0m [34;1mmock_executable_discovery_uses_native_paths[0m
+[32;1m        PASS[0m [   5.020s] (317/383) [35;1msurge-acp::bridge_close_timeout[0m [34;1mclose_against_stuck_mock_times_out[0m
+[32;1m        PASS[0m [   0.025s] (318/383) [35;1msurge-acp::bridge_open_cancellation[0m [34;1mbare_drop_during_opening_is_bounded_and_reaps[0m
+[32;1m        PASS[0m [   0.070s] (319/383) [35;1msurge-acp::bridge_provider_recovery[0m [34;1mactual_saved_provider_id_is_restored_with_identical_cwd_without_new_session[0m
+[32;1m        PASS[0m [   0.054s] (320/383) [35;1msurge-acp::bridge_provider_recovery[0m [34;1mload_history_cannot_authorize_a_permission_before_a_new_prompt[0m
+[32;1m        PASS[0m [   0.075s] (321/383) [35;1msurge-acp::bridge_provider_recovery[0m [34;1mrestored_usage_does_not_charge_unknown_provider_history[0m
+[32;1m        PASS[0m [   0.049s] (322/383) [35;1msurge-acp::bridge_provider_recovery[0m [34;1munsupported_restore_does_not_silently_create_a_provider_session[0m
+[32;1m        PASS[0m [   0.317s] (323/383) [35;1msurge-acp::bridge_open_cancellation[0m [34;1mcancelled_open_settles_worker_and_child[0m
+[32;1m        PASS[0m [   0.050s] (324/383) [35;1msurge-acp::bridge_reply_to_tool[0m [34;1mreply_to_observed_call_id_cannot_fabricate_tool_result[0m
+[32;1m        PASS[0m [   0.011s] (325/383) [35;1msurge-acp::bridge_reply_to_tool[0m [34;1mreply_to_unknown_session_returns_session_gone[0m
+[32;1m        PASS[0m [   0.017s] (326/383) [35;1msurge-acp::bridge_reply_to_tool[0m [34;1mreply_to_unknown_call_id_within_session_returns_unknown_call_id[0m
+[32;1m        PASS[0m [   0.016s] (327/383) [35;1msurge-acp::bridge_sandbox_filtering[0m [34;1mdenied_tool_does_not_appear_in_visible_list[0m
+[32;1m        PASS[0m [   0.004s] (328/383) [35;1msurge-acp::bridge_sandbox_m4_stub[0m [34;1mvisibility_allow_diverges_from_allows_tool_for_escaping_path[0m
+[32;1m        PASS[0m [   0.003s] (329/383) [35;1msurge-acp::bridge_sandbox_m4_stub[0m [34;1mworkspace_write_sandbox_compiles_against_trait[0m
+[32;1m        PASS[0m [   0.051s] (330/383) [35;1msurge-acp::bridge_request_human_input[0m [34;1mrequest_human_input_notification_has_no_authority[0m
+[32;1m        PASS[0m [   0.048s] (331/383) [35;1msurge-acp::bridge_session_lifecycle[0m [34;1mbuilder_defaults_round_trip[0m
+[32;1m        PASS[0m [   0.050s] (332/383) [35;1msurge-acp::bridge_session_lifecycle[0m [34;1mbuilder_event_capacity_reports_lag_without_blocking_commands[0m
+[32;1m        PASS[0m [   0.047s] (333/383) [35;1msurge-acp::bridge_session_lifecycle[0m [34;1mbuilder_explicit_round_trip[0m
+[32;1m        PASS[0m [   0.047s] (334/383) [35;1msurge-acp::bridge_session_lifecycle[0m [34;1mopen_send_close_round_trip[0m
+[32;1m        PASS[0m [   0.019s] (335/383) [35;1msurge-acp::bridge_shutdown_with_open[0m [34;1mshutdown_emits_session_ended_for_each_open_session[0m
+[32;1m        PASS[0m [   0.514s] (336/383) [35;1msurge-acp::bridge_session_lifecycle[0m [34;1mbuilder_applies_handshake_deadline[0m
+[32;1m        PASS[0m [   0.057s] (337/383) [35;1msurge-acp::bridge_token_tracking[0m [34;1mcumulative_reports_and_context_remain_independent_across_turns[0m
+[32;1m        PASS[0m [   0.050s] (338/383) [35;1msurge-acp::bridge_token_tracking[0m [34;1mfailed_prompt_marks_usage_unknown_before_session_end[0m
+[32;1m        PASS[0m [   0.552s] (339/383) [35;1msurge-acp::bridge_token_tracking[0m [34;1mgraceful_cancel_observes_response_usage_before_session_end[0m
+[32;1m        PASS[0m [   0.056s] (340/383) [35;1msurge-acp::bridge_token_tracking[0m [34;1msessions_have_independent_usage_baselines[0m
+[32;1m        PASS[0m [   1.044s] (341/383) [35;1msurge-acp::bridge_streaming[0m [34;1mlong_streaming_delivers_chunks_in_order[0m
+[32;1m        PASS[0m [   0.064s] (342/383) [35;1msurge-acp::bridge_token_tracking[0m [34;1mtoken_usage_monotonic_and_precedes_session_end[0m
+[32;1m        PASS[0m [   0.042s] (343/383) [35;1msurge-acp::bridge_worker_panic[0m [34;1mworker_panic_surfaces_as_command_failure[0m
+[32;1m        PASS[0m [   0.057s] (344/383) [35;1msurge-acp::bridge_tool_injection[0m [34;1mreport_stage_outcome_notification_has_no_authority[0m
+[32;1m        PASS[0m [   0.005s] (345/383) [35;1msurge-acp::facade_contract[0m [34;1mminimal_mock_satisfies_facade_contract[0m
+[32;1m        PASS[0m [   0.015s] (346/383) [35;1msurge-acp::facade_contract[0m [34;1mreal_acp_bridge_satisfies_facade_contract[0m
+[32;1m        PASS[0m [   5.020s] (347/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mconcurrent_close_never_claims_reap_while_first_cleanup_pending[0m
+[32;1m        PASS[0m [   5.532s] (348/383) [35;1msurge-acp::bridge_control_lifecycle[0m [34;1mignored_wire_cancel_still_forces_and_reaps_child[0m
+[32;1m        PASS[0m [   2.008s] (349/383) [35;1msurge-acp::health_integration_test[0m [34;1mtest_multiple_agents_heartbeat_monitoring[0m
+[32;1m        PASS[0m [   0.107s] (350/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_binary_output_handling[0m
+[32;1m        PASS[0m [   0.056s] (351/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_large_utf8_output[0m
+[32;1m        PASS[0m [   0.056s] (352/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_stderr_utf8_capture[0m
+[32;1m        PASS[0m [   0.056s] (353/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_truncation_exact_char_boundary[0m
+[32;1m        PASS[0m [   0.056s] (354/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_truncation_respects_char_boundaries[0m
+[32;1m        PASS[0m [   0.056s] (355/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_utf8_basic_output[0m
+[32;1m        PASS[0m [   0.056s] (356/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_utf8_cjk_characters[0m
+[32;1m        PASS[0m [   0.056s] (357/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_utf8_emoji_output[0m
+[32;1m        PASS[0m [   0.056s] (358/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_utf8_locale_on_unix[0m
+[32;1m        PASS[0m [   0.056s] (359/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_utf8_mixed_scripts[0m
+[32;1m        PASS[0m [   0.106s] (360/383) [35;1msurge-acp::platform_encoding_test[0m [34;1mtest_zero_byte_limit[0m
+[32;1m        PASS[0m [   0.005s] (361/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_basic_process_spawn_unix[0m
+[32;1m        PASS[0m [   0.004s] (362/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_basic_process_spawn_windows[0m
+[32;1m        PASS[0m [   0.004s] (363/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_git_env_vars_stripped[0m
+[32;1m        PASS[0m [   0.004s] (364/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_invalid_command_returns_error[0m
+[32;1m        PASS[0m [   0.004s] (365/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_multiple_processes_sequential[0m
+[32;1m        PASS[0m [   0.005s] (366/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_process_cleanup_no_zombies[0m
+[32;1m        PASS[0m [   0.004s] (367/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_process_stdin_stdout_capture[0m
+[32;1m        PASS[0m [   0.004s] (368/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_process_termination_timeout[0m
+[32;1m        PASS[0m [   0.006s] (369/383) [35;1msurge-acp::platform_process_test[0m [34;1mtest_process_with_working_directory[0m
+[32;1m        PASS[0m [   6.010s] (370/383) [35;1msurge-acp::health_integration_test[0m [34;1mtest_heartbeat_consecutive_failure_count[0m
+[32;1m        PASS[0m [   8.113s] (371/383) [35;1msurge-acp::health_integration_test[0m [34;1mtest_heartbeat_detects_nonexistent_agent[0m
+[32;1m        PASS[0m [   8.627s] (372/383) [35;1msurge-acp::health_integration_test[0m [34;1mtest_heartbeat_detects_terminated_process[0m
+[32;1m        PASS[0m [   0.159s] (373/383) [35;1msurge-acp::reconnect_integration_test[0m [34;1mtest_reconnect_prevents_duplicate_attempts[0m
+[32;1m        PASS[0m [   6.213s] (374/383) [35;1msurge-acp::reconnect_integration_test[0m [34;1mtest_backoff_strategy_exponential[0m
+[32;1m        PASS[0m [   0.052s] (375/383) [35;1msurge-acp::sdk_permission_secrets[0m [34;1mexplicitly_enabled_upstream_trace_is_raw_provider_diagnostics[0m
+[32;1m        PASS[0m [   0.052s] (376/383) [35;1msurge-acp::sdk_permission_secrets[0m [34;1mpermission_title_known_literal_is_redacted_without_changing_policy_input[0m
+[32;1m        PASS[0m [   0.023s] (377/383) [35;1msurge-acp::sdk_pool_usage[0m [34;1moptional_prompt_usage_preserves_unknown_and_emits_exactly_once[0m
+[32;1m        PASS[0m [   0.004s] (378/383) [35;1msurge-acp::stable_v1_wire[0m [34;1mfixed_v1_handshake_and_stdio_descriptor[0m
+[32;1m        PASS[0m [   0.004s] (379/383) [35;1msurge-acp::stable_v1_wire[0m [34;1mfixed_v1_observation_and_error_classification_input[0m
+[32;1m        PASS[0m [   0.004s] (380/383) [35;1msurge-acp::stable_v1_wire[0m [34;1mfixed_v1_permission_cancel_and_prompt[0m
+[32;1m        PASS[0m [   6.316s] (381/383) [35;1msurge-acp::reconnect_integration_test[0m [34;1mtest_exponential_backoff_delays[0m
+[32;1m        PASS[0m [   6.015s] (382/383) [35;1msurge-acp::reconnect_integration_test[0m [34;1mtest_reconnect_events_emitted_on_connection_loss[0m
+[32;1m        PASS[0m [   6.614s] (383/383) [35;1msurge-acp::reconnect_integration_test[0m [34;1mtest_reconnect_respects_max_attempts[0m
+────────────
+[32;1m     Summary[0m [  26.230s] [1m383[0m tests run: [1m383[0m [32;1mpassed[0m, [1m4[0m [33;1mskipped[0m

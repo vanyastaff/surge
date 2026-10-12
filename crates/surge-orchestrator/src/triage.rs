@@ -216,7 +216,8 @@ fn event_session_id(event: &BridgeEvent) -> Option<SessionId> {
     match event {
         BridgeEvent::SessionEstablished { session, .. }
         | BridgeEvent::AgentMessage { session, .. }
-        | BridgeEvent::TokenUsage { session, .. }
+        | BridgeEvent::ProviderUsageObserved { session, .. }
+        | BridgeEvent::ContextUsageObserved { session, .. }
         | BridgeEvent::ToolObserved { session, .. }
         | BridgeEvent::ToolCall { session, .. }
         | BridgeEvent::ToolResult { session, .. }

@@ -6,7 +6,7 @@ use surge_core::{
 };
 use surge_mcp::stage::{AUTH_ENV, ENDPOINT_ENV, StageEndpoint, StageToolDefinition};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
 };
 
@@ -40,10 +40,7 @@ impl Helper {
         }
     }
     async fn send(&mut self, message: Value) {
-        self.input
-            .write_all(format!("{message}\n").as_bytes())
-            .await
-            .unwrap();
+        send_frame(&mut self.input, message).await;
     }
     async fn reply(&mut self, id: u64) -> Value {
         loop {
@@ -72,10 +69,48 @@ impl Helper {
         {
             self.child.kill().await.unwrap();
             self.child.wait().await.unwrap();
-            panic!("helper failed to settle after endpoint revoke");
+            let mut errors = String::new();
+            let stderr = tokio::time::timeout(
+                Duration::from_millis(200),
+                (&mut self.errors)
+                    .take(16 * 1024)
+                    .read_to_string(&mut errors),
+            )
+            .await;
+            panic!(
+                "helper failed to settle after endpoint revoke; post-kill stderr read={stderr:?}, stderr={errors:?}"
+            );
         }
     }
 }
+
+async fn send_frame(writer: &mut (impl AsyncWrite + Unpin), message: Value) {
+    writer
+        .write_all(format!("{message}\n").as_bytes())
+        .await
+        .unwrap();
+    // Windows ChildStdin queues its blocking OS write before reporting bytes
+    // accepted. Start protocol deadlines only after that write has completed.
+    writer.flush().await.unwrap();
+}
+
+#[tokio::test]
+async fn sending_a_frame_flushes_it_to_the_peer_before_returning() {
+    let (write, read) = tokio::io::duplex(1024);
+    let mut buffered = tokio::io::BufWriter::with_capacity(1024, write);
+    let message = json!({"jsonrpc":"2.0","id":10,"method":"ping"});
+    send_frame(&mut buffered, message.clone()).await;
+    let mut line = String::new();
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        BufReader::new(read).read_line(&mut line),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), message);
+}
+
 fn endpoint() -> (
     StageEndpoint,
     tokio::sync::mpsc::Receiver<surge_mcp::stage::StageToolCall>,

@@ -40,3 +40,8 @@
 *.gz    binary
 *.tar   binary
 *.wasm  binary
+
+# Native verification receipts retain exact bytes for manifest SHA-256 checks.
+docs/bridge-evidence/** -text whitespace=-blank-at-eol
+# Native test stdout includes trailing blank lines; retain those receipt bytes too.
+docs/bridge-evidence/**/*.log whitespace=-blank-at-eol,-blank-at-eof

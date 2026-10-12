@@ -33,6 +33,12 @@ use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
 use surge_persistence::runs::Storage;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
+
+// A normal run opens and closes two actual ACP subprocesses, then durably
+// checkpoints its route. Native Windows CI completed this path in about 7s;
+// reserve bounded scheduling margin for that work without changing crash cuts.
+const NORMAL_START_COMPLETION_TIMEOUT: Duration = Duration::from_secs(15);
+
 struct ObservedBridge {
     bridge: AcpBridge,
     quota_errors: AtomicUsize,
@@ -499,6 +505,53 @@ async fn quota_dispatch_fixture_source(
     }
 }
 
+// Server shutdown stops admission, but detached completion supervisors retain the
+// engine through joined run/writer completion and final task-registry reconciliation.
+// Require those actual owners to release it before removing the fixture directories.
+async fn unwrap_settled_owner<T>(mut owner: Arc<T>, name: &str) -> T {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match Arc::try_unwrap(owner) {
+            Ok(value) => return value,
+            Err(retained) => owner = retained,
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{name} still has {} retained owners at fixture teardown",
+            Arc::strong_count(&owner)
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn settle_quota_fixture(
+    engine: Arc<Engine>,
+    host_budget: Arc<host_budget_bridge::HostBudgetBridge>,
+    bridge: Arc<ObservedBridge>,
+) {
+    drop(unwrap_settled_owner(engine, "quota engine").await);
+    host_budget.shutdown().await;
+    drop(host_budget);
+    let observed = unwrap_settled_owner(bridge, "quota bridge").await;
+    observed.bridge.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn fixture_settlement_waits_for_retained_owner_release() {
+    let owner = Arc::new(());
+    let retained = owner.clone();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        released.await.unwrap();
+        drop(retained);
+    });
+    let mut settlement = Box::pin(unwrap_settled_owner(owner, "controlled owner"));
+    assert!(futures::poll!(&mut settlement).is_pending());
+    release.send(()).unwrap();
+    worker.await.unwrap();
+    settlement.await;
+}
+
 async fn quota_dispatch_in_home(
     home: &Path,
     project: &Path,
@@ -813,7 +866,7 @@ async fn quota_dispatch_in_home(
             .unwrap()
             .unwrap()
             .unwrap();
-        host_budget.shutdown().await;
+        settle_quota_fixture(engine, host_budget, bridge).await;
         return;
     }
     assert_eq!(started["method"], "work_item_ok", "{started}");
@@ -932,7 +985,7 @@ async fn quota_dispatch_in_home(
         .unwrap();
     }
     bridge.primary_continue.notify_one();
-    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+    let completed = tokio::time::timeout(NORMAL_START_COMPLETION_TIMEOUT, async {
         loop {
             let inspected = storage.inspect_run(attempt.run).await.unwrap();
             if let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
@@ -955,10 +1008,45 @@ async fn quota_dispatch_in_home(
     })
     .await;
     let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
+    let terminal_progress = if completed.is_err() {
+        let journal =
+            tokio::time::timeout(Duration::from_secs(1), storage.inspect_run(attempt.run))
+                .await
+                .map(|result| {
+                    result.map(|inspection| match inspection.database {
+                        surge_persistence::runs::inspection::RunDatabaseInspection::Present {
+                            events,
+                        } => events
+                            .into_iter()
+                            .rev()
+                            .take(32)
+                            .map(|event| (event.seq, event.kind, event.timestamp_ms))
+                            .collect::<Vec<_>>(),
+                        surge_persistence::runs::inspection::RunDatabaseInspection::Absent => {
+                            Vec::new()
+                        },
+                    })
+                });
+        let active = tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs())
+            .await
+            .map(|runs| {
+                runs.into_iter()
+                    .map(|run| (run.run_id, run.status))
+                    .collect::<Vec<_>>()
+            });
+        format!(
+            "journal(last32rev)={journal:?}; active={active:?}; server_finished={}; quota_errors={}; fallback_closes={}",
+            server.is_finished(),
+            bridge.quota_errors.load(Ordering::SeqCst),
+            bridge.b_closes.load(Ordering::SeqCst),
+        )
+    } else {
+        String::new()
+    };
     if check_predispatch {
         assert!(
             completed.is_ok(),
-            "real typed primary seed and fallback must complete"
+            "real typed primary seed and fallback must complete; {diagnostic}; {terminal_progress}"
         );
         if source_changed {
             let conn = storage.acquire_registry_conn().unwrap();
@@ -1088,7 +1176,13 @@ async fn quota_dispatch_in_home(
         let WorkItemResult::Attempt(next) = result else {
             panic!("start attempt required")
         };
-        let finished = tokio::time::timeout(Duration::from_secs(5), async {
+        assert_ne!(
+            next.state,
+            surge_core::work_item::WorkItemAttemptState::Rejected,
+            "accepted ordinary Start was rejected before execution: {:?}",
+            next.diagnostic,
+        );
+        let finished = tokio::time::timeout(NORMAL_START_COMPLETION_TIMEOUT, async {
             loop {
                 let journal = storage.inspect_run(next.run).await.unwrap();
                 if let surge_persistence::runs::inspection::RunDatabaseInspection::Present {
@@ -1134,10 +1228,55 @@ async fn quota_dispatch_in_home(
             },
             _ => Vec::new(),
         };
+        let durable = storage.work_items().for_run(next.run).unwrap().unwrap();
+        let journal_tail = match &next_journal.database {
+            surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                events
+                    .iter()
+                    .rev()
+                    .take(32)
+                    .map(|event| {
+                        (
+                            event.seq,
+                            event.payload.payload().discriminant_str(),
+                            event.timestamp_ms,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            },
+            _ => Vec::new(),
+        };
+        let terminal_progress = if finished.is_err() {
+            let active =
+                tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs())
+                    .await
+                    .map(|runs| {
+                        runs.into_iter()
+                            .map(|run| (run.run_id, run.status))
+                            .collect::<Vec<_>>()
+                    });
+            format!(
+                "active={active:?}; server_finished={}; quota_errors={}; fallback_closes={}",
+                server.is_finished(),
+                bridge.quota_errors.load(Ordering::SeqCst),
+                bridge.b_closes.load(Ordering::SeqCst),
+            )
+        } else {
+            String::new()
+        };
+        let launch_evidence = format!(
+            "accepted={:?}/{:?}; durable={:?}/{:?}; journal_tail={journal_tail:?}; wire_counts={}/{}; {terminal_progress}",
+            next.state,
+            next.diagnostic,
+            durable.state,
+            durable.diagnostic,
+            a.len(),
+            b.len(),
+        );
         if change_after_warmup.is_some() {
             assert!(
                 finished.is_ok(),
-                "changed source must require reconciliation: {failures:?}"
+                "changed source must require reconciliation: {failures:?}; {launch_evidence}"
             );
             assert_eq!(
                 a.len(),
@@ -1178,12 +1317,12 @@ async fn quota_dispatch_in_home(
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            host_budget.shutdown().await;
+            settle_quota_fixture(engine, host_budget, bridge).await;
             return;
         }
         assert!(
             finished.is_ok(),
-            "normal start must finish or durably park according to exact capacity proof: {failures:?}"
+            "normal start must finish or durably park according to exact capacity proof: {failures:?}; {launch_evidence}"
         );
         if all_exhausted {
             use surge_persistence::runs::MockClock;
@@ -1259,8 +1398,9 @@ async fn quota_dispatch_in_home(
             bridge.primary_continue.notify_one();
             // A fresh engine and ACP bridge must restore the real persisted plan,
             // frozen routing snapshot and task workspace rather than in-memory state.
+            let restored_bridge = Arc::new(AcpBridge::with_defaults().unwrap());
             let restored_budget = host_budget_bridge::HostBudgetBridge::new(
-                Arc::new(AcpBridge::with_defaults().unwrap()),
+                restored_bridge.clone(),
                 storage.clone(),
                 cancel.clone(),
             );
@@ -1389,7 +1529,14 @@ async fn quota_dispatch_in_home(
             );
             cancel.cancel();
             scheduler_task.await.unwrap();
+            drop(unwrap_settled_owner(restored_engine, "restored engine").await);
             restored_budget.shutdown().await;
+            drop(restored_budget);
+            unwrap_settled_owner(restored_bridge, "restored bridge")
+                .await
+                .shutdown()
+                .await
+                .unwrap();
         }
         let _ = engine
             .stop_run(next.run, "predispatch fixture cleanup".into())
@@ -1475,7 +1622,7 @@ async fn quota_dispatch_in_home(
             finished.is_ok(),
             "normal start must finish or durably park according to exact capacity proof: {failures:?}"
         );
-        host_budget.shutdown().await;
+        settle_quota_fixture(engine, host_budget, bridge).await;
         return;
     }
     let _ = engine
@@ -1594,10 +1741,7 @@ async fn quota_dispatch_in_home(
         .entries;
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].run, attempt.run);
-    host_budget.shutdown().await;
-    drop(engine);
-    drop(host_budget);
-    drop(bridge);
+    settle_quota_fixture(engine, host_budget, bridge).await;
     drop(storage);
 }
 
@@ -2710,18 +2854,40 @@ async fn wait_for_terminal_journal(storage: &Arc<Storage>, run: surge_core::RunI
 fn assert_retained_budget_result(events: &[surge_persistence::runs::ReadEvent], cap: u64) {
     let total: u64 = events
         .iter()
-        .filter_map(|row| match row.payload.payload {
-            surge_core::EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
+        .filter_map(|row| match &row.payload.payload {
+            surge_core::EventPayload::ProviderUsageObserved {
+                usage: surge_core::TokenUsageObservation::Reported { delta, .. },
                 ..
-            } => Some(u64::from(prompt_tokens) + u64::from(output_tokens)),
+            } => Some(
+                delta
+                    .input_tokens
+                    .checked_add(delta.output_tokens)
+                    .expect("host oracle token charge must fit u64"),
+            ),
             _ => None,
         })
         .sum();
+    let host_charges = events
+        .iter()
+        .filter(|row| {
+            matches!(
+                &row.payload.payload,
+                surge_core::EventPayload::ProviderUsageObserved {
+                    usage: surge_core::TokenUsageObservation::Reported { delta, .. }, ..
+                } if delta.input_tokens == 600 && delta.output_tokens == 0
+            )
+        })
+        .count();
     assert_eq!(
-        total, 1200,
+        host_charges, 2,
         "explicit host oracle detects prior charge loss across wake"
+    );
+    // Enforcement occurs at the stage boundary: in either cap case the
+    // restored provider completes its prompt and --usage supplies
+    // Usage::new(100, 80, 20), in addition to the two host600 charges.
+    assert_eq!(
+        total, 1300,
+        "retain both host charges and actual provider spend"
     );
     assert!(events.iter().any(|row|matches!(&row.payload.payload,surge_core::EventPayload::RunStarted {config,..} if config.budget.limits.tokens==Some(cap))));
     if cap == 1000 {
@@ -2733,7 +2899,7 @@ fn assert_retained_budget_result(events: &[surge_persistence::runs::ReadEvent], 
         assert!(events.iter().any(|row| matches!(
             row.payload.payload,
             surge_core::EventPayload::BudgetExceeded {
-                total_tokens: 1200,
+                total_tokens: 1300,
                 ..
             }
         )));
@@ -3630,7 +3796,9 @@ async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home
         .get_run(&run)
         .await
         .map(|row| row.map(|row| row.status));
-    let control = store.execution_control(run);
+    let control = store
+        .execution_control(run)
+        .map(|value| value.map(|control| (control.state, control.generation)));
     let capacity = store
         .execution_control(run)
         .and_then(|control| {

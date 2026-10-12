@@ -1,0 +1,1185 @@
+﻿2026-10-12T09:31:40.6803321Z Current runner version: '2.337.0'
+2026-10-12T09:31:40.6835377Z ##[group]Runner Image Provisioner
+2026-10-12T09:31:40.6836755Z Hosted Compute Agent
+2026-10-12T09:31:40.6837822Z Version: 20261002.596
+2026-10-12T09:31:40.6838775Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-12T09:31:40.6839868Z Build Date: 2026-10-02T22:28:27Z
+2026-10-12T09:31:40.6840978Z Worker ID: {8ca4e15a-e257-4e0e-bbdf-b9da59c0ebbc}
+2026-10-12T09:31:40.6842123Z Region: westus3
+2026-10-12T09:31:40.6842968Z Cloud: Azure
+2026-10-12T09:31:40.6843782Z ##[endgroup]
+2026-10-12T09:31:40.6846036Z ##[group]Operating System
+2026-10-12T09:31:40.6847038Z Ubuntu
+2026-10-12T09:31:40.6847845Z 24.04.5
+2026-10-12T09:31:40.6848300Z LTS
+2026-10-12T09:31:40.6848853Z ##[endgroup]
+2026-10-12T09:31:40.6849355Z ##[group]Runner Image
+2026-10-12T09:31:40.6849910Z Image: ubuntu-24.04
+2026-10-12T09:31:40.6850454Z Version: 20261004.327.1
+2026-10-12T09:31:40.6851657Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-12T09:31:40.6853025Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-12T09:31:40.6853902Z ##[endgroup]
+2026-10-12T09:31:40.6854940Z ##[group]GITHUB_TOKEN Permissions
+2026-10-12T09:31:40.6857128Z Contents: read
+2026-10-12T09:31:40.6857941Z Metadata: read
+2026-10-12T09:31:40.6858441Z ##[endgroup]
+2026-10-12T09:31:40.6860571Z Secret source: Actions
+2026-10-12T09:31:40.6861430Z Cache mode: write
+2026-10-12T09:31:40.6862341Z Prepare workflow directory
+2026-10-12T09:31:40.7371283Z Prepare all required actions
+2026-10-12T09:31:40.7419227Z Getting action download info
+2026-10-12T09:31:41.1756064Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-12T09:31:42.1127037Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:686976e191b89faba57d3206551f0f330d8cb249)
+2026-10-12T09:31:42.3733652Z Download action repository 'taiki-e/install-action@v2' (SHA:1168f6810a3cb30a3514bf5756a3b7f0422c6df8)
+2026-10-12T09:31:43.2213680Z Complete job name: Current dependency security and licenses
+2026-10-12T09:31:43.3010679Z ##[group]Run actions/checkout@v4
+2026-10-12T09:31:43.3011395Z with:
+2026-10-12T09:31:43.3011700Z   repository: vanyastaff/surge
+2026-10-12T09:31:43.3014770Z   token: ***
+2026-10-12T09:31:43.3015045Z   ssh-strict: true
+2026-10-12T09:31:43.3015325Z   ssh-user: git
+2026-10-12T09:31:43.3015614Z   persist-credentials: true
+2026-10-12T09:31:43.3015934Z   clean: true
+2026-10-12T09:31:43.3016267Z   sparse-checkout-cone-mode: true
+2026-10-12T09:31:43.3016602Z   fetch-depth: 1
+2026-10-12T09:31:43.3016872Z   fetch-tags: false
+2026-10-12T09:31:43.3017161Z   show-progress: true
+2026-10-12T09:31:43.3017591Z   lfs: false
+2026-10-12T09:31:43.3017849Z   submodules: false
+2026-10-12T09:31:43.3018138Z   set-safe-directory: true
+2026-10-12T09:31:43.3018465Z   allow-unsafe-pr-checkout: false
+2026-10-12T09:31:43.3019055Z env:
+2026-10-12T09:31:43.3019310Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:43.3019649Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:43.3019909Z ##[endgroup]
+2026-10-12T09:31:43.4051972Z Syncing repository: vanyastaff/surge
+2026-10-12T09:31:43.4054825Z ##[group]Getting Git version info
+2026-10-12T09:31:43.4055612Z Working directory is '/home/runner/work/surge/surge'
+2026-10-12T09:31:43.4056864Z [command]/usr/bin/git version
+2026-10-12T09:31:43.4067234Z git version 2.55.0
+2026-10-12T09:31:43.4087430Z ##[endgroup]
+2026-10-12T09:31:43.4102045Z Temporarily overriding HOME='/home/runner/work/_temp/e53dd302-e0d1-4caf-9e7e-7673fd2aafa5' before making global git config changes
+2026-10-12T09:31:43.4103985Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-12T09:31:43.4107074Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/surge/surge
+2026-10-12T09:31:43.4157235Z Deleting the contents of '/home/runner/work/surge/surge'
+2026-10-12T09:31:43.4167138Z ##[group]Initializing the repository
+2026-10-12T09:31:43.4170357Z [command]/usr/bin/git init /home/runner/work/surge/surge
+2026-10-12T09:31:43.4269915Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-12T09:31:43.4271504Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-12T09:31:43.4274541Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-12T09:31:43.4275363Z hint: call:
+2026-10-12T09:31:43.4275970Z hint:
+2026-10-12T09:31:43.4276571Z hint: 	git config --global init.defaultBranch <name>
+2026-10-12T09:31:43.4277095Z hint:
+2026-10-12T09:31:43.4277767Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-12T09:31:43.4278708Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-12T09:31:43.4279417Z hint:
+2026-10-12T09:31:43.4279824Z hint: 	git branch -m <name>
+2026-10-12T09:31:43.4280256Z hint:
+2026-10-12T09:31:43.4280898Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-12T09:31:43.4283150Z Initialized empty Git repository in /home/runner/work/surge/surge/.git/
+2026-10-12T09:31:43.4285168Z [command]/usr/bin/git remote add origin https://github.com/vanyastaff/surge
+2026-10-12T09:31:43.4327864Z ##[endgroup]
+2026-10-12T09:31:43.4328586Z ##[group]Disabling automatic garbage collection
+2026-10-12T09:31:43.4333425Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-12T09:31:43.4365087Z ##[endgroup]
+2026-10-12T09:31:43.4365760Z ##[group]Setting up auth
+2026-10-12T09:31:43.4374358Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-12T09:31:43.4406350Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-12T09:31:43.4748822Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-12T09:31:43.4788333Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-12T09:31:43.5010740Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-12T09:31:43.5048296Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-12T09:31:43.5238823Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-12T09:31:43.5274606Z ##[endgroup]
+2026-10-12T09:31:43.5275509Z ##[group]Fetching the repository
+2026-10-12T09:31:43.5284899Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +ec0341a787a8f57a730184a9bcb4a98e135f23d6:refs/remotes/origin/codex/windows-workspace-validation
+2026-10-12T09:31:45.4214549Z From https://github.com/vanyastaff/surge
+2026-10-12T09:31:45.4215244Z  * [new ref]         ec0341a787a8f57a730184a9bcb4a98e135f23d6 -> origin/codex/windows-workspace-validation
+2026-10-12T09:31:45.4218404Z ##[endgroup]
+2026-10-12T09:31:45.4218819Z ##[group]Determining the checkout info
+2026-10-12T09:31:45.4221986Z ##[endgroup]
+2026-10-12T09:31:45.4228539Z [command]/usr/bin/git sparse-checkout disable
+2026-10-12T09:31:45.4271384Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-12T09:31:45.4299911Z ##[group]Checking out the ref
+2026-10-12T09:31:45.4328999Z [command]/usr/bin/git checkout --progress --force -B codex/windows-workspace-validation refs/remotes/origin/codex/windows-workspace-validation
+2026-10-12T09:31:45.5797961Z Switched to a new branch 'codex/windows-workspace-validation'
+2026-10-12T09:31:45.5801045Z branch 'codex/windows-workspace-validation' set up to track 'origin/codex/windows-workspace-validation'.
+2026-10-12T09:31:45.5813057Z ##[endgroup]
+2026-10-12T09:31:45.5869731Z [command]/usr/bin/git log -1 --format=%H
+2026-10-12T09:31:45.5893611Z ec0341a787a8f57a730184a9bcb4a98e135f23d6
+2026-10-12T09:31:45.6214936Z ##[group]Run dtolnay/rust-toolchain@stable
+2026-10-12T09:31:45.6215282Z with:
+2026-10-12T09:31:45.6215481Z   toolchain: stable
+2026-10-12T09:31:45.6215677Z env:
+2026-10-12T09:31:45.6215859Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:45.6216086Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:45.6216281Z ##[endgroup]
+2026-10-12T09:31:45.6283771Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-12T09:31:45.6342615Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-10-12T09:31:45.6343083Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-12T09:31:45.6343716Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-12T09:31:45.6344360Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-12T09:31:45.6344725Z [36;1m  exit 1[0m
+2026-10-12T09:31:45.6345123Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-12T09:31:45.6345698Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-12T09:31:45.6346263Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:45.6346787Z [36;1m  else[0m
+2026-10-12T09:31:45.6347181Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:45.6347803Z [36;1m  fi[0m
+2026-10-12T09:31:45.6348101Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-12T09:31:45.6348614Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:45.6349116Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-12T09:31:45.6349613Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:45.6350077Z [36;1melse[0m
+2026-10-12T09:31:45.6350281Z [36;1m  delimiter=EOF[0m
+2026-10-12T09:31:45.6350580Z [36;1m  while [[ $toolchain == *$delimiter* ]]; do delimiter+=_; done[0m
+2026-10-12T09:31:45.6351063Z [36;1m  printf 'toolchain<<%s\n%s\n%s\n' "$delimiter" "$toolchain" "$delimiter" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:45.6351468Z [36;1mfi[0m
+2026-10-12T09:31:45.6523155Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:45.6523654Z env:
+2026-10-12T09:31:45.6523878Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:45.6524112Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:45.6524319Z   toolchain: stable
+2026-10-12T09:31:45.6524517Z ##[endgroup]
+2026-10-12T09:31:45.6639142Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=35]
+2026-10-12T09:31:45.6643789Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-12T09:31:45.6675395Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+2026-10-12T09:31:45.6675918Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-12T09:31:45.6711884Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:45.6712227Z env:
+2026-10-12T09:31:45.6712439Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:45.6712673Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:45.6712881Z ##[endgroup]
+2026-10-12T09:31:45.6776697Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=13]
+2026-10-12T09:31:45.6779374Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-12T09:31:45.6804972Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-10-12T09:31:45.6805340Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-12T09:31:45.6806065Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-12T09:31:45.6806751Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-12T09:31:45.6807504Z [36;1mfi[0m
+2026-10-12T09:31:45.6842974Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:45.6843311Z env:
+2026-10-12T09:31:45.6843530Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:45.6843756Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:45.6843970Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:45.6844212Z ##[endgroup]
+2026-10-12T09:31:45.6905661Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=12]
+2026-10-12T09:31:45.6908415Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-12T09:31:45.6916152Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-12T09:31:45.6930430Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-12T09:31:45.6948322Z ##[group]Run set -f  # split targets and components on commas and whitespace, without glob expansion
+2026-10-12T09:31:45.6949083Z [36;1mset -f  # split targets and components on commas and whitespace, without glob expansion[0m
+2026-10-12T09:31:45.6949524Z [36;1mflags=()[0m
+2026-10-12T09:31:45.6949801Z [36;1mfor t in ${targets//,/ }; do flags+=(--target "$t"); done[0m
+2026-10-12T09:31:45.6950193Z [36;1mfor c in ${components//,/ }; do flags+=(--component "$c"); done[0m
+2026-10-12T09:31:45.6950671Z [36;1mif [[ $toolchain == nightly && -n $components ]]; then flags+=(--allow-downgrade); fi[0m
+2026-10-12T09:31:45.6951080Z [36;1mlog=$(mktemp)[0m
+2026-10-12T09:31:45.6951314Z [36;1mtrap 'rm -f "$log"' EXIT[0m
+2026-10-12T09:31:45.6951574Z [36;1mfor attempt in 1 2 3 4 5; do[0m
+2026-10-12T09:31:45.6952126Z [36;1m  if rustup toolchain install "$toolchain" "${flags[@]}" --profile minimal --no-self-update --force-non-host 2>&1 | tee "$log"; then[0m
+2026-10-12T09:31:45.6952663Z [36;1m    break[0m
+2026-10-12T09:31:45.6952860Z [36;1m  else[0m
+2026-10-12T09:31:45.6953057Z [36;1m    status=$?[0m
+2026-10-12T09:31:45.6953272Z [36;1m  fi[0m
+2026-10-12T09:31:45.6953554Z [36;1m  if [[ $attempt == 5 ]] || ! grep -Fq 'checksum failed for ' "$log" \[0m
+2026-10-12T09:31:45.6954142Z [36;1m      || ! grep -Fq 'this is likely due to an ongoing update of the official release server' "$log"; then[0m
+2026-10-12T09:31:45.6954585Z [36;1m    exit "$status"[0m
+2026-10-12T09:31:45.6954805Z [36;1m  fi[0m
+2026-10-12T09:31:45.6955145Z [36;1m  echo "Retrying rustup toolchain install in 30 seconds (retry $attempt of 4)" >&2[0m
+2026-10-12T09:31:45.6955547Z [36;1m  sleep 30[0m
+2026-10-12T09:31:45.6955745Z [36;1mdone[0m
+2026-10-12T09:31:45.6991619Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:45.6991962Z env:
+2026-10-12T09:31:45.6992164Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:45.6992400Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:45.6992625Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:45.6992869Z   toolchain: stable
+2026-10-12T09:31:45.6993076Z   targets: 
+2026-10-12T09:31:45.6993280Z   components: 
+2026-10-12T09:31:45.6993503Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-12T09:31:45.6993735Z ##[endgroup]
+2026-10-12T09:31:45.9725825Z info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+2026-10-12T09:31:46.2103586Z 
+2026-10-12T09:31:46.2183165Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+2026-10-12T09:31:46.2183747Z 
+2026-10-12T09:31:46.2219769Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=528]
+2026-10-12T09:31:46.2224773Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-12T09:31:46.2240785Z ##[group]Run rustup default "$toolchain" --force-non-host
+2026-10-12T09:31:46.2241187Z [36;1mrustup default "$toolchain" --force-non-host[0m
+2026-10-12T09:31:46.2277232Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.2278053Z env:
+2026-10-12T09:31:46.2278267Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.2278503Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.2279051Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.2279303Z   toolchain: stable
+2026-10-12T09:31:46.2279510Z ##[endgroup]
+2026-10-12T09:31:46.2378545Z info: using existing install for stable-x86_64-unknown-linux-gnu
+2026-10-12T09:31:46.2388800Z info: default toolchain set to stable-x86_64-unknown-linux-gnu
+2026-10-12T09:31:46.2389151Z 
+2026-10-12T09:31:46.2461522Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+2026-10-12T09:31:46.2462052Z 
+2026-10-12T09:31:46.2518015Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=29]
+2026-10-12T09:31:46.2521715Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-12T09:31:46.2538180Z ##[group]Run DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-10-12T09:31:46.2539034Z [36;1mDATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-12T09:31:46.2540207Z [36;1mHASH=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-12T09:31:46.2540719Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-12T09:31:46.2578343Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.2578691Z env:
+2026-10-12T09:31:46.2578898Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.2579134Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.2579359Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.2579603Z   toolchain: stable
+2026-10-12T09:31:46.2579806Z ##[endgroup]
+2026-10-12T09:31:46.3090298Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=56]
+2026-10-12T09:31:46.3092727Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-12T09:31:46.3110007Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-10-12T09:31:46.3110422Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-12T09:31:46.3110754Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-12T09:31:46.3111040Z [36;1mfi[0m
+2026-10-12T09:31:46.3146685Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.3147024Z env:
+2026-10-12T09:31:46.3147232Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.3147636Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.3147865Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.3148124Z ##[endgroup]
+2026-10-12T09:31:46.3208567Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=11]
+2026-10-12T09:31:46.3210793Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-12T09:31:46.3306836Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-10-12T09:31:46.3307467Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-12T09:31:46.3307846Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-12T09:31:46.3308186Z [36;1mfi[0m
+2026-10-12T09:31:46.3344336Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.3344685Z env:
+2026-10-12T09:31:46.3344887Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.3345117Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.3345351Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.3345599Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.3345808Z ##[endgroup]
+2026-10-12T09:31:46.3406120Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=19]
+2026-10-12T09:31:46.3410181Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-12T09:31:46.3428719Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-10-12T09:31:46.3429214Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-12T09:31:46.3429982Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-12T09:31:46.3430781Z [36;1m  if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-12T09:31:46.3431341Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-12T09:31:46.3431856Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-12T09:31:46.3432347Z [36;1m  elif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-12T09:31:46.3432895Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-12T09:31:46.3433385Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-12T09:31:46.3433713Z [36;1m  fi[0m
+2026-10-12T09:31:46.3433915Z [36;1mfi[0m
+2026-10-12T09:31:46.3469409Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.3469756Z env:
+2026-10-12T09:31:46.3469958Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.3470218Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.3470443Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.3470695Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.3470911Z   toolchain: stable
+2026-10-12T09:31:46.3471108Z ##[endgroup]
+2026-10-12T09:31:46.3758313Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=34]
+2026-10-12T09:31:46.3762045Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-12T09:31:46.3778427Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-10-12T09:31:46.3779156Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-12T09:31:46.3779763Z [36;1mif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-12T09:31:46.3780228Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-12T09:31:46.3780571Z [36;1mfi[0m
+2026-10-12T09:31:46.3816550Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.3816898Z env:
+2026-10-12T09:31:46.3817101Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.3817472Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.3817763Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.3818015Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.3818232Z   toolchain: stable
+2026-10-12T09:31:46.3818434Z ##[endgroup]
+2026-10-12T09:31:46.3992356Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+2026-10-12T09:31:46.3996800Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-12T09:31:46.4012922Z ##[group]Run rustc +"$toolchain" --version --verbose
+2026-10-12T09:31:46.4013290Z [36;1mrustc +"$toolchain" --version --verbose[0m
+2026-10-12T09:31:46.4049709Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-12T09:31:46.4050059Z env:
+2026-10-12T09:31:46.4050299Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.4050533Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.4050765Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.4051011Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.4051226Z   toolchain: stable
+2026-10-12T09:31:46.4051422Z ##[endgroup]
+2026-10-12T09:31:46.4207519Z rustc 1.99.0 (b940084d7 2026-09-28)
+2026-10-12T09:31:46.4208027Z binary: rustc
+2026-10-12T09:31:46.4208420Z commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-12T09:31:46.4208906Z commit-date: 2026-09-28
+2026-10-12T09:31:46.4209315Z host: x86_64-unknown-linux-gnu
+2026-10-12T09:31:46.4209675Z release: 1.99.0
+2026-10-12T09:31:46.4210013Z LLVM version: 23.1.1
+2026-10-12T09:31:46.4224082Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+2026-10-12T09:31:46.4355742Z ##[group]Run taiki-e/install-action@v2
+2026-10-12T09:31:46.4356030Z with:
+2026-10-12T09:31:46.4356249Z   tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+2026-10-12T09:31:46.4356626Z   checksum: true
+2026-10-12T09:31:46.4356833Z   fallback: cargo-binstall
+2026-10-12T09:31:46.4357056Z env:
+2026-10-12T09:31:46.4357241Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.4357733Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.4357953Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.4358196Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.4358403Z ##[endgroup]
+2026-10-12T09:31:46.4365141Z ##[start-action display=Run bail() {;id=__taiki-e_install-action.__run]
+2026-10-12T09:31:46.4381096Z ##[group]Run bail() {
+2026-10-12T09:31:46.4381375Z [36;1mbail() {[0m
+2026-10-12T09:31:46.4381630Z [36;1m  printf '::error::install-action: %s\n' "$*"[0m
+2026-10-12T09:31:46.4381921Z [36;1m  exit 1[0m
+2026-10-12T09:31:46.4382112Z [36;1m}[0m
+2026-10-12T09:31:46.4382509Z [36;1m# If /bin/sh is dash, environment variable containing % is not imported, but is fine[0m
+2026-10-12T09:31:46.4383020Z [36;1m# because it also means that it will not be exposed to subprocess.[0m
+2026-10-12T09:31:46.4383438Z [36;1mif /usr/bin/env | grep -Eq '^BASH_FUNC_'; then[0m
+2026-10-12T09:31:46.4383983Z [36;1m  bail 'bash function injection via BASH_FUNC_ environment variable is not allowed for security reasons'[0m
+2026-10-12T09:31:46.4384452Z [36;1mfi[0m
+2026-10-12T09:31:46.4384678Z [36;1mif ! command -v bash >/dev/null; then[0m
+2026-10-12T09:31:46.4385008Z [36;1m  if grep -Eq '^ID=alpine' /etc/os-release; then[0m
+2026-10-12T09:31:46.4385429Z [36;1m    printf '::group::Install packages required for install-action (bash)\n'[0m
+2026-10-12T09:31:46.4385842Z [36;1m    # NB: sync with apk_install in main.sh[0m
+2026-10-12T09:31:46.4386146Z [36;1m    if command -v sudo >/dev/null; then[0m
+2026-10-12T09:31:46.4386455Z [36;1m      sudo apk --no-cache add bash[0m
+2026-10-12T09:31:46.4386760Z [36;1m    elif command -v doas >/dev/null; then[0m
+2026-10-12T09:31:46.4387051Z [36;1m      doas apk --no-cache add bash[0m
+2026-10-12T09:31:46.4387522Z [36;1m    else[0m
+2026-10-12T09:31:46.4387796Z [36;1m      apk --no-cache add bash[0m
+2026-10-12T09:31:46.4388051Z [36;1m    fi[0m
+2026-10-12T09:31:46.4388268Z [36;1m    printf '::endgroup::\n'[0m
+2026-10-12T09:31:46.4388511Z [36;1m  else[0m
+2026-10-12T09:31:46.4388729Z [36;1m    bail 'this action requires bash'[0m
+2026-10-12T09:31:46.4389004Z [36;1m  fi[0m
+2026-10-12T09:31:46.4389195Z [36;1mfi[0m
+2026-10-12T09:31:46.4389462Z [36;1mbash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"[0m
+2026-10-12T09:31:46.4390487Z shell: /usr/bin/env -u ENV -u BASH_ENV -u CDPATH -u SHELLOPTS -u BASHOPTS /bin/sh -eu {0}
+2026-10-12T09:31:46.4390876Z env:
+2026-10-12T09:31:46.4391066Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:46.4391289Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:46.4391494Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:46.4391729Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:46.4391994Z   INPUT_TOOL: cargo-audit@0.22.2,cargo-deny@0.20.2
+2026-10-12T09:31:46.4392271Z   INPUT_CHECKSUM: true
+2026-10-12T09:31:46.4392489Z   INPUT_FALLBACK: cargo-binstall
+2026-10-12T09:31:46.4395053Z   DEFAULT_GITHUB_TOKEN: ***
+2026-10-12T09:31:46.4395325Z   ACTION_USER_AGENT: taiki-e/install-action (v2)
+2026-10-12T09:31:46.4395606Z   RUNNER_OS: Linux
+2026-10-12T09:31:46.4395815Z   RUNNER_ARCH: X64
+2026-10-12T09:31:46.4396013Z ##[endgroup]
+2026-10-12T09:31:46.4509894Z info: host platform: x86_64_linux
+2026-10-12T09:31:46.4631085Z info: installing cargo-audit@0.22.2
+2026-10-12T09:31:46.4799471Z info: downloading https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz
+2026-10-12T09:31:46.8128996Z info: verifying sha256 checksum for cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz
+2026-10-12T09:31:46.9407135Z info: cargo-audit installed at /home/runner/.cargo/bin/cargo-audit
+2026-10-12T09:31:46.9410590Z + cargo-audit audit --version
+2026-10-12T09:31:46.9419448Z cargo-audit-audit 0.22.2
+2026-10-12T09:31:46.9420594Z 
+2026-10-12T09:31:46.9540950Z info: installing cargo-deny@0.20.2
+2026-10-12T09:31:46.9706553Z info: downloading https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+2026-10-12T09:31:47.2444589Z info: verifying sha256 checksum for cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+2026-10-12T09:31:47.3159219Z info: cargo-deny installed at /home/runner/.cargo/bin/cargo-deny
+2026-10-12T09:31:47.3162217Z + cargo-deny deny --version
+2026-10-12T09:31:47.3169769Z cargo-deny 0.20.2
+2026-10-12T09:31:47.3170981Z 
+2026-10-12T09:31:47.3181090Z ##[end-action id=__taiki-e_install-action.__run;outcome=success;conclusion=success;duration_ms=881]
+2026-10-12T09:31:47.3187712Z ##[start-action display=Run Set-StrictMode -Version Latest;id=__taiki-e_install-action.__run_2]
+2026-10-12T09:31:47.3191961Z ##[end-action id=__taiki-e_install-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-12T09:31:47.3217012Z ##[group]Run cargo audit
+2026-10-12T09:31:47.3217272Z [36;1mcargo audit[0m
+2026-10-12T09:31:47.3254443Z shell: /usr/bin/bash -e {0}
+2026-10-12T09:31:47.3254714Z env:
+2026-10-12T09:31:47.3254907Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:47.3255126Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:47.3255334Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:47.3255577Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:47.3255781Z ##[endgroup]
+2026-10-12T09:31:47.8757818Z [0m[0m[1m[32m    Fetching[0m advisory database from `https://github.com/RustSec/advisory-db.git`
+2026-10-12T09:31:52.9664173Z [0m[0m[1m[32m      Loaded[0m 1298 security advisories (from /home/runner/.cargo/advisory-db)
+2026-10-12T09:31:52.9664742Z [0m[0m[1m[32m    Updating[0m crates.io index
+2026-10-12T09:31:53.0028156Z [0m[0m[1m[32m    Scanning[0m Cargo.lock for vulnerabilities (1168 crate dependencies)
+2026-10-12T09:31:53.9961102Z [0m[0m[1m[33mCrate:    [0m core2
+2026-10-12T09:31:53.9961873Z [0m[0m[1m[33mVersion:  [0m 0.4.0
+2026-10-12T09:31:53.9962451Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9963197Z [0m[0m[1m[33mTitle:    [0m core2 is unmaintained, all versions yanked
+2026-10-12T09:31:53.9963952Z [0m[0m[1m[33mDate:     [0m 2026-04-14
+2026-10-12T09:31:53.9964567Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0105
+2026-10-12T09:31:53.9965432Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0105
+2026-10-12T09:31:53.9965976Z 
+2026-10-12T09:31:53.9966204Z [0m[0m[1m[33mCrate:    [0m fxhash
+2026-10-12T09:31:53.9966741Z [0m[0m[1m[33mVersion:  [0m 0.2.1
+2026-10-12T09:31:53.9967462Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9968183Z [0m[0m[1m[33mTitle:    [0m fxhash - no longer maintained
+2026-10-12T09:31:53.9968863Z [0m[0m[1m[33mDate:     [0m 2025-09-05
+2026-10-12T09:31:53.9969493Z [0m[0m[1m[33mID:       [0m RUSTSEC-2025-0057
+2026-10-12T09:31:53.9970368Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2025-0057
+2026-10-12T09:31:53.9970929Z 
+2026-10-12T09:31:53.9971187Z [0m[0m[1m[33mCrate:    [0m instant
+2026-10-12T09:31:53.9971709Z [0m[0m[1m[33mVersion:  [0m 0.1.13
+2026-10-12T09:31:53.9972282Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9972929Z [0m[0m[1m[33mTitle:    [0m `instant` is unmaintained
+2026-10-12T09:31:53.9973560Z [0m[0m[1m[33mDate:     [0m 2024-09-01
+2026-10-12T09:31:53.9974145Z [0m[0m[1m[33mID:       [0m RUSTSEC-2024-0384
+2026-10-12T09:31:53.9974906Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2024-0384
+2026-10-12T09:31:53.9975433Z 
+2026-10-12T09:31:53.9975693Z [0m[0m[1m[33mCrate:    [0m paste
+2026-10-12T09:31:53.9976196Z [0m[0m[1m[33mVersion:  [0m 1.0.15
+2026-10-12T09:31:53.9976797Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9977671Z [0m[0m[1m[33mTitle:    [0m paste - no longer maintained
+2026-10-12T09:31:53.9978375Z [0m[0m[1m[33mDate:     [0m 2024-10-07
+2026-10-12T09:31:53.9979000Z [0m[0m[1m[33mID:       [0m RUSTSEC-2024-0436
+2026-10-12T09:31:53.9979806Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2024-0436
+2026-10-12T09:31:53.9980900Z 
+2026-10-12T09:31:53.9981187Z [0m[0m[1m[33mCrate:    [0m proc-macro-error
+2026-10-12T09:31:53.9981789Z [0m[0m[1m[33mVersion:  [0m 1.0.4
+2026-10-12T09:31:53.9982358Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9983061Z [0m[0m[1m[33mTitle:    [0m proc-macro-error is unmaintained
+2026-10-12T09:31:53.9983768Z [0m[0m[1m[33mDate:     [0m 2024-09-01
+2026-10-12T09:31:53.9984397Z [0m[0m[1m[33mID:       [0m RUSTSEC-2024-0370
+2026-10-12T09:31:53.9985222Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2024-0370
+2026-10-12T09:31:53.9985752Z 
+2026-10-12T09:31:53.9986082Z [0m[0m[1m[33mCrate:    [0m proc-macro-error2
+2026-10-12T09:31:53.9986699Z [0m[0m[1m[33mVersion:  [0m 2.0.1
+2026-10-12T09:31:53.9987970Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9988742Z [0m[0m[1m[33mTitle:    [0m proc-macro-error2 is unmaintained
+2026-10-12T09:31:53.9989446Z [0m[0m[1m[33mDate:     [0m 2026-06-07
+2026-10-12T09:31:53.9990073Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0173
+2026-10-12T09:31:53.9990936Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0173
+2026-10-12T09:31:53.9991482Z 
+2026-10-12T09:31:53.9991761Z [0m[0m[1m[33mCrate:    [0m rustls-pemfile
+2026-10-12T09:31:53.9992387Z [0m[0m[1m[33mVersion:  [0m 2.2.0
+2026-10-12T09:31:53.9992964Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9993712Z [0m[0m[1m[33mTitle:    [0m rustls-pemfile is unmaintained
+2026-10-12T09:31:53.9994411Z [0m[0m[1m[33mDate:     [0m 2025-11-28
+2026-10-12T09:31:53.9995031Z [0m[0m[1m[33mID:       [0m RUSTSEC-2025-0134
+2026-10-12T09:31:53.9995789Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2025-0134
+2026-10-12T09:31:53.9996275Z 
+2026-10-12T09:31:53.9996530Z [0m[0m[1m[33mCrate:    [0m rustybuzz
+2026-10-12T09:31:53.9996848Z [0m[0m[1m[33mVersion:  [0m 0.20.1
+2026-10-12T09:31:53.9997150Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:53.9997802Z [0m[0m[1m[33mTitle:    [0m `rustybuzz` is unmaintained
+2026-10-12T09:31:53.9998294Z [0m[0m[1m[33mDate:     [0m 2026-07-11
+2026-10-12T09:31:53.9998771Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0206
+2026-10-12T09:31:53.9999442Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0206
+2026-10-12T09:31:53.9999887Z 
+2026-10-12T09:31:54.0000047Z [0m[0m[1m[33mCrate:    [0m ttf-parser
+2026-10-12T09:31:54.0000341Z [0m[0m[1m[33mVersion:  [0m 0.25.1
+2026-10-12T09:31:54.0000631Z [0m[0m[1m[33mWarning:  [0m unmaintained
+2026-10-12T09:31:54.0000975Z [0m[0m[1m[33mTitle:    [0m `ttf-parser` is unmaintained
+2026-10-12T09:31:54.0001311Z [0m[0m[1m[33mDate:     [0m 2026-06-28
+2026-10-12T09:31:54.0001629Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0192
+2026-10-12T09:31:54.0002032Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0192
+2026-10-12T09:31:54.0002281Z 
+2026-10-12T09:31:54.0002429Z [0m[0m[1m[33mCrate:    [0m event-listener
+2026-10-12T09:31:54.0002735Z [0m[0m[1m[33mVersion:  [0m 5.4.1
+2026-10-12T09:31:54.0003011Z [0m[0m[1m[33mWarning:  [0m unsound
+2026-10-12T09:31:54.0003520Z [0m[0m[1m[33mTitle:    [0m `event-listener` allows `!Send` tags to cross thread boundaries via `StackSlot`
+2026-10-12T09:31:54.0004003Z [0m[0m[1m[33mDate:     [0m 2026-07-13
+2026-10-12T09:31:54.0004309Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0221
+2026-10-12T09:31:54.0004714Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0221
+2026-10-12T09:31:54.0004974Z 
+2026-10-12T09:31:54.0005097Z [0m[0m[1m[33mCrate:    [0m glib
+2026-10-12T09:31:54.0005376Z [0m[0m[1m[33mVersion:  [0m 0.18.5
+2026-10-12T09:31:54.0005656Z [0m[0m[1m[33mWarning:  [0m unsound
+2026-10-12T09:31:54.0010366Z [0m[0m[1m[33mTitle:    [0m Unsoundness in `Iterator` and `DoubleEndedIterator` impls for `glib::VariantStrIter`
+2026-10-12T09:31:54.0010928Z [0m[0m[1m[33mDate:     [0m 2024-03-30
+2026-10-12T09:31:54.0011481Z [0m[0m[1m[33mID:       [0m RUSTSEC-2024-0429
+2026-10-12T09:31:54.0011925Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2024-0429
+2026-10-12T09:31:54.0012198Z 
+2026-10-12T09:31:54.0012327Z [0m[0m[1m[33mCrate:    [0m memmap2
+2026-10-12T09:31:54.0012625Z [0m[0m[1m[33mVersion:  [0m 0.9.10
+2026-10-12T09:31:54.0012944Z [0m[0m[1m[33mWarning:  [0m unsound
+2026-10-12T09:31:54.0013393Z [0m[0m[1m[33mTitle:    [0m Unchecked pointer offset in crate `memmap2`
+2026-10-12T09:31:54.0013773Z [0m[0m[1m[33mDate:     [0m 2026-06-20
+2026-10-12T09:31:54.0014087Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0186
+2026-10-12T09:31:54.0014497Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0186
+2026-10-12T09:31:54.0014762Z 
+2026-10-12T09:31:54.0015033Z [0m[0m[1m[33mCrate:    [0m rand
+2026-10-12T09:31:54.0015325Z [0m[0m[1m[33mVersion:  [0m 0.7.3
+2026-10-12T09:31:54.0015607Z [0m[0m[1m[33mWarning:  [0m unsound
+2026-10-12T09:31:54.0016177Z [0m[0m[1m[33mTitle:    [0m Rand is unsound with a custom logger using `rand::rng()`
+2026-10-12T09:31:54.0016590Z [0m[0m[1m[33mDate:     [0m 2026-04-09
+2026-10-12T09:31:54.0016906Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0097
+2026-10-12T09:31:54.0017666Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0097
+2026-10-12T09:31:54.0018101Z 
+2026-10-12T09:31:54.0018336Z [0m[0m[1m[33mCrate:    [0m rand
+2026-10-12T09:31:54.0018782Z [0m[0m[1m[33mVersion:  [0m 0.8.5
+2026-10-12T09:31:54.0019221Z [0m[0m[1m[33mWarning:  [0m unsound
+2026-10-12T09:31:54.0019974Z [0m[0m[1m[33mTitle:    [0m Rand is unsound with a custom logger using `rand::rng()`
+2026-10-12T09:31:54.0020618Z [0m[0m[1m[33mDate:     [0m 2026-04-09
+2026-10-12T09:31:54.0021114Z [0m[0m[1m[33mID:       [0m RUSTSEC-2026-0097
+2026-10-12T09:31:54.0021757Z [0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2026-0097
+2026-10-12T09:31:54.0022200Z 
+2026-10-12T09:31:54.0022416Z [0m[0m[1m[33mCrate:    [0m chacha20
+2026-10-12T09:31:54.0022908Z [0m[0m[1m[33mVersion:  [0m 0.10.0
+2026-10-12T09:31:54.0023380Z [0m[0m[1m[33mWarning:  [0m yanked
+2026-10-12T09:31:54.0023663Z 
+2026-10-12T09:31:54.0023873Z [0m[0m[1m[33mCrate:    [0m core2
+2026-10-12T09:31:54.0024378Z [0m[0m[1m[33mVersion:  [0m 0.4.0
+2026-10-12T09:31:54.0024882Z [0m[0m[1m[33mWarning:  [0m yanked
+2026-10-12T09:31:54.0025183Z 
+2026-10-12T09:31:54.0025379Z [0m[0m[1m[33mCrate:    [0m spin
+2026-10-12T09:31:54.0025831Z [0m[0m[1m[33mVersion:  [0m 0.9.8
+2026-10-12T09:31:54.0026263Z [0m[0m[1m[33mWarning:  [0m yanked
+2026-10-12T09:31:54.0026518Z 
+2026-10-12T09:31:54.0026821Z [0m[0m[1m[33mwarning:[0m 17 allowed warnings found
+2026-10-12T09:31:54.0062102Z ##[group]Run cargo deny --locked check advisories licenses bans sources
+2026-10-12T09:31:54.0062594Z [36;1mcargo deny --locked check advisories licenses bans sources[0m
+2026-10-12T09:31:54.0098699Z shell: /usr/bin/bash -e {0}
+2026-10-12T09:31:54.0098971Z env:
+2026-10-12T09:31:54.0099179Z   CARGO_TERM_COLOR: always
+2026-10-12T09:31:54.0099413Z   RUST_BACKTRACE: 1
+2026-10-12T09:31:54.0099632Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T09:31:54.0099873Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:31:54.0100081Z ##[endgroup]
+2026-10-12T09:32:01.2462966Z [0m[1m[38;5;11mwarning[license-not-encountered][0m[1m: license was not encountered[0m
+2026-10-12T09:32:01.2464651Z    [0m[36m┌─[0m /home/runner/work/surge/surge/deny.toml:29:6
+2026-10-12T09:32:01.2465316Z    [0m[36m│[0m
+2026-10-12T09:32:01.2465824Z [0m[36m29[0m [0m[36m│[0m     "[0m[33mNCSA[0m",
+2026-10-12T09:32:01.2466631Z    [0m[36m│[0m      [0m[33m━━━━[0m [0m[33munmatched license allowance[0m
+2026-10-12T09:32:01.2467231Z 
+2026-10-12T09:32:01.2507055Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 4 wildcard dependencies for crate 'surge-acp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2519518Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-acp/Cargo.toml:15:14
+2026-10-12T09:32:01.2532003Z     [0m[36m│[0m
+2026-10-12T09:32:01.2546175Z [0m[36m 15[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2560501Z     [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2575873Z [0m[36m 16[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2577129Z     [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2578153Z     [0m[36m│[0m
+2026-10-12T09:32:01.2579040Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:152:13
+2026-10-12T09:32:01.2579837Z     [0m[36m│[0m
+2026-10-12T09:32:01.2580533Z [0m[36m152[0m [0m[36m│[0m surge-acp = { path = "crates/surge-acp" }
+2026-10-12T09:32:01.2581456Z     [0m[36m│[0m             [0m[36m─────────────────────────────[0m
+2026-10-12T09:32:01.2582262Z     [0m[36m│[0m             [0m[36m│[0m
+2026-10-12T09:32:01.2583130Z     [0m[36m│[0m             [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2584002Z     [0m[36m│[0m             [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2584860Z     [0m[36m│[0m
+2026-10-12T09:32:01.2585435Z     [0m[36m├[0m surge-acp v0.1.0
+2026-10-12T09:32:01.2586083Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2586770Z       ├── (dev) surge-daemon v0.1.0
+2026-10-12T09:32:01.2587645Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2588318Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2588921Z       ├── surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2589616Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2590412Z       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2591060Z       │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2591752Z       │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2592383Z       │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2593101Z       ├── (dev) surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.2593706Z       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2594092Z 
+2026-10-12T09:32:01.2594882Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2596188Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:15:27
+2026-10-12T09:32:01.2596992Z    [0m[36m│[0m
+2026-10-12T09:32:01.2597887Z [0m[36m15[0m [0m[36m│[0m surge-acp = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2598965Z    [0m[36m│[0m             [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2599848Z    [0m[36m│[0m                           [0m[31m│[0m
+2026-10-12T09:32:01.2601233Z    [0m[36m│[0m                           [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2602142Z    [0m[36m│[0m
+2026-10-12T09:32:01.2602695Z    [0m[36m├[0m surge-cli v0.1.0
+2026-10-12T09:32:01.2603124Z 
+2026-10-12T09:32:01.2603862Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2605312Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:13:28
+2026-10-12T09:32:01.2606111Z    [0m[36m│[0m
+2026-10-12T09:32:01.2606825Z [0m[36m13[0m [0m[36m│[0m surge-core = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2608060Z    [0m[36m│[0m              [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2609007Z    [0m[36m│[0m                            [0m[31m│[0m
+2026-10-12T09:32:01.2609856Z    [0m[36m│[0m                            [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2610704Z    [0m[36m│[0m
+2026-10-12T09:32:01.2611263Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2611695Z 
+2026-10-12T09:32:01.2612438Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2614043Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:35:30
+2026-10-12T09:32:01.2614929Z    [0m[36m│[0m
+2026-10-12T09:32:01.2615649Z [0m[36m35[0m [0m[36m│[0m surge-daemon = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2616745Z    [0m[36m│[0m                [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2617803Z    [0m[36m│[0m                              [0m[31m│[0m
+2026-10-12T09:32:01.2618694Z    [0m[36m│[0m                              [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2619557Z    [0m[36m│[0m
+2026-10-12T09:32:01.2620148Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2620624Z 
+2026-10-12T09:32:01.2621548Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2622985Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:16:27
+2026-10-12T09:32:01.2623772Z    [0m[36m│[0m
+2026-10-12T09:32:01.2624513Z [0m[36m16[0m [0m[36m│[0m surge-git = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2625562Z    [0m[36m│[0m             [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2626413Z    [0m[36m│[0m                           [0m[31m│[0m
+2026-10-12T09:32:01.2627649Z    [0m[36m│[0m                           [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2628470Z    [0m[36m│[0m
+2026-10-12T09:32:01.2629075Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2629517Z 
+2026-10-12T09:32:01.2630386Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2631727Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:20:30
+2026-10-12T09:32:01.2632518Z    [0m[36m│[0m
+2026-10-12T09:32:01.2633251Z [0m[36m20[0m [0m[36m│[0m surge-intake = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2634330Z    [0m[36m│[0m                [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2635264Z    [0m[36m│[0m                              [0m[31m│[0m
+2026-10-12T09:32:01.2636199Z    [0m[36m│[0m                              [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2637111Z    [0m[36m│[0m
+2026-10-12T09:32:01.2637797Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2638242Z 
+2026-10-12T09:32:01.2639000Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2640315Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:14:27
+2026-10-12T09:32:01.2641214Z    [0m[36m│[0m
+2026-10-12T09:32:01.2642277Z [0m[36m14[0m [0m[36m│[0m surge-mcp = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2643379Z    [0m[36m│[0m             [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2644236Z    [0m[36m│[0m                           [0m[31m│[0m
+2026-10-12T09:32:01.2645262Z    [0m[36m│[0m                           [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2645979Z    [0m[36m│[0m
+2026-10-12T09:32:01.2646529Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2646977Z 
+2026-10-12T09:32:01.2647956Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2649330Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:19:30
+2026-10-12T09:32:01.2650161Z    [0m[36m│[0m
+2026-10-12T09:32:01.2650862Z [0m[36m19[0m [0m[36m│[0m surge-notify = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2651902Z    [0m[36m│[0m                [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2652764Z    [0m[36m│[0m                              [0m[31m│[0m
+2026-10-12T09:32:01.2653619Z    [0m[36m│[0m                              [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2654741Z    [0m[36m│[0m
+2026-10-12T09:32:01.2655330Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2655767Z 
+2026-10-12T09:32:01.2656544Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2658132Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:17:36
+2026-10-12T09:32:01.2659014Z    [0m[36m│[0m
+2026-10-12T09:32:01.2659824Z [0m[36m17[0m [0m[36m│[0m surge-orchestrator = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2660935Z    [0m[36m│[0m                      [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2662002Z    [0m[36m│[0m                                    [0m[31m│[0m
+2026-10-12T09:32:01.2663031Z    [0m[36m│[0m                                    [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2663910Z    [0m[36m│[0m
+2026-10-12T09:32:01.2664594Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2665060Z 
+2026-10-12T09:32:01.2665900Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2667216Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:18:35
+2026-10-12T09:32:01.2668203Z    [0m[36m│[0m
+2026-10-12T09:32:01.2669100Z [0m[36m18[0m [0m[36m│[0m surge-persistence = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2670250Z    [0m[36m│[0m                     [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2671259Z    [0m[36m│[0m                                   [0m[31m│[0m
+2026-10-12T09:32:01.2672225Z    [0m[36m│[0m                                   [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2672996Z    [0m[36m│[0m
+2026-10-12T09:32:01.2673609Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2674015Z 
+2026-10-12T09:32:01.2674828Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2676068Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:12:31
+2026-10-12T09:32:01.2677080Z    [0m[36m│[0m
+2026-10-12T09:32:01.2678115Z [0m[36m12[0m [0m[36m│[0m surge-process = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2679198Z    [0m[36m│[0m                 [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2680088Z    [0m[36m│[0m                               [0m[31m│[0m
+2026-10-12T09:32:01.2680957Z    [0m[36m│[0m                               [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2681711Z    [0m[36m│[0m
+2026-10-12T09:32:01.2682279Z    [0m[36m├[0m surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2682689Z 
+2026-10-12T09:32:01.2684507Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 10 wildcard dependencies for crate 'surge-cli'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2686623Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-cli/Cargo.toml:12:17
+2026-10-12T09:32:01.2687649Z    [0m[36m│[0m
+2026-10-12T09:32:01.2688507Z [0m[36m12[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2689760Z    [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2690981Z [0m[36m13[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2692105Z    [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2693206Z [0m[36m14[0m [0m[36m│[0m surge-mcp = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2694367Z    [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2695529Z [0m[36m15[0m [0m[36m│[0m surge-acp = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2696695Z    [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2698157Z [0m[36m16[0m [0m[36m│[0m surge-git = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2699296Z    [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2700504Z [0m[36m17[0m [0m[36m│[0m surge-orchestrator = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2701709Z    [0m[36m│[0m                      [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2702972Z [0m[36m18[0m [0m[36m│[0m surge-persistence = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2704098Z    [0m[36m│[0m                     [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2705205Z [0m[36m19[0m [0m[36m│[0m surge-notify = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2706294Z    [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2707574Z [0m[36m20[0m [0m[36m│[0m surge-intake = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2708886Z    [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2709806Z    [0m[36m·[0m
+2026-10-12T09:32:01.2710552Z [0m[36m35[0m [0m[36m│[0m surge-daemon = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2711800Z    [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2712652Z    [0m[36m│[0m
+2026-10-12T09:32:01.2713196Z    [0m[36m├[0m surge-cli v0.1.0
+2026-10-12T09:32:01.2713594Z 
+2026-10-12T09:32:01.2715385Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 19 wildcard dependencies for crate 'surge-daemon'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2717787Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-daemon/Cargo.toml:17:17
+2026-10-12T09:32:01.2718805Z     [0m[36m│[0m
+2026-10-12T09:32:01.2719703Z [0m[36m 17[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2720993Z     [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2721860Z     [0m[36m·[0m
+2026-10-12T09:32:01.2722625Z [0m[36m 36[0m [0m[36m│[0m surge-core.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2723574Z     [0m[36m│[0m                        [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2724576Z [0m[36m 37[0m [0m[36m│[0m surge-git.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2725613Z     [0m[36m│[0m                       [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2726667Z [0m[36m 38[0m [0m[36m│[0m surge-orchestrator.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2728096Z     [0m[36m│[0m                                [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2729481Z [0m[36m 39[0m [0m[36m│[0m surge-mcp.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2730437Z     [0m[36m│[0m                       [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2731368Z [0m[36m 40[0m [0m[36m│[0m surge-acp.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2732418Z     [0m[36m│[0m                       [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2733531Z [0m[36m 41[0m [0m[36m│[0m surge-persistence.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2734613Z     [0m[36m│[0m                               [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2735659Z [0m[36m 42[0m [0m[36m│[0m surge-notify.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2736739Z     [0m[36m│[0m                          [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2737784Z [0m[36m 43[0m [0m[36m│[0m notify-rust = { workspace = true }
+2026-10-12T09:32:01.2738686Z [0m[36m 44[0m [0m[36m│[0m surge-intake.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2739884Z     [0m[36m│[0m                          [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2740940Z [0m[36m 45[0m [0m[36m│[0m surge-telegram = [0m[33m{ path = "../surge-telegram" }[0m
+2026-10-12T09:32:01.2742293Z     [0m[36m│[0m                  [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2743293Z     [0m[36m│[0m
+2026-10-12T09:32:01.2744033Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:157:16
+2026-10-12T09:32:01.2744779Z     [0m[36m│[0m
+2026-10-12T09:32:01.2745588Z [0m[36m157[0m [0m[36m│[0m surge-daemon = { path = "crates/surge-daemon" }
+2026-10-12T09:32:01.2778574Z     [0m[36m│[0m                [0m[36m────────────────────────────────[0m
+2026-10-12T09:32:01.2779625Z     [0m[36m│[0m                [0m[36m│[0m
+2026-10-12T09:32:01.2780480Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2781405Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2782301Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2783130Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2784147Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2785164Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2786099Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2787147Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2788397Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2789664Z     [0m[36m│[0m
+2026-10-12T09:32:01.2790366Z     [0m[36m├[0m surge-daemon v0.1.0
+2026-10-12T09:32:01.2791001Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2791649Z       └── surge-ui v0.1.0
+2026-10-12T09:32:01.2792116Z 
+2026-10-12T09:32:01.2793618Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 2 wildcard dependencies for crate 'surge-git'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2795595Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-git/Cargo.toml:8:14
+2026-10-12T09:32:01.2796461Z     [0m[36m│[0m
+2026-10-12T09:32:01.2797409Z [0m[36m  8[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2798754Z     [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2799751Z     [0m[36m│[0m
+2026-10-12T09:32:01.2800500Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:153:13
+2026-10-12T09:32:01.2801339Z     [0m[36m│[0m
+2026-10-12T09:32:01.2802146Z [0m[36m153[0m [0m[36m│[0m surge-git = { path = "crates/surge-git" }
+2026-10-12T09:32:01.2803408Z     [0m[36m│[0m             [0m[36m─────────────────────────────[0m [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2804670Z     [0m[36m│[0m
+2026-10-12T09:32:01.2805239Z     [0m[36m├[0m surge-git v0.1.0
+2026-10-12T09:32:01.2805891Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2806508Z       ├── surge-daemon v0.1.0
+2026-10-12T09:32:01.2807096Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2807907Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2808615Z       └── surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2809249Z           ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2809886Z           ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2810597Z           ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2811361Z           │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2812087Z           └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2812520Z 
+2026-10-12T09:32:01.2814094Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 4 wildcard dependencies for crate 'surge-intake'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2816421Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-intake/Cargo.toml:8:14
+2026-10-12T09:32:01.2817409Z     [0m[36m│[0m
+2026-10-12T09:32:01.2818209Z [0m[36m  8[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2819326Z     [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2820226Z [0m[36m  9[0m [0m[36m│[0m surge-persistence = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2820828Z     [0m[36m│[0m                     [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2821256Z     [0m[36m│[0m
+2026-10-12T09:32:01.2821607Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:159:16
+2026-10-12T09:32:01.2821957Z     [0m[36m│[0m
+2026-10-12T09:32:01.2822313Z [0m[36m159[0m [0m[36m│[0m surge-intake = { path = "crates/surge-intake" }
+2026-10-12T09:32:01.2822822Z     [0m[36m│[0m                [0m[36m────────────────────────────────[0m
+2026-10-12T09:32:01.2823210Z     [0m[36m│[0m                [0m[36m│[0m
+2026-10-12T09:32:01.2823591Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2824083Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2824442Z     [0m[36m│[0m
+2026-10-12T09:32:01.2824768Z     [0m[36m├[0m surge-intake v0.1.0
+2026-10-12T09:32:01.2825105Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2825372Z       ├── surge-daemon v0.1.0
+2026-10-12T09:32:01.2825723Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2826058Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2826347Z       ├── surge-notify v0.1.0
+2026-10-12T09:32:01.2826909Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2827214Z       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2827793Z       │   ├── (dev) surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2828197Z       │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2828692Z       │   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2829040Z       │   │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2829379Z       │   │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2829695Z       │   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2830027Z       │   └── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.2830362Z       └── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.2830559Z 
+2026-10-12T09:32:01.2831467Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 4 wildcard dependencies for crate 'surge-mcp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2832557Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-mcp/Cargo.toml:10:17
+2026-10-12T09:32:01.2832967Z     [0m[36m│[0m
+2026-10-12T09:32:01.2833358Z [0m[36m 10[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2834097Z     [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2834664Z     [0m[36m·[0m
+2026-10-12T09:32:01.2835046Z [0m[36m 23[0m [0m[36m│[0m surge-core.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2835573Z     [0m[36m│[0m                        [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2835951Z     [0m[36m│[0m
+2026-10-12T09:32:01.2836592Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:158:13
+2026-10-12T09:32:01.2837014Z     [0m[36m│[0m
+2026-10-12T09:32:01.2837508Z [0m[36m158[0m [0m[36m│[0m surge-mcp = { path = "crates/surge-mcp" }
+2026-10-12T09:32:01.2838041Z     [0m[36m│[0m             [0m[36m─────────────────────────────[0m
+2026-10-12T09:32:01.2838480Z     [0m[36m│[0m             [0m[36m│[0m
+2026-10-12T09:32:01.2838885Z     [0m[36m│[0m             [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2839346Z     [0m[36m│[0m             [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2839682Z     [0m[36m│[0m
+2026-10-12T09:32:01.2839938Z     [0m[36m├[0m surge-mcp v0.1.0
+2026-10-12T09:32:01.2840303Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2840605Z       ├── surge-daemon v0.1.0
+2026-10-12T09:32:01.2840919Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2841228Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2841527Z       ├── surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2841919Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2842270Z       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2842599Z       │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2842900Z       │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2843199Z       │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2843615Z       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2843799Z 
+2026-10-12T09:32:01.2844564Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 4 wildcard dependencies for crate 'surge-notify'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2845737Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-notify/Cargo.toml:16:24
+2026-10-12T09:32:01.2846260Z     [0m[36m│[0m
+2026-10-12T09:32:01.2846619Z [0m[36m 16[0m [0m[36m│[0m surge-core.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2847390Z     [0m[36m│[0m                        [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2848074Z [0m[36m 17[0m [0m[36m│[0m surge-intake = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2849137Z     [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2849867Z     [0m[36m│[0m
+2026-10-12T09:32:01.2850421Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:156:16
+2026-10-12T09:32:01.2850997Z     [0m[36m│[0m
+2026-10-12T09:32:01.2851695Z [0m[36m156[0m [0m[36m│[0m surge-notify = { path = "crates/surge-notify" }
+2026-10-12T09:32:01.2852843Z     [0m[36m│[0m                [0m[36m────────────────────────────────[0m
+2026-10-12T09:32:01.2853637Z     [0m[36m│[0m                [0m[36m│[0m
+2026-10-12T09:32:01.2854336Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2855027Z     [0m[36m│[0m                [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2855653Z     [0m[36m│[0m
+2026-10-12T09:32:01.2856134Z     [0m[36m├[0m surge-notify v0.1.0
+2026-10-12T09:32:01.2856653Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2857138Z       ├── surge-daemon v0.1.0
+2026-10-12T09:32:01.2857710Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2858203Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2858779Z       ├── (dev) surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2859432Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2859944Z       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2860423Z       │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2860909Z       │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2861514Z       │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2862091Z       └── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.2862408Z 
+2026-10-12T09:32:01.2863722Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 14 wildcard dependencies for crate 'surge-orchestrator'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2865507Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-orchestrator/Cargo.toml:12:14
+2026-10-12T09:32:01.2866391Z     [0m[36m│[0m
+2026-10-12T09:32:01.2867006Z [0m[36m 12[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2868696Z     [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2869585Z [0m[36m 13[0m [0m[36m│[0m surge-acp = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2870698Z     [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2871863Z [0m[36m 14[0m [0m[36m│[0m surge-git = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2872905Z     [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2873933Z [0m[36m 15[0m [0m[36m│[0m surge-notify = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2875007Z     [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2876034Z [0m[36m 16[0m [0m[36m│[0m surge-persistence = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2877077Z     [0m[36m│[0m                     [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2878546Z [0m[36m 17[0m [0m[36m│[0m surge-mcp = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2879524Z     [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2880528Z [0m[36m 18[0m [0m[36m│[0m surge-intake = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2881505Z     [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2882263Z     [0m[36m│[0m
+2026-10-12T09:32:01.2882968Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:155:22
+2026-10-12T09:32:01.2883721Z     [0m[36m│[0m
+2026-10-12T09:32:01.2884529Z [0m[36m155[0m [0m[36m│[0m surge-orchestrator = { path = "crates/surge-orchestrator" }
+2026-10-12T09:32:01.2885697Z     [0m[36m│[0m                      [0m[36m──────────────────────────────────────[0m
+2026-10-12T09:32:01.2886467Z     [0m[36m│[0m                      [0m[36m│[0m
+2026-10-12T09:32:01.2887624Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2888532Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2889400Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2890284Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2891149Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2891968Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2892857Z     [0m[36m│[0m                      [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2893550Z     [0m[36m│[0m
+2026-10-12T09:32:01.2894066Z     [0m[36m├[0m surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2894639Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2895143Z       ├── surge-daemon v0.1.0
+2026-10-12T09:32:01.2895556Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2896178Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2896725Z       ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2897439Z       │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2897996Z       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2898307Z 
+2026-10-12T09:32:01.2899871Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 4 wildcard dependencies for crate 'surge-persistence'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2901401Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-persistence/Cargo.toml:8:17
+2026-10-12T09:32:01.2902232Z     [0m[36m│[0m
+2026-10-12T09:32:01.2902852Z [0m[36m  8[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2904038Z     [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2905031Z [0m[36m  9[0m [0m[36m│[0m surge-core = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2906355Z     [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2907377Z     [0m[36m│[0m
+2026-10-12T09:32:01.2907971Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:154:21
+2026-10-12T09:32:01.2908579Z     [0m[36m│[0m
+2026-10-12T09:32:01.2909311Z [0m[36m154[0m [0m[36m│[0m surge-persistence = { path = "crates/surge-persistence" }
+2026-10-12T09:32:01.2910497Z     [0m[36m│[0m                     [0m[36m─────────────────────────────────────[0m
+2026-10-12T09:32:01.2911412Z     [0m[36m│[0m                     [0m[36m│[0m
+2026-10-12T09:32:01.2912137Z     [0m[36m│[0m                     [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2913040Z     [0m[36m│[0m                     [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2913723Z     [0m[36m│[0m
+2026-10-12T09:32:01.2914247Z     [0m[36m├[0m surge-persistence v0.1.0
+2026-10-12T09:32:01.2914882Z       ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2915419Z       ├── (dev) surge-daemon v0.1.0
+2026-10-12T09:32:01.2915930Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2916391Z       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.2916965Z       ├── surge-intake v0.1.0
+2026-10-12T09:32:01.2917821Z       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2918321Z       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2918923Z       │   ├── surge-notify v0.1.0
+2026-10-12T09:32:01.2919484Z       │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2919988Z       │   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2920536Z       │   │   ├── (dev) surge-orchestrator v0.1.0
+2026-10-12T09:32:01.2921193Z       │   │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.2921928Z       │   │   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2922563Z       │   │   │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.2923274Z       │   │   │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.2923895Z       │   │   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2924461Z       │   │   └── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.2925125Z       │   └── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.2925721Z       ├── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.2926119Z       ├── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.2926623Z       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2926876Z 
+2026-10-12T09:32:01.2928320Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 8 wildcard dependencies for crate 'surge-telegram'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2930254Z     [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-telegram/Cargo.toml:22:24
+2026-10-12T09:32:01.2930981Z     [0m[36m│[0m
+2026-10-12T09:32:01.2931611Z [0m[36m 22[0m [0m[36m│[0m surge-core.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2932599Z     [0m[36m│[0m                        [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2933464Z [0m[36m 23[0m [0m[36m│[0m surge-notify.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2934281Z     [0m[36m│[0m                          [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2935132Z [0m[36m 24[0m [0m[36m│[0m surge-persistence.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2936044Z     [0m[36m│[0m                               [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2936909Z [0m[36m 25[0m [0m[36m│[0m surge-orchestrator.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2937875Z     [0m[36m│[0m                                [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2938527Z     [0m[36m│[0m
+2026-10-12T09:32:01.2939078Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.toml:160:18
+2026-10-12T09:32:01.2939655Z     [0m[36m│[0m
+2026-10-12T09:32:01.2940282Z [0m[36m160[0m [0m[36m│[0m surge-telegram = { path = "crates/surge-telegram" }
+2026-10-12T09:32:01.2941386Z     [0m[36m│[0m                  [0m[36m──────────────────────────────────[0m
+2026-10-12T09:32:01.2942090Z     [0m[36m│[0m                  [0m[36m│[0m
+2026-10-12T09:32:01.2942727Z     [0m[36m│[0m                  [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2943472Z     [0m[36m│[0m                  [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2944203Z     [0m[36m│[0m                  [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2944926Z     [0m[36m│[0m                  [0m[36mworkspace dependency[0m
+2026-10-12T09:32:01.2945476Z     [0m[36m│[0m
+2026-10-12T09:32:01.2945897Z     [0m[36m├[0m surge-telegram v0.1.0
+2026-10-12T09:32:01.2946400Z       └── surge-daemon v0.1.0
+2026-10-12T09:32:01.2946890Z           ├── surge-cli v0.1.0
+2026-10-12T09:32:01.2947565Z           └── surge-ui v0.1.0
+2026-10-12T09:32:01.2947856Z 
+2026-10-12T09:32:01.2948555Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2949728Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-ui/Cargo.toml:21:23
+2026-10-12T09:32:01.2950404Z    [0m[36m│[0m
+2026-10-12T09:32:01.2950939Z [0m[36m21[0m [0m[36m│[0m surge-mcp.workspace = [0m[31mtrue[0m
+2026-10-12T09:32:01.2951849Z    [0m[36m│[0m                       [0m[31m━━━━[0m
+2026-10-12T09:32:01.2952450Z    [0m[36m│[0m                       [0m[31m│[0m
+2026-10-12T09:32:01.2953148Z    [0m[36m│[0m                       [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2953674Z    [0m[36m│[0m
+2026-10-12T09:32:01.2954040Z    [0m[36m├[0m surge-ui v0.1.0
+2026-10-12T09:32:01.2954318Z 
+2026-10-12T09:32:01.2954953Z [0m[1m[38;5;9mbug[unresolved-workspace-dependency][0m[1m: failed to resolve a workspace dependency[0m
+2026-10-12T09:32:01.2956194Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-ui/Cargo.toml:11:31
+2026-10-12T09:32:01.2956782Z    [0m[36m│[0m
+2026-10-12T09:32:01.2957520Z [0m[36m11[0m [0m[36m│[0m surge-process = { workspace = [0m[31mtrue[0m }
+2026-10-12T09:32:01.2958385Z    [0m[36m│[0m                 [0m[36m──────────────[0m[31m━━━━[0m[36m──[0m
+2026-10-12T09:32:01.2959108Z    [0m[36m│[0m                               [0m[31m│[0m
+2026-10-12T09:32:01.2959862Z    [0m[36m│[0m                               [0m[31musage of workspace dependency[0m
+2026-10-12T09:32:01.2960527Z    [0m[36m│[0m
+2026-10-12T09:32:01.2960928Z    [0m[36m├[0m surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.2961210Z 
+2026-10-12T09:32:01.2962452Z [0m[1m[38;5;11mwarning[wildcard][0m[1m: found 7 wildcard dependencies for crate 'surge-ui'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.[0m
+2026-10-12T09:32:01.2963991Z    [0m[36m┌─[0m /home/runner/work/surge/surge/crates/surge-ui/Cargo.toml:11:17
+2026-10-12T09:32:01.2964661Z    [0m[36m│[0m
+2026-10-12T09:32:01.2965250Z [0m[36m11[0m [0m[36m│[0m surge-process = [0m[33m{ workspace = true }[0m
+2026-10-12T09:32:01.2966250Z    [0m[36m│[0m                 [0m[33m━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2966977Z    [0m[36m·[0m
+2026-10-12T09:32:01.2967688Z [0m[36m16[0m [0m[36m│[0m surge-core = [0m[33m{ path = "../surge-core" }[0m
+2026-10-12T09:32:01.2968730Z    [0m[36m│[0m              [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2969797Z [0m[36m17[0m [0m[36m│[0m surge-acp = [0m[33m{ path = "../surge-acp" }[0m
+2026-10-12T09:32:01.2970789Z    [0m[36m│[0m             [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2971889Z [0m[36m18[0m [0m[36m│[0m surge-orchestrator = [0m[33m{ path = "../surge-orchestrator" }[0m
+2026-10-12T09:32:01.2973101Z    [0m[36m│[0m                      [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2974364Z [0m[36m19[0m [0m[36m│[0m surge-daemon = [0m[33m{ path = "../surge-daemon" }[0m
+2026-10-12T09:32:01.2975385Z    [0m[36m│[0m                [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2976446Z [0m[36m20[0m [0m[36m│[0m surge-persistence = [0m[33m{ path = "../surge-persistence" }[0m
+2026-10-12T09:32:01.2977781Z    [0m[36m│[0m                     [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2978735Z [0m[36m21[0m [0m[36m│[0m surge-mcp.workspace = [0m[33mtrue[0m
+2026-10-12T09:32:01.2979568Z    [0m[36m│[0m                       [0m[33m━━━━[0m [0m[33mwildcard dependency[0m
+2026-10-12T09:32:01.2980182Z    [0m[36m│[0m
+2026-10-12T09:32:01.2980573Z    [0m[36m├[0m surge-ui v0.1.0
+2026-10-12T09:32:01.2980848Z 
+2026-10-12T09:32:01.7592427Z [0m[1m[38;5;11mwarning[yanked][0m[1m: detected yanked crate (try `cargo update -p chacha20`)[0m
+2026-10-12T09:32:01.7594002Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.lock:102:1
+2026-10-12T09:32:01.7594667Z     [0m[36m│[0m
+2026-10-12T09:32:01.7596264Z [0m[36m102[0m [0m[36m│[0m [0m[33mchacha20 0.10.0 registry+https://github.com/rust-lang/crates.io-index[0m
+2026-10-12T09:32:01.7598109Z     [0m[36m│[0m [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33myanked version[0m
+2026-10-12T09:32:01.7599658Z     [0m[36m│[0m
+2026-10-12T09:32:01.7600289Z     [0m[36m├[0m chacha20 v0.10.0
+2026-10-12T09:32:01.7600946Z       └── rand v0.10.1
+2026-10-12T09:32:01.7601561Z           └── uuid v1.22.0
+2026-10-12T09:32:01.7602220Z               ├── accesskit v0.24.1
+2026-10-12T09:32:01.7602967Z               │   ├── accesskit_atspi_common v0.19.1
+2026-10-12T09:32:01.7603735Z               │   │   └── accesskit_unix v0.22.1
+2026-10-12T09:32:01.7604522Z               │   │       └── gpui-pre-linux v0.3.7
+2026-10-12T09:32:01.7605348Z               │   │           └── gpui-pre-platform v0.3.7
+2026-10-12T09:32:01.7606198Z               │   │               └── gpui-kit v0.7.0
+2026-10-12T09:32:01.7607033Z               │   │                   └── (dev) surge-ui v0.1.0
+2026-10-12T09:32:01.7608106Z               │   ├── accesskit_consumer v0.38.0
+2026-10-12T09:32:01.7608923Z               │   │   ├── accesskit_atspi_common v0.19.1 (*)
+2026-10-12T09:32:01.7609761Z               │   │   ├── accesskit_macos v0.26.3
+2026-10-12T09:32:01.7610571Z               │   │   │   └── gpui-pre-macos v0.3.7
+2026-10-12T09:32:01.7611427Z               │   │   │       └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7612237Z               │   │   └── accesskit_windows v0.34.0
+2026-10-12T09:32:01.7613016Z               │   │       └── gpui-pre-windows v0.3.7
+2026-10-12T09:32:01.7613848Z               │   │           └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7614665Z               │   ├── accesskit_macos v0.26.3 (*)
+2026-10-12T09:32:01.7615436Z               │   ├── accesskit_unix v0.22.1 (*)
+2026-10-12T09:32:01.7616555Z               │   ├── accesskit_windows v0.34.0 (*)
+2026-10-12T09:32:01.7617595Z               │   ├── gpui-pre v0.3.7
+2026-10-12T09:32:01.7618364Z               │   │   ├── gpui-base v0.7.0
+2026-10-12T09:32:01.7619160Z               │   │   │   ├── gpui-component v0.7.0
+2026-10-12T09:32:01.7619990Z               │   │   │   │   └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7620724Z               │   │   │   └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7621723Z               │   │   ├── gpui-component v0.7.0 (*)
+2026-10-12T09:32:01.7622514Z               │   │   ├── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7623262Z               │   │   ├── gpui-kit-assets v0.7.0
+2026-10-12T09:32:01.7624073Z               │   │   │   ├── gpui-component v0.7.0 (*)
+2026-10-12T09:32:01.7624855Z               │   │   │   └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7625624Z               │   │   ├── gpui-pre-apple v0.3.7
+2026-10-12T09:32:01.7626412Z               │   │   │   └── gpui-pre-macos v0.3.7 (*)
+2026-10-12T09:32:01.7627242Z               │   │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7628244Z               │   │   ├── gpui-pre-macos v0.3.7 (*)
+2026-10-12T09:32:01.7629045Z               │   │   ├── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7629848Z               │   │   ├── gpui-pre-web v0.3.7
+2026-10-12T09:32:01.7630958Z               │   │   │   ├── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7631771Z               │   │   │   └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7632565Z               │   │   ├── gpui-pre-wgpu v0.3.7
+2026-10-12T09:32:01.7633433Z               │   │   │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7634238Z               │   │   │   ├── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7635068Z               │   │   │   └── gpui-pre-web v0.3.7 (*)
+2026-10-12T09:32:01.7635855Z               │   │   ├── gpui-pre-windows v0.3.7 (*)
+2026-10-12T09:32:01.7636626Z               │   │   └── gpui-wry v0.7.0
+2026-10-12T09:32:01.7637462Z               │   │       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7638341Z               │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7639103Z               │   ├── gpui-pre-macos v0.3.7 (*)
+2026-10-12T09:32:01.7639850Z               │   └── gpui-pre-windows v0.3.7 (*)
+2026-10-12T09:32:01.7640632Z               ├── agent-client-protocol v2.2.0
+2026-10-12T09:32:01.7641425Z               │   ├── surge-acp v0.1.0
+2026-10-12T09:32:01.7642114Z               │   │   ├── surge-cli v0.1.0
+2026-10-12T09:32:01.7642850Z               │   │   ├── (dev) surge-daemon v0.1.0
+2026-10-12T09:32:01.7643625Z               │   │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7644388Z               │   │   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7645146Z               │   │   ├── surge-orchestrator v0.1.0
+2026-10-12T09:32:01.7645923Z               │   │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7646709Z               │   │   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7647619Z               │   │   │   ├── surge-telegram v0.1.0
+2026-10-12T09:32:01.7648517Z               │   │   │   │   └── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7649284Z               │   │   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7650282Z               │   │   ├── (dev) surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.7651086Z               │   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7651848Z               │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7652588Z               │   ├── (dev) surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7653390Z               │   ├── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.7654135Z               │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7654864Z               ├── gpui-component v0.7.0 (*)
+2026-10-12T09:32:01.7655581Z               ├── gpui-pre v0.3.7 (*)
+2026-10-12T09:32:01.7656270Z               ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7657012Z               ├── gpui-pre-macos v0.3.7 (*)
+2026-10-12T09:32:01.7657960Z               ├── gpui-pre-web v0.3.7 (*)
+2026-10-12T09:32:01.7658693Z               ├── gpui-pre-windows v0.3.7 (*)
+2026-10-12T09:32:01.7659690Z               ├── r2d2_sqlite v0.25.0
+2026-10-12T09:32:01.7660496Z               │   └── surge-persistence v0.1.0
+2026-10-12T09:32:01.7661264Z               │       ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7662066Z               │       ├── (dev) surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7662846Z               │       ├── surge-intake v0.1.0
+2026-10-12T09:32:01.7663619Z               │       │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7664404Z               │       │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7665181Z               │       │   ├── surge-notify v0.1.0
+2026-10-12T09:32:01.7665947Z               │       │   │   ├── surge-cli v0.1.0 (*)
+2026-10-12T09:32:01.7666746Z               │       │   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7667755Z               │       │   │   ├── (dev) surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.7668673Z               │       │   │   └── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.7669560Z               │       │   └── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.7670395Z               │       ├── surge-orchestrator v0.1.0 (*)
+2026-10-12T09:32:01.7671168Z               │       ├── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.7671969Z               │       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7673020Z               ├── teloxide-core v0.11.2
+2026-10-12T09:32:01.7673750Z               │   └── teloxide v0.14.0
+2026-10-12T09:32:01.7674492Z               │       ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7675273Z               │       └── surge-telegram v0.1.0 (*)
+2026-10-12T09:32:01.7676021Z               └── zbus v5.14.0
+2026-10-12T09:32:01.7676708Z                   ├── accesskit_unix v0.22.1 (*)
+2026-10-12T09:32:01.7677567Z                   ├── ashpd v0.13.13
+2026-10-12T09:32:01.7678354Z                   │   ├── gpui-base v0.7.0 (*)
+2026-10-12T09:32:01.7679157Z                   │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7679911Z                   │   └── oo7 v0.6.0
+2026-10-12T09:32:01.7680684Z                   │       └── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7681475Z                   ├── atspi-common v0.13.0
+2026-10-12T09:32:01.7682278Z                   │   ├── accesskit_atspi_common v0.19.1 (*)
+2026-10-12T09:32:01.7683082Z                   │   ├── atspi v0.29.0
+2026-10-12T09:32:01.7683838Z                   │   │   └── accesskit_unix v0.22.1 (*)
+2026-10-12T09:32:01.7684640Z                   │   └── atspi-proxies v0.13.0
+2026-10-12T09:32:01.7685402Z                   │       └── atspi v0.29.0 (*)
+2026-10-12T09:32:01.7686207Z                   ├── atspi-proxies v0.13.0 (*)
+2026-10-12T09:32:01.7686938Z                   ├── notify-rust v4.12.0
+2026-10-12T09:32:01.7687872Z                   │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7688700Z                   │   ├── surge-daemon v0.1.0 (*)
+2026-10-12T09:32:01.7689480Z                   │   ├── surge-notify v0.1.0 (*)
+2026-10-12T09:32:01.7690241Z                   │   └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7691183Z                   └── oo7 v0.6.0 (*)
+2026-10-12T09:32:01.7691721Z 
+2026-10-12T09:32:01.7692723Z [0m[1m[38;5;11mwarning[yanked][0m[1m: detected yanked crate (try `cargo update -p spin`)[0m
+2026-10-12T09:32:01.7694024Z     [0m[36m┌─[0m /home/runner/work/surge/surge/Cargo.lock:763:1
+2026-10-12T09:32:01.7694853Z     [0m[36m│[0m
+2026-10-12T09:32:01.7695975Z [0m[36m763[0m [0m[36m│[0m [0m[33mspin 0.9.8 registry+https://github.com/rust-lang/crates.io-index[0m
+2026-10-12T09:32:01.7697735Z     [0m[36m│[0m [0m[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [0m[33myanked version[0m
+2026-10-12T09:32:01.7698800Z     [0m[36m│[0m
+2026-10-12T09:32:01.7699485Z     [0m[36m├[0m spin v0.9.8
+2026-10-12T09:32:01.7700145Z       ├── flume v0.11.1
+2026-10-12T09:32:01.7700729Z       │   └── lb-wry v0.53.3
+2026-10-12T09:32:01.7701196Z       │       ├── gpui-wry v0.7.0
+2026-10-12T09:32:01.7701697Z       │       │   └── surge-ui v0.1.0
+2026-10-12T09:32:01.7702177Z       │       └── surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7702591Z       └── flume v0.12.0
+2026-10-12T09:32:01.7703001Z           └── gpui-pre-scheduler v0.3.7
+2026-10-12T09:32:01.7703443Z               ├── gpui-pre v0.3.7
+2026-10-12T09:32:01.7704048Z               │   ├── gpui-base v0.7.0
+2026-10-12T09:32:01.7704489Z               │   │   ├── gpui-component v0.7.0
+2026-10-12T09:32:01.7704935Z               │   │   │   └── gpui-kit v0.7.0
+2026-10-12T09:32:01.7705411Z               │   │   │       └── (dev) surge-ui v0.1.0 (*)
+2026-10-12T09:32:01.7705941Z               │   │   └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7706415Z               │   ├── gpui-component v0.7.0 (*)
+2026-10-12T09:32:01.7706856Z               │   ├── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7707452Z               │   ├── gpui-kit-assets v0.7.0
+2026-10-12T09:32:01.7708083Z               │   │   ├── gpui-component v0.7.0 (*)
+2026-10-12T09:32:01.7708932Z               │   │   └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7709870Z               │   ├── gpui-pre-apple v0.3.7
+2026-10-12T09:32:01.7710693Z               │   │   └── gpui-pre-macos v0.3.7
+2026-10-12T09:32:01.7711674Z               │   │       └── gpui-pre-platform v0.3.7
+2026-10-12T09:32:01.7712678Z               │   │           └── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7713533Z               │   ├── gpui-pre-linux v0.3.7
+2026-10-12T09:32:01.7714429Z               │   │   └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7715391Z               │   ├── gpui-pre-macos v0.3.7 (*)
+2026-10-12T09:32:01.7716254Z               │   ├── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7717152Z               │   ├── gpui-pre-web v0.3.7
+2026-10-12T09:32:01.7718071Z               │   │   ├── gpui-kit v0.7.0 (*)
+2026-10-12T09:32:01.7718653Z               │   │   └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7718998Z               │   ├── gpui-pre-wgpu v0.3.7
+2026-10-12T09:32:01.7719342Z               │   │   ├── gpui-pre-linux v0.3.7 (*)
+2026-10-12T09:32:01.7719740Z               │   │   ├── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7720100Z               │   │   └── gpui-pre-web v0.3.7 (*)
+2026-10-12T09:32:01.7720485Z               │   ├── gpui-pre-windows v0.3.7
+2026-10-12T09:32:01.7720836Z               │   │   └── gpui-pre-platform v0.3.7 (*)
+2026-10-12T09:32:01.7721203Z               │   └── gpui-wry v0.7.0 (*)
+2026-10-12T09:32:01.7721541Z               └── gpui-pre-web v0.3.7 (*)
+2026-10-12T09:32:01.7721735Z 
+2026-10-12T09:32:01.7792647Z advisories [32mok[0m, bans [32mok[0m, licenses [32mok[0m, sources [32mok[0m
+2026-10-12T09:32:01.7888631Z Post job cleanup.
+2026-10-12T09:32:01.8769678Z [command]/usr/bin/git version
+2026-10-12T09:32:01.8812920Z git version 2.55.0
+2026-10-12T09:32:01.8859596Z Temporarily overriding HOME='/home/runner/work/_temp/0e034641-c71a-4de6-b701-5474836c3bd1' before making global git config changes
+2026-10-12T09:32:01.8861103Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-12T09:32:01.8866224Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/surge/surge
+2026-10-12T09:32:01.8917758Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-12T09:32:01.8944292Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-12T09:32:01.9156268Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-12T09:32:01.9178064Z http.https://github.com/.extraheader
+2026-10-12T09:32:01.9191305Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-12T09:32:01.9222255Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-12T09:32:01.9440577Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-12T09:32:01.9473473Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-12T09:32:01.9798387Z Cleaning up orphan processes
+2026-10-12T09:32:02.0020013Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

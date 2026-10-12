@@ -1720,3 +1720,113 @@ fn a_human_acceptance_is_reported_but_never_evidence_backed() {
     );
     assert!(render_html(&report).contains("ACCEPTED BY A HUMAN — not verified"));
 }
+
+#[test]
+fn provider_usage_counts_only_accepted_delta_and_keeps_price_unknown() {
+    use crate::usage::{TokenUsageCounters, TokenUsageObservation};
+    let counters = TokenUsageCounters {
+        total_tokens: 150,
+        input_tokens: 100,
+        output_tokens: 50,
+        thought_tokens: None,
+        cached_read_tokens: None,
+        cached_write_tokens: None,
+    };
+    let events = vec![event(
+        1,
+        EventPayload::ProviderUsageObserved {
+            session: crate::id::SessionId::new(),
+            usage: TokenUsageObservation::Reported {
+                cumulative: counters.clone(),
+                delta: counters,
+            },
+        },
+    )];
+    let report = compile_bound(RunId::new(), &events);
+    assert_eq!(report.cost.prompt_tokens, 100);
+    assert_eq!(report.cost.output_tokens, 50);
+    assert_eq!(report.cost.uncosted_token_events, 1);
+}
+
+#[test]
+fn provider_unknown_and_context_do_not_erase_known_spend_or_add_tokens() {
+    use crate::usage::{ContextUsage, TokenUsageObservation, UsageUnavailableReason};
+    let session = crate::id::SessionId::new();
+    let events = vec![
+        event(
+            1,
+            EventPayload::TokensConsumed {
+                session,
+                prompt_tokens: 5,
+                output_tokens: 3,
+                cache_hits: 2,
+                model: "recorded".into(),
+                cost_usd: Some(1.25),
+            },
+        ),
+        event(
+            2,
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Unavailable {
+                    reason: UsageUnavailableReason::CounterRegression,
+                    reported: None,
+                },
+            },
+        ),
+        event(
+            3,
+            EventPayload::ContextUsageObserved {
+                session,
+                usage: ContextUsage {
+                    used: 9000,
+                    size: 10000,
+                    cost: None,
+                },
+            },
+        ),
+    ];
+    let report = compile_bound(RunId::new(), &events);
+    assert_eq!(report.cost.prompt_tokens, 5);
+    assert_eq!(report.cost.output_tokens, 3);
+    assert_eq!(report.cost.cache_hits, 2);
+    assert_eq!(report.cost.cost_usd, 1.25);
+    assert_eq!(report.cost.uncosted_token_events, 1);
+    assert!(report.cost.usage_unknown);
+    for rendered in [render_markdown(&report), render_html(&report)] {
+        assert!(rendered.contains("Token usage is partial or unavailable"));
+        assert!(rendered.contains("known lower bounds, not exact totals"));
+        assert!(rendered.contains("Prompt tokens: 5"));
+        assert!(rendered.contains("1.2500"));
+    }
+}
+
+#[test]
+fn provider_aggregation_overflow_is_explicit_and_preserves_lower_bound() {
+    use crate::usage::{TokenUsageCounters, TokenUsageObservation};
+    let counters = TokenUsageCounters {
+        total_tokens: u64::MAX,
+        input_tokens: u64::MAX,
+        output_tokens: 0,
+        thought_tokens: None,
+        cached_read_tokens: None,
+        cached_write_tokens: None,
+    };
+    let events: Vec<_> = (1..=2)
+        .map(|seq| {
+            event(
+                seq,
+                EventPayload::ProviderUsageObserved {
+                    session: crate::id::SessionId::new(),
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters.clone(),
+                        delta: counters.clone(),
+                    },
+                },
+            )
+        })
+        .collect();
+    let report = compile_bound(RunId::new(), &events);
+    assert_eq!(report.cost.prompt_tokens, u64::MAX);
+    assert!(report.cost.usage_unknown);
+}

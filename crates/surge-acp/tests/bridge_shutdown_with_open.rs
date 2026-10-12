@@ -25,8 +25,10 @@ async fn inner_test() {
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
+    #[cfg(windows)]
+    let mut jobs = Vec::new();
     let mut sids: Vec<SessionId> = Vec::with_capacity(2);
-    for _ in 0..2 {
+    for index in 0..2 {
         let cfg = SessionConfig {
             effect_fence: None,
             writer_id: surge_core::id::ExecutionWriterId::new(),
@@ -35,8 +37,14 @@ async fn inner_test() {
             opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
-            agent_kind: AgentKind::Mock {
-                args: vec!["--scenario".into(), "echo".into()],
+            agent_kind: AgentKind::Custom {
+                binary: env!("CARGO_BIN_EXE_mock_acp_agent").into(),
+                args: vec![
+                    "--scenario".into(),
+                    "echo".into(),
+                    "--pid-file".into(),
+                    wt.path().join(format!("pid-{index}")).display().to_string(),
+                ],
             },
             working_dir: wt.path().to_path_buf(),
             system_prompt: "x".into(),
@@ -48,10 +56,31 @@ async fn inner_test() {
             bindings: BTreeMap::new(),
             env: Default::default(),
         };
-        sids.push(bridge.open_session(cfg).await.unwrap().session);
+        let opened = bridge.open_session(cfg).await.unwrap();
+        #[cfg(windows)]
+        {
+            let container = opened
+                .execution_writer
+                .as_ref()
+                .unwrap()
+                .container()
+                .unwrap();
+            let identity = container.windows_job().unwrap();
+            assert!(identity.name().starts_with("Global\\SurgeMcp-"));
+            let job = surge_process::windows_job::Job::open(identity.name())
+                .unwrap()
+                .unwrap();
+            assert!(job.active_processes().unwrap() >= 1);
+            jobs.push(job);
+        }
+        sids.push(opened.session);
     }
 
     bridge.shutdown().await.unwrap();
+    #[cfg(windows)]
+    for job in jobs {
+        assert_eq!(job.active_processes().unwrap(), 0);
+    }
 
     // Accept any bridge-initiated end reason: ForcedClose (from close_all_sessions
     // explicit emit) OR Timeout (from subprocess_waiter racing the kill_tx). Both
@@ -75,5 +104,18 @@ async fn inner_test() {
             ended.insert(session);
         }
     }
-    assert_eq!(ended.len(), 2);
+    assert_eq!(ended, sids.into_iter().collect());
+    let tracker = surge_acp::ProcessTracker::new(wt.path().join("tracking")).unwrap();
+    for index in 0..2 {
+        let pid = std::fs::read_to_string(wt.path().join(format!("pid-{index}")))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let name = format!("child-{index}");
+        tracker.track(&name, pid).unwrap();
+        assert!(
+            !tracker.is_running(&name),
+            "direct child {index} remains alive"
+        );
+    }
 }

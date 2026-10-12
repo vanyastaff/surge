@@ -16,6 +16,8 @@ use surge_core::{EventPayload, RunId};
 pub struct Usage {
     pub sessions: u32,
     pub tokens_in: u64,
+    pub usage_unknown: bool,
+    pub cost_unknown: bool,
     pub tokens_out: u64,
     /// Sum of the costs the runtime reported; `None` when it never did.
     pub cost_usd: Option<f64>,
@@ -48,24 +50,38 @@ pub fn fold(events: &[(i64, EventPayload)], into: &mut HashMap<String, Usage>) {
                 usage.sessions += 1;
                 usage.last_used_ms = Some(usage.last_used_ms.map_or(*at, |t| t.max(*at)));
             },
-            EventPayload::TokensConsumed {
-                session,
-                prompt_tokens,
-                output_tokens,
-                model,
-                cost_usd,
-                ..
-            } => {
+            EventPayload::TokensConsumed { .. } | EventPayload::ProviderUsageObserved { .. } => {
+                let session = match event {
+                    EventPayload::TokensConsumed { session, .. }
+                    | EventPayload::ProviderUsageObserved { session, .. } => session,
+                    _ => continue,
+                };
                 let Some(runtime) = session_agent.get(&session.to_string()) else {
                     continue;
                 };
                 let usage = into.entry(runtime.clone()).or_default();
-                usage.tokens_in += u64::from(*prompt_tokens);
-                usage.tokens_out += u64::from(*output_tokens);
-                if let Some(cost) = cost_usd {
-                    usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + cost);
+                if let Some((_, input, output, cost)) = event.token_delta() {
+                    if let (Some(input), Some(output)) = (
+                        usage.tokens_in.checked_add(input),
+                        usage.tokens_out.checked_add(output),
+                    ) {
+                        usage.tokens_in = input;
+                        usage.tokens_out = output;
+                    } else {
+                        usage.usage_unknown = true;
+                    }
+                    if let Some(cost) = cost {
+                        usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + cost);
+                    } else {
+                        usage.cost_unknown = true;
+                    }
+                } else {
+                    usage.usage_unknown = true;
+                    usage.cost_unknown = true;
                 }
-                if !model.trim().is_empty() {
+                if let EventPayload::TokensConsumed { model, .. } = event
+                    && !model.trim().is_empty()
+                {
                     usage.models.insert(model.clone());
                 }
             },
@@ -126,6 +142,94 @@ mod tests {
     use super::fold;
     use std::collections::HashMap;
     use surge_core::{EventPayload, SessionId};
+
+    #[test]
+    fn unavailable_usage_keeps_known_cost_but_marks_totals_partial() {
+        use surge_core::usage::{
+            ContextUsage, TokenUsageCounters, TokenUsageObservation, UsageUnavailableReason,
+        };
+        let session = SessionId::new();
+        let counters = |input, output| TokenUsageCounters {
+            total_tokens: input + output,
+            input_tokens: input,
+            output_tokens: output,
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        let events = vec![
+            (
+                1,
+                EventPayload::SessionOpened {
+                    opened: None,
+                    handoff: None,
+                    node: "impl".try_into().unwrap(),
+                    session,
+                    agent: "impl".into(),
+                    agent_id: Some("runtime".into()),
+                },
+            ),
+            (
+                2,
+                EventPayload::TokensConsumed {
+                    session,
+                    prompt_tokens: 1,
+                    output_tokens: 2,
+                    cache_hits: 0,
+                    model: "model".into(),
+                    cost_usd: Some(0.5),
+                },
+            ),
+            (
+                3,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters(10, 5),
+                        delta: counters(10, 5),
+                    },
+                },
+            ),
+            (
+                4,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters(10, 5),
+                        delta: counters(0, 0),
+                    },
+                },
+            ),
+            (
+                5,
+                EventPayload::ContextUsageObserved {
+                    session,
+                    usage: ContextUsage {
+                        used: 900,
+                        size: 1000,
+                        cost: None,
+                    },
+                },
+            ),
+            (
+                6,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Unavailable {
+                        reason: UsageUnavailableReason::CounterRegression,
+                        reported: Some(counters(1, 1)),
+                    },
+                },
+            ),
+        ];
+        let mut totals = HashMap::new();
+        fold(&events, &mut totals);
+        let usage = &totals["runtime"];
+        assert_eq!((usage.tokens_in, usage.tokens_out), (11, 7));
+        assert_eq!(usage.cost_usd, Some(0.5));
+        assert!(usage.usage_unknown);
+        assert!(usage.cost_unknown);
+    }
 
     #[test]
     fn tokens_are_attributed_to_the_runtime_of_their_session() {

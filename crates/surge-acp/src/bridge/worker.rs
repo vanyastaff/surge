@@ -11,11 +11,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(windows)]
+use super::windows_child::WindowsChild as Child;
 use agent_client_protocol::schema::v1::{Implementation, InitializeRequest, NewSessionRequest};
 use std::collections::BTreeMap;
 use surge_core::SessionId;
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::Command;
 use tokio::sync::broadcast;
 
 use tracing::{debug, warn};
@@ -70,29 +74,10 @@ pub(crate) async fn handle_session_notification(
     notif: agent_client_protocol::schema::v1::SessionNotification,
 ) {
     use crate::bridge::event::AgentMessageMeta;
-    use crate::bridge::tokens::extract_usage;
     use agent_client_protocol::schema::v1::SessionUpdate;
 
     if !state.borrow().live_ingress || state.borrow().closing {
         return;
-    }
-
-    // Update last_token_usage if this notification carries it.
-    if let Some(snap) = extract_usage(&notif.update) {
-        let snap_clone = snap.clone();
-        {
-            let mut s = state.borrow_mut();
-            s.last_token_usage = Some(snap);
-            s.last_token_usage_emitted = false;
-        }
-        let _ = event_tx.send(BridgeEvent::TokenUsage {
-            session: *session_id,
-            prompt_tokens: snap_clone.prompt_tokens,
-            output_tokens: snap_clone.output_tokens,
-            cache_hits: snap_clone.cache_hits,
-            model: snap_clone.model,
-        });
-        state.borrow_mut().last_token_usage_emitted = true;
     }
 
     match notif.update {
@@ -116,9 +101,15 @@ pub(crate) async fn handle_session_notification(
         SessionUpdate::ToolCall(tool_call) => {
             handle_tool_call(session_id, event_tx, state, sandbox, secrets, tool_call).await;
         },
+        SessionUpdate::UsageUpdate(update) => {
+            let _ = event_tx.send(BridgeEvent::ContextUsageObserved {
+                session: *session_id,
+                usage: super::tokens::context_usage(update),
+            });
+        },
         // Other variants (AgentThoughtChunk, ToolCallUpdate, Plan,
         // AvailableCommandsUpdate, CurrentModeUpdate, ConfigOptionUpdate,
-        // SessionInfoUpdate, UsageUpdate) are deferred to Phase 10
+        // SessionInfoUpdate) are deferred to Phase 10
         // observability tests.
         _ => {},
     }
@@ -343,8 +334,27 @@ async fn open_session_attempt(
     // separate group so forced cleanup reaches the adapter, not just its shim.
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(windows)]
+    let native_launch = surge_process::windows_job::LaunchSpec::from_inherited_command(
+        cmd.as_std(),
+    )
+    .map_err(|source| OpenSessionError::AgentSpawnFailed {
+        kind: config.agent_kind.label().into(),
+        source,
+    })?;
     super::effect_fence::check(config.effect_fence.as_ref())?;
-    let mut child: Child = cmd.spawn().map_err(|e| {
+    #[cfg(not(windows))]
+    let spawned = cmd.spawn();
+    #[cfg(windows)]
+    let spawned = Child::spawn(&native_launch, || {
+        super::effect_fence::check(config.effect_fence.as_ref()).map_err(std::io::Error::other)
+    });
+    let mut child: Child = spawned.map_err(|e| {
+        if e.get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<super::HostEffectRefused>)
+        {
+            return OpenSessionError::HostEffectRefused(super::HostEffectRefused);
+        }
         warn!(
             kind = config.agent_kind.label(),
             working_dir = %config.working_dir.display(),
@@ -356,13 +366,24 @@ async fn open_session_attempt(
             source: e,
         }
     })?;
-    let (Some(stdin), Some(stdout), Some(stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
-    else {
-        reap_failed_open(&mut child).await;
-        return Err(OpenSessionError::HandshakeFailed {
-            reason: "agent stdio pipes unavailable".into(),
-        });
+    let (stdin, stdout, stderr) = match take_agent_pipes(&mut child) {
+        Ok(pipes) => pipes,
+        Err(error) => {
+            reap_failed_open(&mut child).await;
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: format!("agent stdio pipes unavailable: {error}"),
+            });
+        },
+    };
+    #[cfg(windows)]
+    let writer_container = match child.container() {
+        Ok(container) => Some(container),
+        Err(error) => {
+            reap_failed_open(&mut child).await;
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: error.to_string(),
+            });
+        },
     };
 
     // Step 4: ACP handshake — mirrors the pattern in legacy connection.rs.
@@ -375,6 +396,12 @@ async fn open_session_attempt(
         .as_ref()
         .map_or_else(SessionId::new, |stage| stage.session);
     let inner = Rc::new(RefCell::new(SessionStateInner::new(String::new())));
+    if matches!(
+        &config.opening,
+        surge_core::execution_recovery::SessionOpening::Continue(_)
+    ) {
+        inner.borrow_mut().usage = super::tokens::UsageTracker::restored();
+    }
     let tail: Rc<RefCell<Vec<u8>>> = Rc::default();
     let secrets = Arc::new(SecretsRedactor::with_literal(
         config
@@ -558,13 +585,22 @@ async fn open_session_attempt(
         opened.execution_writer = Some(
             surge_core::execution_recovery::process::ExecutionWriterObservation::new(
                 config.writer_id,
-                child.id().and_then(|pid| {
-                    crate::process_evidence::observe_container(
-                        pid,
-                        surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
-                    )
-                    .ok()
-                }),
+                {
+                    #[cfg(windows)]
+                    {
+                        writer_container
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        child.id().and_then(|pid| {
+                            crate::process_evidence::observe_container(
+                                pid,
+                                surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+                            )
+                            .ok()
+                        })
+                    }
+                },
             )?,
         );
         Ok::<_, surge_core::execution_recovery::RecoveryIdentityError>(opened)
@@ -682,6 +718,26 @@ async fn reap_failed_open(child: &mut Child) {
                 warn!(%error, "handshake child reap unconfirmed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
             },
+        }
+    }
+}
+
+type AgentPipes = (
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+    tokio::process::ChildStderr,
+);
+
+fn take_agent_pipes(child: &mut Child) -> std::io::Result<AgentPipes> {
+    #[cfg(windows)]
+    {
+        child.take_pipes()
+    }
+    #[cfg(not(windows))]
+    {
+        match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+            (Some(stdin), Some(stdout), Some(stderr)) => Ok((stdin, stdout, stderr)),
+            _ => Err(std::io::Error::other("agent stdio pipes unavailable")),
         }
     }
 }
@@ -814,34 +870,6 @@ pub(super) fn read_stderr_tail(tail_storage: &std::rc::Rc<std::cell::RefCell<Vec
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// Emit a TokenUsage event if there's an unemitted snapshot. Called from
-/// session-end paths to honor the spec §5.7 ordering guarantee.
-#[allow(dead_code)] // wired in Task 8.3 close_session_impl
-pub(crate) fn flush_pending_token_usage(
-    event_tx: &tokio::sync::broadcast::Sender<BridgeEvent>,
-    state: &std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
-    session_id: &SessionId,
-) {
-    let snapshot = {
-        let s = state.borrow();
-        if s.last_token_usage_emitted {
-            None
-        } else {
-            s.last_token_usage.clone()
-        }
-    };
-    if let Some(u) = snapshot {
-        let _ = event_tx.send(BridgeEvent::TokenUsage {
-            session: *session_id,
-            prompt_tokens: u.prompt_tokens,
-            output_tokens: u.output_tokens,
-            cache_hits: u.cache_hits,
-            model: u.model,
-        });
-        state.borrow_mut().last_token_usage_emitted = true;
-    }
-}
-
 /// Handle `BridgeCommand::ReplyToTool` — engine-driven tool reply routing.
 ///
 /// Looks up the session and the `call_id` in the per-session
@@ -955,6 +983,10 @@ pub(crate) async fn send_message_impl(
     content: crate::bridge::session::MessageContent,
     secrets: Arc<SecretsRedactor>,
     effect_fence: Option<Arc<dyn super::HostEffectFence>>,
+    observation: (
+        broadcast::Sender<BridgeEvent>,
+        Rc<RefCell<SessionStateInner>>,
+    ),
 ) -> Result<(), super::error::SendMessageError> {
     use crate::bridge::session::MessageContent;
     let connection =
@@ -972,6 +1004,8 @@ pub(crate) async fn send_message_impl(
             crate::sdk_v1::SdkCallError::HostEffectRefused(error) => return error.into(),
             crate::sdk_v1::SdkCallError::Protocol(error) => error,
         };
+        let usage = observation.1.borrow_mut().usage.observe(None);
+        let _ = observation.0.send(BridgeEvent::ProviderUsageObserved { session, usage });
         let classified = classify_prompt_dispatch_error(secrets.redact_json(&e.to_string()));
         match &classified {
             super::error::SendMessageError::AgentAuthenticationFailed { .. } => {
@@ -986,6 +1020,15 @@ pub(crate) async fn send_message_impl(
         }
         classified
     })?;
+
+    let usage = observation
+        .1
+        .borrow_mut()
+        .usage
+        .observe(response.usage.as_ref());
+    let _ = observation
+        .0
+        .send(BridgeEvent::ProviderUsageObserved { session, usage });
 
     if response.stop_reason == agent_client_protocol::schema::v1::StopReason::Cancelled {
         return Err(super::error::SendMessageError::SessionEnded {

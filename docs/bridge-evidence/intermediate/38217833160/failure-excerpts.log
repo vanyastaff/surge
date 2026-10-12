@@ -1,0 +1,60 @@
+2026-10-12T07:45:31.6322099Z         PASS [   1.580s] (1858/3938) surge-daemon::work_item_route_test corrupt_owned_startup_graph_payload_cannot_reuse_declared_hash
+2026-10-12T07:45:32.2762337Z         PASS [   1.764s] (1859/3938) surge-daemon::work_item_route_test corrupt_owned_startup_late_binding_after_terminal_keeps_ownership
+2026-10-12T07:45:32.3643557Z         FAIL [   2.432s] (1860/3938) surge-daemon::work_item_route_test completed_gate_route_kind_must_match_accepted_graph
+2026-10-12T07:45:32.3686498Z   stdout ───
+2026-10-12T07:45:32.3686968Z 
+2026-10-12T07:45:32.3687093Z     running 1 test
+2026-10-12T07:45:32.3687585Z     test completed_gate_route_kind_must_match_accepted_graph ... FAILED
+2026-10-12T07:45:32.3687964Z 
+2026-10-12T07:45:32.3688062Z     failures:
+2026-10-12T07:45:32.3688226Z 
+2026-10-12T07:45:32.3688323Z     failures:
+2026-10-12T07:45:32.3688624Z         completed_gate_route_kind_must_match_accepted_graph
+2026-10-12T07:45:32.3688918Z 
+2026-10-12T07:45:32.3689259Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 2.39s
+2026-10-12T07:45:32.3690054Z     
+2026-10-12T07:45:32.3690765Z   stderr ───
+2026-10-12T07:45:32.3737937Z 
+2026-10-12T07:45:32.3760068Z     thread 'completed_gate_route_kind_must_match_accepted_graph' (6760) panicked at crates\surge-daemon\tests\work_item_route_test.rs:4781:5:
+2026-10-12T07:45:32.3768597Z     assertion `left == right` failed
+2026-10-12T07:45:32.3777111Z       left: String("error")
+2026-10-12T07:45:32.3777795Z      right: "resolve_human_input_ok"
+2026-10-12T07:45:32.3779691Z     stack backtrace:
+2026-10-12T07:45:32.3790222Z        0: std::panicking::panic_handler
+2026-10-12T07:45:32.3811170Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T07:45:32.3862186Z        1: core::panicking::panic_fmt
+2026-10-12T07:45:32.3865727Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T07:45:32.3868226Z        2: core::panicking::assert_failed_inner
+2026-10-12T07:45:32.3892907Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:452
+2026-10-12T07:45:32.3907008Z        3: core::panicking::assert_failed<enum2$<serde_json::value::Value>,ref$<str$> >
+2026-10-12T07:45:32.3909667Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:407
+2026-10-12T07:45:32.3920856Z        4: work_item_route_test::pure_gate_suspension_fixture_deadline_in_home::async_fn$0
+2026-10-12T07:45:32.3921861Z                  at .\tests\work_item_route_test.rs:4781
+2026-10-12T07:45:32.3922468Z        5: work_item_route_test::pure_gate_suspension_fixture_deadline::async_fn$0
+2026-10-12T07:45:32.3923543Z                  at .\tests\work_item_route_test.rs:4394
+2026-10-12T07:45:32.3924136Z        6: work_item_route_test::completed_gate_route_kind_must_match_accepted_graph::async_block$0
+2026-10-12T07:45:32.3925761Z                  at .\tests\work_item_route_test.rs:4377
+2026-10-12T07:45:32.3927427Z        7: core::future::future::impl$1::poll<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > >
+2026-10-12T07:49:29.5756222Z         PASS [  21.013s] (3938/3938) surge-telegram::production_callbacks bot_api_failure_does_not_roll_back_accepted_engine_decision
+2026-10-12T07:49:29.5838551Z ────────────
+2026-10-12T07:49:29.5839386Z      Summary [ 413.837s] 3938 tests run: 3937 passed (2 slow), 1 failed, 55 skipped
+2026-10-12T07:49:29.5840301Z         FAIL [   2.432s] (1860/3938) surge-daemon::work_item_route_test completed_gate_route_kind_must_match_accepted_graph
+2026-10-12T07:49:29.6252611Z error: test run failed
+2026-10-12T07:49:30.7054926Z ##[error]Process completed with exit code 1.
+2026-10-12T07:49:30.8427249Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T07:49:30.8427812Z ./scripts/windows-native-probe.ps1
+2026-10-12T07:49:30.8496183Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T07:49:30.8496507Z env:
+2026-10-12T07:49:30.8496676Z   CARGO_TERM_COLOR: always
+2026-10-12T07:49:30.8496863Z   RUST_BACKTRACE: 1
+2026-10-12T07:49:30.8497099Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:49:30.8497466Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T07:49:30.8497829Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:49:30.8498147Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:49:30.8498459Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:49:30.8498764Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T07:49:30.8498977Z   CARGO_INCREMENTAL: 0
+2026-10-12T07:49:30.8499182Z ##[endgroup]
+2026-10-12T07:49:42.9946032Z    Compiling serde_core v1.0.228
+2026-10-12T07:49:42.9947475Z    Compiling syn v2.0.117
+2026-10-12T07:49:42.9951786Z    Compiling serde v1.0.228

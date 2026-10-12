@@ -1,0 +1,13 @@
+
+running 1 test
+test runs::storage::windows_ownership_tests::new_state_home_has_protected_current_user_acl_after_open ... stage1 profile selected: user=S-1-5-21-1643835476-1616584234-1346609752-1003 profile=C:\Users\surgeprobe46837744 owner=S-1-5-18 fixed-NTFS=true reparse=false owner-trusted=true
+stage1 profile fixture: owner-user=true status=ready
+stage1 route object: path=C:\Users\surgeprobe46837744\surge-ownership-DWBcCD owner=S-1-5-21-1643835476-1616584234-1346609752-1003 control=0x8004 sddl=O:S-1-5-21-1643835476-1616584234-1346609752-1003D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;S-1-5-21-1643835476-1616584234-1346609752-1003)
+stage1 route object: path=C:\Users\surgeprobe46837744 owner=S-1-5-18 control=0x9004 sddl=O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-1643835476-1616584234-1346609752-1003)(A;;0x100020;;;S-1-15-3-65536-599108337-2355189375-1353122160-3480128286-3345335107-485756383-4087318168-230526575)
+stage1 route object: path=C:\Users owner=S-1-5-18 control=0x9404 sddl=O:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;WD)(A;OICIIO;GXGR;;;WD)(A;;0x100021;;;S-1-15-3-65536-4045685566-1323397456-4055816110-285687253-194181-4019357623-1925838800-191844675)
+stage1 route object: path=C:\ owner=S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464 control=0x8404 sddl=O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:AI(A;;0x1000a1;;;S-1-15-3-65536-1888954469-739942743-1668119174-2468466756-4239452838-1296943325-355587736-700089176)(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)
+stage1 new-home protected-user-only=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.43s
+

@@ -1,0 +1,495 @@
+{
+  "revision": "ec0341a787a8f57a730184a9bcb4a98e135f23d6",
+  "status": "complete",
+  "sid": "S-1-5-21-1643835476-1616584234-1346609752-1003",
+  "binary_sha256": {
+    "surge-process": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+    "surge-persistence": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+    "surge-mcp": "ef41aaf5bb5a68821621a18013a0f50a660fa54cbf949f62773198af5a2b5dfc",
+    "surge-orchestrator": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e"
+  },
+  "inventory": [
+    "state_home::windows::native::tests::non_admin_ntfs_complete_flush_probe",
+    "runs::storage::windows_ownership_tests::new_state_home_has_protected_current_user_acl_after_open",
+    "runs::storage::windows_ownership_tests::derived_pool_retains_original_database_until_every_owner_drops",
+    "runs::storage::windows_ownership_tests::unsafe_existing_home_refuses_without_acl_or_byte_repair",
+    "state_home::tests::control_creation_fact_survives_empty_reopen_and_owns_removal",
+    "state_home::tests::run_reservation_is_exclusive_retains_both_directories_and_creates_no_sql",
+    "runs::connection::windows_tests::connection_owners_outlive_manager_and_close_wal_normally",
+    "runs::connection::windows_tests::failed_real_initializer_closes_before_releasing_namespace",
+    "runs::connection::windows_tests::busy_close_returns_owner_and_drop_is_fatal",
+    "state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects",
+    "state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal",
+    "state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target",
+    "state_home::creation_security_tests::first_observable_creation_has_private_security",
+    "state_home::control_lock_tests::standard_user_control_lock_and_payload_compatibility",
+    "windows_job::tests::native_launch_contains_immediate_descendants_and_observes_empty_job",
+    "windows_job::tests::native_leader_exit_settles_its_remaining_descendant",
+    "windows_job::tests::native_owner_death_kills_job_without_inherited_job_handles",
+    "windows_job::tests::native_job_refuses_collision_malformed_nonce_and_wrong_creation_identity",
+    "windows_job::tests::native_job_reopening_rejects_broad_acl_and_denied_access_without_claiming_absence",
+    "windows_job::tests::native_child_cannot_break_away_from_job",
+    "windows_job::tests::inherited_command_preserves_casefolded_overrides_removals_and_inherited_values",
+    "windows_job::tests::final_launch_admission_preserves_refusal_and_prevents_child_effect",
+    "work_items::tests::windows_public_start_freezes_once_replays_and_preserves_original_identity",
+    "work_items::start_preparation::secure_lock::windows_tests::private_task_ownership_preserves_stable_identity_and_last_arc_exclusion",
+    "work_items::start_preparation::secure_lock::windows_tests::existing_private_lock_read_grants_are_refused_without_acl_or_byte_repair",
+    "state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner",
+    "state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair",
+    "state_home::windows::namespace::private_objects::tests::optional_root_read_never_reclassifies_late_disappearance_as_missing",
+    "state_home::windows::namespace::tests::sidefile_observation_cooperates_with_delete_access_but_rejects_aliases",
+    "state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error",
+    "state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier",
+    "state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target",
+    "state_home::windows::namespace::private_objects::tests::independent_final_reader_completes_own_barriers_before_publisher_parent_flush",
+    "state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final",
+    "state_home::windows::namespace::private_objects::tests::killed_native_preparation_owner_releases_os_lock_without_changing_original_identity",
+    "work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority",
+    "work_items::owned_flow::tests::accepted_public_flow_replay_precedes_unavailable_private_storage",
+    "work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque",
+    "work_items::owned_flow::private_inputs::tests::established_corrupt_host_key_never_regenerates_or_authenticates",
+    "work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed",
+    "work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication",
+    "child_settlement::windows_tests::native_final_admission_refuses_after_preparation_without_spawning",
+    "engine::configured_route_pin::windows_key::tests::native_key_concurrent_publication_and_corruption_refusal",
+    "engine::configured_route_pin::windows_key::tests::native_source_bytes_change_route_and_final_directory_is_refused",
+    "engine::configured_route_pin::windows_key::tests::native_source_size_limit_is_typed_and_hmac_framing_is_unchanged",
+    "engine::configured_route_pin::windows_key::tests::native_source_allows_ancestor_junction_but_refuses_final_reparse",
+    "engine::configured_route_pin::windows_key::tests::native_existing_reparse_key_is_refused_without_target_mutation",
+    "engine::configured_route_pin::windows_key::tests::native_existing_hardlinked_key_is_refused_without_replacement"
+  ],
+  "results": [
+    {
+      "filter": "state_home::windows::native::tests::non_admin_ntfs_complete_flush_probe",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "01.stdout.log",
+      "stderr": "01.stderr.log"
+    },
+    {
+      "filter": "runs::storage::windows_ownership_tests::new_state_home_has_protected_current_user_acl_after_open",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "02.stdout.log",
+      "stderr": "02.stderr.log"
+    },
+    {
+      "filter": "runs::storage::windows_ownership_tests::derived_pool_retains_original_database_until_every_owner_drops",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "03.stdout.log",
+      "stderr": "03.stderr.log"
+    },
+    {
+      "filter": "runs::storage::windows_ownership_tests::unsafe_existing_home_refuses_without_acl_or_byte_repair",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "04.stdout.log",
+      "stderr": "04.stderr.log"
+    },
+    {
+      "filter": "state_home::tests::control_creation_fact_survives_empty_reopen_and_owns_removal",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "05.stdout.log",
+      "stderr": "05.stderr.log"
+    },
+    {
+      "filter": "state_home::tests::run_reservation_is_exclusive_retains_both_directories_and_creates_no_sql",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "06.stdout.log",
+      "stderr": "06.stderr.log"
+    },
+    {
+      "filter": "runs::connection::windows_tests::connection_owners_outlive_manager_and_close_wal_normally",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "07.stdout.log",
+      "stderr": "07.stderr.log"
+    },
+    {
+      "filter": "runs::connection::windows_tests::failed_real_initializer_closes_before_releasing_namespace",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "08.stdout.log",
+      "stderr": "08.stderr.log"
+    },
+    {
+      "filter": "runs::connection::windows_tests::busy_close_returns_owner_and_drop_is_fatal",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "09.stdout.log",
+      "stderr": "09.stderr.log"
+    },
+    {
+      "filter": "state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "10.stdout.log",
+      "stderr": "10.stderr.log"
+    },
+    {
+      "filter": "state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "11.stdout.log",
+      "stderr": "11.stderr.log"
+    },
+    {
+      "filter": "state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "12.stdout.log",
+      "stderr": "12.stderr.log"
+    },
+    {
+      "filter": "state_home::creation_security_tests::first_observable_creation_has_private_security",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "13.stdout.log",
+      "stderr": "13.stderr.log"
+    },
+    {
+      "filter": "state_home::control_lock_tests::standard_user_control_lock_and_payload_compatibility",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "14.stdout.log",
+      "stderr": "14.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_launch_contains_immediate_descendants_and_observes_empty_job",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "15.stdout.log",
+      "stderr": "15.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_leader_exit_settles_its_remaining_descendant",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "16.stdout.log",
+      "stderr": "16.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_owner_death_kills_job_without_inherited_job_handles",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "17.stdout.log",
+      "stderr": "17.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_job_refuses_collision_malformed_nonce_and_wrong_creation_identity",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "18.stdout.log",
+      "stderr": "18.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_job_reopening_rejects_broad_acl_and_denied_access_without_claiming_absence",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "19.stdout.log",
+      "stderr": "19.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::native_child_cannot_break_away_from_job",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "20.stdout.log",
+      "stderr": "20.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::inherited_command_preserves_casefolded_overrides_removals_and_inherited_values",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "21.stdout.log",
+      "stderr": "21.stderr.log"
+    },
+    {
+      "filter": "windows_job::tests::final_launch_admission_preserves_refusal_and_prevents_child_effect",
+      "binary": "surge-process",
+      "binary_sha256": "c98ed35a4c1dc504f2d612c6f33f233c1335c7a89adf27f4c9557d7aa1a16232",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "22.stdout.log",
+      "stderr": "22.stderr.log"
+    },
+    {
+      "filter": "work_items::tests::windows_public_start_freezes_once_replays_and_preserves_original_identity",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "23.stdout.log",
+      "stderr": "23.stderr.log"
+    },
+    {
+      "filter": "work_items::start_preparation::secure_lock::windows_tests::private_task_ownership_preserves_stable_identity_and_last_arc_exclusion",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "24.stdout.log",
+      "stderr": "24.stderr.log"
+    },
+    {
+      "filter": "work_items::start_preparation::secure_lock::windows_tests::existing_private_lock_read_grants_are_refused_without_acl_or_byte_repair",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "25.stdout.log",
+      "stderr": "25.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "26.stdout.log",
+      "stderr": "26.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "27.stdout.log",
+      "stderr": "27.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::optional_root_read_never_reclassifies_late_disappearance_as_missing",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "28.stdout.log",
+      "stderr": "28.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::tests::sidefile_observation_cooperates_with_delete_access_but_rejects_aliases",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "29.stdout.log",
+      "stderr": "29.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "30.stdout.log",
+      "stderr": "30.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "31.stdout.log",
+      "stderr": "31.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "32.stdout.log",
+      "stderr": "32.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::independent_final_reader_completes_own_barriers_before_publisher_parent_flush",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "33.stdout.log",
+      "stderr": "33.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "34.stdout.log",
+      "stderr": "34.stderr.log"
+    },
+    {
+      "filter": "state_home::windows::namespace::private_objects::tests::killed_native_preparation_owner_releases_os_lock_without_changing_original_identity",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "35.stdout.log",
+      "stderr": "35.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "36.stdout.log",
+      "stderr": "36.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::tests::accepted_public_flow_replay_precedes_unavailable_private_storage",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "37.stdout.log",
+      "stderr": "37.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "38.stdout.log",
+      "stderr": "38.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::private_inputs::tests::established_corrupt_host_key_never_regenerates_or_authenticates",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "39.stdout.log",
+      "stderr": "39.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "40.stdout.log",
+      "stderr": "40.stderr.log"
+    },
+    {
+      "filter": "work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication",
+      "binary": "surge-persistence",
+      "binary_sha256": "9c76a8b4a7ee037e297ade19a8d15401c22a779b36dc633cb48a38ef970cc2f1",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "41.stdout.log",
+      "stderr": "41.stderr.log"
+    },
+    {
+      "filter": "child_settlement::windows_tests::native_final_admission_refuses_after_preparation_without_spawning",
+      "binary": "surge-mcp",
+      "binary_sha256": "ef41aaf5bb5a68821621a18013a0f50a660fa54cbf949f62773198af5a2b5dfc",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "42.stdout.log",
+      "stderr": "42.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_key_concurrent_publication_and_corruption_refusal",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "43.stdout.log",
+      "stderr": "43.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_source_bytes_change_route_and_final_directory_is_refused",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "44.stdout.log",
+      "stderr": "44.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_source_size_limit_is_typed_and_hmac_framing_is_unchanged",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "45.stdout.log",
+      "stderr": "45.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_source_allows_ancestor_junction_but_refuses_final_reparse",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "46.stdout.log",
+      "stderr": "46.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_existing_reparse_key_is_refused_without_target_mutation",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "47.stdout.log",
+      "stderr": "47.stderr.log"
+    },
+    {
+      "filter": "engine::configured_route_pin::windows_key::tests::native_existing_hardlinked_key_is_refused_without_replacement",
+      "binary": "surge-orchestrator",
+      "binary_sha256": "d3d248efc7acd2373074e91f9166be33118e643fd04104bd69e4246e0117873e",
+      "exit_code": 0,
+      "status": "passed",
+      "stdout": "48.stdout.log",
+      "stderr": "48.stderr.log"
+    }
+  ]
+}

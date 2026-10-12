@@ -199,7 +199,12 @@ fn unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal() {
     std::fs::write(&wal, b"unsafe existing WAL sentinel").unwrap();
     install_dacl(&wal, "D:NO_ACCESS_CONTROL", true);
     let before = descriptor_text(&wal);
-    assert!(SqliteNamespaceOwner::standalone(&path).is_err());
+    assert!(matches!(
+        SqliteNamespaceOwner::standalone(&path),
+        Err(super::windows::native::NativeError::Sidefile { name, source })
+            if name == "probe.sqlite-wal"
+                && matches!(*source, super::windows::native::NativeError::Security(_))
+    ));
     assert_eq!(descriptor_text(&wal), before);
     assert_eq!(
         std::fs::read(&wal).unwrap(),

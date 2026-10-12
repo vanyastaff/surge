@@ -1,0 +1,11 @@
+
+running 1 test
+test windows_job::tests::native_leader_exit_settles_its_remaining_descendant ... ok
+
+successes:
+
+successes:
+    windows_job::tests::native_leader_exit_settles_its_remaining_descendant
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.12s
+

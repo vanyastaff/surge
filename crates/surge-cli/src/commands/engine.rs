@@ -980,18 +980,19 @@ mod tests {
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
-        let run = RunId::new();
+        let empty_run = RunId::new();
+        #[cfg(not(windows))]
         let db = home
             .path()
             .join("runs")
-            .join(run.to_string())
+            .join(empty_run.to_string())
             .join("events.sqlite");
         #[cfg(not(windows))]
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         #[cfg(windows)]
         let run_namespace = surge_persistence::RuntimeHomeOwner::prepare(home.path())
             .unwrap()
-            .reserve_run_directory(run)
+            .reserve_run_directory(empty_run)
             .unwrap();
         // Deterministic create_run window: file exists, migration and registry
         // publication have not happened. Inspection must not treat it as ready.
@@ -1005,10 +1006,17 @@ mod tests {
         #[cfg(not(windows))]
         drop(rusqlite::Connection::open(&db).unwrap());
         assert!(
-            !super::owned_startup_ready(&storage, home.path(), run)
+            !super::owned_startup_ready(&storage, home.path(), empty_run)
                 .await
                 .unwrap()
         );
+        // A distinct run lets create_run retain exclusive namespace creation.
+        let run = RunId::new();
+        let db = home
+            .path()
+            .join("runs")
+            .join(run.to_string())
+            .join("events.sqlite");
         let writer = storage.create_run(run, home.path(), None).await.unwrap();
         assert!(
             !super::owned_startup_ready(&storage, home.path(), run)

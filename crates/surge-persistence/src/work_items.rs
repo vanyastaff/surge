@@ -22,9 +22,27 @@ use std::fs::File;
 use std::path::PathBuf;
 use surge_core::{
     ContentHash, Graph, RunId,
+    execution_recovery::WorkItemExecutionControl,
     id::{WorkItemId, WorkItemProjectId},
     work_item::*,
 };
+
+#[derive(Clone, Copy)]
+struct ReconciliationObservation<'a> {
+    attempt: &'a WorkItemAttempt,
+    control: Option<&'a WorkItemExecutionControl>,
+}
+
+impl ReconciliationObservation<'_> {
+    fn matches(&self, conn: &Connection, current: &WorkItemAttempt) -> Result<bool> {
+        let control = control::read_control(conn, current.run, None)?;
+        Ok(
+            serde_json::to_value(current)? == serde_json::to_value(self.attempt)?
+                && control.as_ref() == self.control
+                && control::reconciliation_state_eligible(current.state, control.as_ref()),
+        )
+    }
+}
 
 /// Task mutation or durable storage failure.
 #[derive(Debug, thiserror::Error)]
@@ -773,8 +791,33 @@ impl WorkItemStore {
             detail(tx, id)?,
         ))))
     }
+    /// Claim only the unchanged eligible attempt and latest control observed by reconciliation.
+    /// A superseded or ineligible observation returns `None` without changing its claimant token.
+    pub fn claim_reconciliation(
+        &self,
+        observed: &WorkItemAttempt,
+        observed_control: Option<&WorkItemExecutionControl>,
+    ) -> Result<Option<WorkItemLaunchClaim>> {
+        self.claim_matching(
+            observed.run,
+            Some(ReconciliationObservation {
+                attempt: observed,
+                control: observed_control,
+            }),
+        )
+    }
+
     /// Obtain a stable OS lock and a SQL claimant token for exactly this generation.
     pub fn claim(&self, run: RunId) -> Result<WorkItemLaunchClaim> {
+        self.claim_matching(run, None)?
+            .ok_or_else(|| WorkItemError::Conflict("launch observation changed".into()))
+    }
+
+    fn claim_matching(
+        &self,
+        run: RunId,
+        observation: Option<ReconciliationObservation<'_>>,
+    ) -> Result<Option<WorkItemLaunchClaim>> {
         {
             let conn = self.pool.get()?;
             let value = attempt(&conn, run)?;
@@ -784,9 +827,43 @@ impl WorkItemStore {
                 .is_some()
             {
                 drop(conn);
-                return self.claim_owned_flow(run);
+                return self.claim_owned_flow_matching(run, observation);
             }
         }
+        let lock = self.legacy_launch_lock(run)?;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = attempt(&tx, run)?;
+        if let Some(observation) = observation
+            && !observation.matches(&tx, &value)?
+        {
+            return Ok(None);
+        }
+        let item = record(&tx, value.item)?;
+        if !value.state.is_active()
+            || item.active_run != Some(run)
+            || item.generation != value.binding.generation
+        {
+            return Err(WorkItemError::Conflict(
+                "reservation ownership changed".into(),
+            ));
+        }
+        let token = RunId::new().to_string();
+        tx.execute(
+            "UPDATE work_item_attempts SET claim_token=? WHERE run=? AND generation=?",
+            params![token, run.to_string(), item.generation],
+        )?;
+        tx.commit()?;
+        let claim = WorkItemLaunchClaim {
+            lock,
+            run,
+            token,
+            binding: value.binding,
+        };
+        claim.verify_lock()?;
+        Ok(Some(claim))
+    }
+    fn legacy_launch_lock(&self, run: RunId) -> Result<LaunchLock> {
         #[cfg(windows)]
         let lock = {
             let owner =
@@ -829,32 +906,7 @@ impl WorkItemStore {
                 path,
             }
         };
-        let mut conn = self.pool.get()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let value = attempt(&tx, run)?;
-        let item = record(&tx, value.item)?;
-        if !value.state.is_active()
-            || item.active_run != Some(run)
-            || item.generation != value.binding.generation
-        {
-            return Err(WorkItemError::Conflict(
-                "reservation ownership changed".into(),
-            ));
-        }
-        let token = RunId::new().to_string();
-        tx.execute(
-            "UPDATE work_item_attempts SET claim_token=? WHERE run=? AND generation=?",
-            params![token, run.to_string(), item.generation],
-        )?;
-        tx.commit()?;
-        let claim = WorkItemLaunchClaim {
-            lock,
-            run,
-            token,
-            binding: value.binding,
-        };
-        claim.verify_lock()?;
-        Ok(claim)
+        Ok(lock)
     }
     /// Validate host ownership at every engine boundary, never caller configuration.
     pub fn validate_claim(&self, claim: &WorkItemLaunchClaim) -> Result<WorkItemAttempt> {
@@ -1162,7 +1214,35 @@ impl WorkItemStore {
         let conn = self.pool.get()?;
         match observed {
             Ok((seq, input, output, cost, unpriced, unknown)) => {
-                conn.execute("UPDATE work_item_attempts SET usage_seq=?,input_tokens=input_tokens+?,output_tokens=output_tokens+?,known_cost_usd=known_cost_usd+?,usage_unpriced=?,usage_unknown=? WHERE run=? AND usage_seq=?",params![seq,input,output,cost,unpriced,unknown,run.to_string(),value.usage_seq])?;
+                let totals = value
+                    .input_tokens
+                    .checked_add(input)
+                    .zip(value.output_tokens.checked_add(output))
+                    .and_then(|(input, output)| {
+                        Some((i64::try_from(input).ok()?, i64::try_from(output).ok()?))
+                    });
+                let (input_total, output_total, unpriced, unknown) = if let Some((input, output)) =
+                    totals
+                {
+                    (input, output, unpriced, unknown)
+                } else {
+                    tracing::warn!(%run, "token projection exceeds SQLite integer range; raw evidence retained");
+                    (
+                        i64::try_from(value.input_tokens).map_err(|_| {
+                            WorkItemError::Invalid(
+                                "stored input token subtotal exceeds SQLite integer range".into(),
+                            )
+                        })?,
+                        i64::try_from(value.output_tokens).map_err(|_| {
+                            WorkItemError::Invalid(
+                                "stored output token subtotal exceeds SQLite integer range".into(),
+                            )
+                        })?,
+                        true,
+                        true,
+                    )
+                };
+                conn.execute("UPDATE work_item_attempts SET usage_seq=?,input_tokens=?,output_tokens=?,known_cost_usd=known_cost_usd+?,usage_unpriced=?,usage_unknown=? WHERE run=? AND usage_seq=?",params![seq,input_total,output_total,cost,unpriced,unknown,run.to_string(),value.usage_seq])?;
                 Ok(())
             },
             Err(error) => {
@@ -1212,8 +1292,8 @@ impl WorkItemStore {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut seq = value.usage_seq;
-        let mut input = 0;
-        let mut output = 0;
+        let mut input = 0u64;
+        let mut output = 0u64;
         let mut cost = 0.0;
         let mut unpriced: bool = self.pool.get()?.query_row(
             "SELECT usage_unpriced FROM work_item_attempts WHERE run=?",
@@ -1234,21 +1314,28 @@ impl WorkItemStore {
                     "usage history has no trusted origin".into(),
                 ));
             }
-            if let surge_core::EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
-                cost_usd,
-                ..
-            } = payload
-            {
-                input += u64::from(prompt_tokens);
-                output += u64::from(output_tokens);
+            if let Some((_, prompt_tokens, output_tokens, cost_usd)) = payload.token_delta() {
+                input = input
+                    .checked_add(prompt_tokens)
+                    .ok_or_else(|| WorkItemError::Invalid("input token total overflow".into()))?;
+                output = output
+                    .checked_add(output_tokens)
+                    .ok_or_else(|| WorkItemError::Invalid("output token total overflow".into()))?;
                 if let Some(amount) = cost_usd.filter(|amount| amount.is_finite() && *amount >= 0.0)
                 {
                     cost += amount;
                 } else {
                     unpriced = true;
                 }
+            }
+            if matches!(
+                payload,
+                surge_core::EventPayload::ProviderUsageObserved {
+                    usage: surge_core::usage::TokenUsageObservation::Unavailable { .. },
+                    ..
+                }
+            ) {
+                unpriced = true;
             }
             seq = *next;
         }
@@ -1421,6 +1508,88 @@ mod tests {
             Err(WorkItemError::Conflict(_))
         ));
     }
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windows_public_start_freezes_once_replays_and_preserves_original_identity() {
+        let (home, (storage, detail)) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let original = {
+            let preparation = store.begin_start_preparation(&command).unwrap();
+            assert_eq!(preparation.workspace(), &detail.item.workspace);
+            assert!(!preparation.workspace_prepared());
+            assert!(matches!(
+                store.begin_start_preparation(&command),
+                Err(WorkItemError::Busy)
+            ));
+            store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT lock_identity FROM work_item_start_preparations WHERE item=?",
+                    [detail.item.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let preparation = store.begin_start_preparation(&command).unwrap();
+        let retained: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT lock_identity FROM work_item_start_preparations WHERE item=?",
+                [detail.item.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, original);
+        let result = preparation
+            .finalize(&command, "native frozen configuration")
+            .unwrap();
+        let WorkItemResult::Attempt(attempt) = &result else {
+            panic!("attempt");
+        };
+        assert_eq!(attempt.ordinal, 1);
+        assert_eq!(attempt.config, "native frozen configuration");
+        let lock_namespace = home.path().join("work-items/preparation-locks");
+        std::fs::rename(
+            &lock_namespace,
+            home.path().join("unavailable-preparation-locks"),
+        )
+        .unwrap();
+        let replay = store
+            .mutate(&command, None, Some("must never replace"), "host", 3)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+        assert!(
+            !lock_namespace.exists(),
+            "exact replay must not recreate private ownership"
+        );
+        let count: u64 = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_attempts WHERE item=?",
+                [detail.item.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(matches!(
+            store.begin_start_preparation(&command),
+            Err(WorkItemError::Conflict(_))
+        ));
+        drop(store);
+        drop(storage);
+        home.close().unwrap();
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_lifecycle_busy_discussion_drift_and_drop_release() {
@@ -2340,6 +2509,111 @@ mod usage_tests {
         assert_eq!(usage.input_tokens, 607);
         assert_eq!(usage.known_cost_usd, 150.0);
         assert_eq!(usage.unknown_runs, 1);
+        use surge_core::usage::{
+            ContextUsage, SessionCost, TokenUsageCounters, TokenUsageObservation,
+            UsageUnavailableReason,
+        };
+        let counters = |input, output| TokenUsageCounters {
+            total_tokens: input + output,
+            input_tokens: input,
+            output_tokens: output,
+            thought_tokens: Some(1),
+            cached_read_tokens: Some(4),
+            cached_write_tokens: None,
+        };
+        let evidence = vec![
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(20, 10),
+                    delta: counters(20, 10),
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(20, 10),
+                    delta: counters(0, 0),
+                },
+            },
+            EventPayload::ContextUsageObserved {
+                session,
+                usage: ContextUsage {
+                    used: 900,
+                    size: 1000,
+                    cost: Some(SessionCost {
+                        amount: 2.0,
+                        currency: "EUR".into(),
+                    }),
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Unavailable {
+                    reason: UsageUnavailableReason::CounterRegression,
+                    reported: Some(counters(1, 1)),
+                },
+            },
+        ];
+        writer
+            .append_events(
+                evidence
+                    .iter()
+                    .cloned()
+                    .map(VersionedEventPayload::new)
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        let usage = store.show(detail.item.id).unwrap().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (627, 921));
+        assert_eq!(usage.known_cost_usd, 150.0);
+        assert_eq!(usage.unknown_runs, 1);
+        let persisted = writer
+            .reader()
+            .read_events(crate::runs::EventSeq(304)..crate::runs::EventSeq(u64::MAX))
+            .await
+            .unwrap();
+        let raw: Vec<_> = persisted
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        assert_eq!(raw, evidence);
+        let summary = writer.reader().cost_summary().await.unwrap();
+        assert_eq!((summary.tokens_in, summary.tokens_out), (627, 921));
+        assert!(summary.usage_unknown && summary.cost_unknown);
+        assert_eq!(summary.cost_usd, 150.0);
+        let wide = EventPayload::ProviderUsageObserved {
+            session,
+            usage: TokenUsageObservation::Reported {
+                cumulative: counters(1u64 << 63, 1),
+                delta: counters(1u64 << 63, 1),
+            },
+        };
+        writer
+            .append_event(VersionedEventPayload::new(wide.clone()))
+            .await
+            .unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        let usage = store.show(detail.item.id).unwrap().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (627, 921));
+        assert_eq!(usage.unknown_runs, 1);
+        let summary = writer.reader().cost_summary().await.unwrap();
+        assert_eq!(summary.tokens_in, (1u64 << 63) + 627);
+        assert_eq!(summary.tokens_out, 922);
+        assert_eq!(
+            writer
+                .reader()
+                .read_event(crate::runs::EventSeq(308))
+                .await
+                .unwrap()
+                .unwrap()
+                .payload
+                .payload,
+            wide
+        );
         writer.close().await.unwrap();
         drop(store);
         drop(storage);
@@ -2356,4 +2630,72 @@ pub fn close_owned_flow_refusal_admission() {
 /// Join actual refusal delivery threads after runtime teardown; unavailable journals retain ownership.
 pub fn join_owned_flow_refusal_owners() {
     owned_flow::refusal_owner::join_all();
+}
+
+/// Failure to capture a stable declared source without private-storage ACL requirements.
+#[cfg(windows)]
+#[derive(Debug, thiserror::Error)]
+pub enum DeclaredSourceError {
+    /// Native opening or source type was refused.
+    #[error("declared source unavailable")]
+    Unavailable,
+    /// Source exceeds the caller's bounded input contract.
+    #[error("declared source exceeds size limit")]
+    TooLarge,
+    /// The retained object or named source changed during capture.
+    #[error("declared source changed during capture")]
+    Changed,
+}
+/// Read a declared Windows source with retained native identity and final no-reparse checks.
+/// Public source files do not inherit the private runtime-home ACL requirement.
+///
+/// # Errors
+/// Refuses unavailable, oversized, substituted or concurrently changed sources.
+#[cfg(windows)]
+pub fn read_stable_declared_source(
+    path: &std::path::Path,
+    limit: u64,
+) -> std::result::Result<Vec<u8>, DeclaredSourceError> {
+    use std::io::Read;
+    let parent = path.parent().ok_or(DeclaredSourceError::Unavailable)?;
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
+    };
+    let name = path.file_name().ok_or(DeclaredSourceError::Unavailable)?;
+    // Resolve ancestor junctions and parent traversal without following the final source.
+    // The resulting native chain is retained, and the declared parent is checked again below.
+    let canonical = std::fs::canonicalize(parent).map_err(|_| DeclaredSourceError::Unavailable)?;
+    let (_, mut source) = start_preparation::secure_lock::windows::Source::capture_bounded(
+        &canonical,
+        std::path::Path::new(name),
+        u64::MAX,
+    )
+    .map_err(|_| DeclaredSourceError::Unavailable)?;
+    let size = source
+        .file
+        .metadata()
+        .map_err(|_| DeclaredSourceError::Unavailable)?
+        .len();
+    if size > limit {
+        return Err(DeclaredSourceError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    source
+        .file
+        .by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| DeclaredSourceError::Unavailable)?;
+    if bytes.len() as u64 > limit {
+        return Err(DeclaredSourceError::TooLarge);
+    }
+    source.verify().map_err(|_| DeclaredSourceError::Changed)?;
+    if bytes.len() as u64 != size
+        || std::fs::canonicalize(parent).map_err(|_| DeclaredSourceError::Changed)? != canonical
+    {
+        return Err(DeclaredSourceError::Changed);
+    }
+    Ok(bytes)
 }

@@ -4,27 +4,21 @@
 //! system into the persistence layer, with correct session → subtask → spec
 //! aggregation and cost calculations.
 
-use std::path::PathBuf;
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+
+use runtime_home_fixture::FixtureHome;
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_persistence::aggregator::{SessionContext, UsageAggregator};
 use surge_persistence::store::Store;
 use tokio::sync::broadcast;
 
-/// Helper to create a unique temp database file
-fn temp_db_path(test_name: &str) -> PathBuf {
-    let temp_dir = std::env::temp_dir();
-    temp_dir.join(format!(
-        "surge-test-{}-{}.db",
-        test_name,
-        std::process::id()
-    ))
-}
-
 /// Test that TokensConsumed events are aggregated into the store end-to-end.
 #[tokio::test]
 async fn test_token_tracking_end_to_end() {
-    let db_path = temp_db_path("end_to_end");
+    let home = FixtureHome::new().unwrap();
+    let db_path = home.path().join("usage.sqlite");
 
     // 1. Create store
     let store = Store::open(&db_path).expect("Failed to create store");
@@ -36,7 +30,7 @@ async fn test_token_tracking_end_to_end() {
     let (tx, rx) = broadcast::channel(100);
 
     // 4. Start background listener
-    let _handle = aggregator.start_listening(rx);
+    let handle = aggregator.start_listening(rx);
 
     // 5. Register session with context
     let session_id = "test-session-1".to_string();
@@ -70,8 +64,12 @@ async fn test_token_tracking_end_to_end() {
 
     tx.send(event).expect("Failed to send event");
 
-    // 7. Wait for aggregation (small delay for async processing)
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // 7. Close intake and wait until all buffered events have been persisted.
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("Aggregator did not drain events")
+        .expect("Aggregator task failed");
 
     // 8. Verify data in store by opening a new connection to the same DB file
     let verify_store = Store::open(&db_path).expect("Failed to open store for verification");
@@ -147,14 +145,16 @@ async fn test_token_tracking_end_to_end() {
         spec.estimated_cost_usd
     );
 
-    // Cleanup
-    let _ = std::fs::remove_file(&db_path);
+    drop(verify_store);
+    drop(aggregator);
+    home.close().unwrap();
 }
 
 /// Test that sessions without subtask_id are handled correctly.
 #[tokio::test]
 async fn test_session_without_subtask() {
-    let db_path = temp_db_path("no_subtask");
+    let home = FixtureHome::new().unwrap();
+    let db_path = home.path().join("usage.sqlite");
 
     // 1. Create store
     let store = Store::open(&db_path).expect("Failed to create store");
@@ -166,7 +166,7 @@ async fn test_session_without_subtask() {
     let (tx, rx) = broadcast::channel(100);
 
     // 4. Start background listener
-    let _handle = aggregator.start_listening(rx);
+    let handle = aggregator.start_listening(rx);
 
     // 5. Register session WITHOUT subtask_id
     let session_id = "test-session-no-subtask".to_string();
@@ -199,8 +199,12 @@ async fn test_session_without_subtask() {
 
     tx.send(event).expect("Failed to send event");
 
-    // 7. Wait for aggregation
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // 7. Close intake and wait until all buffered events have been persisted.
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("Aggregator did not drain events")
+        .expect("Aggregator task failed");
 
     // 8. Verify data in store
     let verify_store = Store::open(&db_path).expect("Failed to open store for verification");
@@ -250,14 +254,16 @@ async fn test_session_without_subtask() {
         spec.estimated_cost_usd
     );
 
-    // Cleanup
-    let _ = std::fs::remove_file(&db_path);
+    drop(verify_store);
+    drop(aggregator);
+    home.close().unwrap();
 }
 
 /// Test that multiple sessions accumulate costs correctly.
 #[tokio::test]
 async fn test_cost_accumulation() {
-    let db_path = temp_db_path("accumulation");
+    let home = FixtureHome::new().unwrap();
+    let db_path = home.path().join("usage.sqlite");
 
     // 1. Create store
     let store = Store::open(&db_path).expect("Failed to create store");
@@ -269,7 +275,7 @@ async fn test_cost_accumulation() {
     let (tx, rx) = broadcast::channel(100);
 
     // 4. Start background listener
-    let _handle = aggregator.start_listening(rx);
+    let handle = aggregator.start_listening(rx);
 
     // 5. Same spec, same subtask, multiple sessions
     let spec_id = SpecId::new();
@@ -326,8 +332,12 @@ async fn test_cost_accumulation() {
     };
     tx.send(event_2).expect("Failed to send event 2");
 
-    // 6. Wait for aggregation
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // 6. Close intake and wait until all buffered events have been persisted.
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("Aggregator did not drain events")
+        .expect("Aggregator task failed");
 
     // 7. Verify accumulated data
     let verify_store = Store::open(&db_path).expect("Failed to open store for verification");
@@ -382,14 +392,16 @@ async fn test_cost_accumulation() {
         spec.estimated_cost_usd
     );
 
-    // Cleanup
-    let _ = std::fs::remove_file(&db_path);
+    drop(verify_store);
+    drop(aggregator);
+    home.close().unwrap();
 }
 
 /// Test that cost calculations are preserved through aggregation.
 #[tokio::test]
 async fn test_cost_calculation_preservation() {
-    let db_path = temp_db_path("cost_calc");
+    let home = FixtureHome::new().unwrap();
+    let db_path = home.path().join("usage.sqlite");
 
     // 1. Create store
     let store = Store::open(&db_path).expect("Failed to create store");
@@ -401,7 +413,7 @@ async fn test_cost_calculation_preservation() {
     let (tx, rx) = broadcast::channel(100);
 
     // 4. Start background listener
-    let _handle = aggregator.start_listening(rx);
+    let handle = aggregator.start_listening(rx);
 
     // 5. Register session with specific cost
     let session_id = "cost-test-session".to_string();
@@ -443,8 +455,12 @@ async fn test_cost_calculation_preservation() {
 
     tx.send(event).expect("Failed to send event");
 
-    // 7. Wait for aggregation
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // 7. Close intake and wait until all buffered events have been persisted.
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("Aggregator did not drain events")
+        .expect("Aggregator task failed");
 
     // 8. Verify cost is calculated correctly using pricing model
     let verify_store = Store::open(&db_path).expect("Failed to open store for verification");
@@ -488,8 +504,9 @@ async fn test_cost_calculation_preservation() {
         spec.estimated_cost_usd
     );
 
-    // Cleanup
-    let _ = std::fs::remove_file(&db_path);
+    drop(verify_store);
+    drop(aggregator);
+    home.close().unwrap();
 }
 
 /// Test that QaVerdictReceived events are properly emitted for APPROVED verdict.

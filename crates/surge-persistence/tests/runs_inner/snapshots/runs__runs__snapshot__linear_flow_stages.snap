@@ -12,5 +12,6 @@ expression: stages
   cost_usd: 0
   known_cost_usd: ~
   cost_unknown: false
+  tokens_unknown: false
   tokens_in: 0
   tokens_out: 0

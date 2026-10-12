@@ -153,12 +153,17 @@ async fn reconcile_tasks(
         }
         // Finish this actual page, including its blocking SQL owner, before
         // acknowledging cooperative shutdown. Hard abort is not settlement.
+        let started = std::time::Instant::now();
+        tracing::debug!(?cursor, "task reconciliation page began");
         match crate::work_items::reconcile_page(tracking, admission, broadcast, cursor.as_deref())
             .await
         {
-            Ok(next) => cursor = next,
+            Ok(next) => {
+                tracing::debug!(?cursor, next_cursor=?next, elapsed_ms=started.elapsed().as_millis(), "task reconciliation page completed");
+                cursor = next;
+            },
             Err(error) => {
-                tracing::warn!(%error, "task reconciliation page failed");
+                tracing::warn!(%error, ?cursor, elapsed_ms=started.elapsed().as_millis(), "task reconciliation page failed");
                 cursor = None;
             },
         }

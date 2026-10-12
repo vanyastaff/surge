@@ -516,7 +516,12 @@ impl MockAgent {
         }
         if env::args().any(|arg| arg == "--stall-prompt") {
             self.cancel_prompt.cancelled().await;
-            return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+            let response = acp::PromptResponse::new(acp::StopReason::Cancelled);
+            return Ok(if self.usage_on {
+                response.usage(acp::Usage::new(100, 80, 20))
+            } else {
+                response
+            });
         }
         if env::args().any(|arg| arg == "--exit-during-prompt") {
             std::process::exit(17);
@@ -654,11 +659,28 @@ impl MockAgent {
             },
         }
 
-        // Emit a `UsageUpdate` notification so the bridge's token tracker can
-        // observe a `TokenUsage` event when `extract_usage` is updated to read
-        // it (Task 10.6 scope).  Also attach `Usage` to the `PromptResponse`
-        // for symmetry — Bridge consumers that read response-attached usage
-        // see the same numbers.
+        // Optional per-prompt fixture separates context occupancy from response spend.
+        let usage_fixture = if let Some(path) = argument_value("--usage-script") {
+            let data = std::fs::read(path).map_err(|_| acp::Error::internal_error())?;
+            let entries: Vec<serde_json::Value> =
+                serde_json::from_slice(&data).map_err(|_| acp::Error::internal_error())?;
+            entries.get((count - 1) as usize).cloned()
+        } else {
+            None
+        };
+        if let Some(context) = usage_fixture
+            .as_ref()
+            .and_then(|entry| entry.get("context"))
+            && !context.is_null()
+        {
+            let context: acp::UsageUpdate = serde_json::from_value(context.clone())
+                .map_err(|_| acp::Error::internal_error())?;
+            self.send_notification(acp::SessionNotification::new(
+                req.session_id.clone(),
+                acp::SessionUpdate::UsageUpdate(context),
+            ))
+            .await?;
+        }
         if self.usage_on {
             self.send_notification(acp::SessionNotification::new(
                 req.session_id.clone(),
@@ -678,6 +700,15 @@ impl MockAgent {
         if self.usage_on {
             // `unstable_end_turn_token_usage` feature is enabled in the workspace.
             resp = resp.usage(acp::Usage::new(100, 80, 20));
+        }
+
+        if let Some(entry) = usage_fixture {
+            resp.usage = entry
+                .get("usage")
+                .filter(|value| !value.is_null())
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()
+                .map_err(|_| acp::Error::internal_error())?;
         }
 
         Ok(resp)

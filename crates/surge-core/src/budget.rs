@@ -246,6 +246,7 @@ mod tests {
             tokens_out,
             cache_hits: 0,
             cost_usd,
+            ..CostSummary::default()
         }
     }
 

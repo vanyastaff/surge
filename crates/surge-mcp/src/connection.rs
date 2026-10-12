@@ -354,24 +354,29 @@ impl McpServerConnection {
         // the stderr-capturing builder.
         let (transport, stderr) = match &self.config.transport {
             McpTransportConfig::Stdio { command, args, env } => {
-                let mut tokio_cmd = tokio::process::Command::new(command);
-                tokio_cmd.args(args);
-                // Hygiene: do not leak the full host environment to an
-                // arbitrary MCP child. Start from a minimal essential
-                // set, then layer the declared env on top.
-                tokio_cmd.env_clear();
-                for (k, v) in minimal_child_env() {
-                    tokio_cmd.env(k, v);
-                }
-                for (k, v) in env {
-                    tokio_cmd.env(k, v);
-                }
-                if let Some(dir) = &self.cwd {
-                    tokio_cmd.current_dir(dir);
-                }
-                #[cfg(unix)]
-                tokio_cmd.process_group(0);
-                ObservedTransport::spawn(tokio_cmd, self.writer_observer.clone(), &self.config.name)
+                let tokio_cmd = sanitized_child_command(command, args, env, self.cwd.as_deref());
+                // This command has an explicitly cleared and rebuilt environment.
+                // Preserve that exact environment in the native atomic job launch.
+                #[cfg(windows)]
+                let launch = surge_process::windows_job::LaunchSpec {
+                    program: tokio_cmd.as_std().get_program().to_owned(),
+                    args: tokio_cmd
+                        .as_std()
+                        .get_args()
+                        .map(ToOwned::to_owned)
+                        .collect(),
+                    environment: tokio_cmd
+                        .as_std()
+                        .get_envs()
+                        .filter_map(|(key, value)| {
+                            value.map(|value| (key.to_owned(), value.to_owned()))
+                        })
+                        .collect(),
+                    current_dir: tokio_cmd.as_std().get_current_dir().map(ToOwned::to_owned),
+                };
+                #[cfg(not(windows))]
+                let launch = tokio_cmd;
+                ObservedTransport::spawn(launch, self.writer_observer.clone(), &self.config.name)
                     .map_err(|error| match error {
                         crate::child_settlement::ChildStartError::EffectRefused => {
                             McpError::EffectRefused {
@@ -414,7 +419,7 @@ impl McpServerConnection {
         }
         if let (Some(observer), Some(writer)) = (&self.writer_observer, writer)
             && observer
-                .child_started(writer, Some(transport.id()))
+                .child_started_observed(writer, Some(transport.id()), transport.job_name())
                 .await
                 .is_err()
         {
@@ -857,6 +862,26 @@ impl StderrRecords {
             tracing::warn!(%error, "MCP stderr capture write failed");
         }
     }
+}
+
+/// Build the complete child environment before the immediately preceding spawn fence.
+fn sanitized_child_command(
+    command: &Path,
+    args: &[String],
+    env: &std::collections::HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> tokio::process::Command {
+    let mut child = tokio::process::Command::new(command);
+    child.args(args);
+    child.env_clear();
+    child.envs(minimal_child_env());
+    child.envs(env);
+    if let Some(dir) = cwd {
+        child.current_dir(dir);
+    }
+    #[cfg(unix)]
+    child.process_group(0);
+    child
 }
 
 /// A minimal, secret-free environment for spawned MCP children. Avoids

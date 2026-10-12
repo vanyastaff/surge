@@ -41,6 +41,11 @@ pub trait BridgeFacade: Send + Sync {
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>;
 
     /// Send a user-role message to an open session.
+    ///
+    /// For a dispatched prompt, publish its final provider-usage observation
+    /// (including unavailable evidence) before this future resolves. Forwarding
+    /// decorators must preserve this ordering so consumers can drain usage after
+    /// completion without waiting for a later notification.
     async fn send_message(
         &self,
         session: SessionId,

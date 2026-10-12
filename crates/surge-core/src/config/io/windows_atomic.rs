@@ -195,6 +195,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn successive_publications_allow_readers_before_publishers_close() {
+        use std::io::{Read, Seek};
+
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        std::fs::write(&destination, b"original").unwrap();
+        let mut original_reader = std::fs::File::open(&destination).unwrap();
+        let mut first = OwnedTemporary::create(directory.path()).unwrap();
+        first.file.write_all(b"first complete config").unwrap();
+        first.file.sync_all().unwrap();
+        rename_retained(&first.file, &destination).unwrap();
+        first.state = TemporaryState::Published;
+        let mut first_reader = std::fs::File::open(&destination).unwrap();
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"first complete config"
+        );
+
+        let mut second = OwnedTemporary::create(directory.path()).unwrap();
+        second.file.write_all(b"second complete config").unwrap();
+        second.file.sync_all().unwrap();
+        rename_retained(&second.file, &destination).unwrap();
+        second.state = TemporaryState::Published;
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"second complete config"
+        );
+        let mut retained = String::new();
+        original_reader.read_to_string(&mut retained).unwrap();
+        assert_eq!(retained, "original");
+        retained.clear();
+        first_reader.read_to_string(&mut retained).unwrap();
+        assert_eq!(retained, "first complete config");
+        drop(first);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"second complete config"
+        );
+        drop(second);
+        first_reader.rewind().unwrap();
+        retained.clear();
+        first_reader.read_to_string(&mut retained).unwrap();
+        assert_eq!(retained, "first complete config");
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"second complete config"
+        );
+        drop(original_reader);
+        drop(first_reader);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn cleanup_follows_owned_object_and_preserves_replaced_temporary_name() {
         let directory = tempfile::tempdir().unwrap();
         let mut temporary = OwnedTemporary::create(directory.path()).unwrap();

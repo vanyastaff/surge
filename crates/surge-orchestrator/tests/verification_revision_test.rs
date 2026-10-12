@@ -897,5 +897,7 @@ async fn superseded_accepted_requirements_cannot_reuse_a_still_current_historica
         page.entries[0].accepted_revision_relation,
         AcceptedRevisionRelation::Superseded
     );
+    // The store retains its own registry pool beyond the Storage facade.
+    drop(store);
     f.close().await;
 }

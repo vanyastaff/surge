@@ -34,7 +34,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │
 ├── crates/                          # Workspace members (dependencies flow downward)
 │   ├── surge-core/                  # Leaf: graph, profile, event, sandbox, validation types. No I/O.
-│   ├── surge-process/               # Shared std-only protected owner panic boundary
+│   ├── surge-process/               # Protected owner panic boundary and native Windows Job ownership
 │   ├── surge-acp/                   # ACP bridge, agent pool, registry, discovery, mock agent
 │   ├── surge-orchestrator/          # Engine: legacy spec pipeline + graph executor
 │   ├── surge-persistence/           # SQLite stores, event log, materialized views, memory
@@ -54,6 +54,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 ├── docs/                            # Project documentation
 │   ├── ARCHITECTURE.md              # Canonical architecture document
 │   ├── conventions/                 # Generated artifact contracts, examples, validator guidance
+│   ├── agents/                      # Engineering skill tracker, triage labels and domain-doc rules
 │   └── README.md
 │
 ├── .ai-factory/                     # AI Factory context (this run)
@@ -97,7 +98,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-core/src/work_item/flow_inputs.rs` | Public frozen MCP manifests and opaque private-object references; structural validation does not grant runtime authority. |
 | `crates/surge-core/src/execution_recovery.rs` | Validated provider session identity, opening metadata and recoverable execution contracts. |
 | `crates/surge-core/src/execution_recovery/gate_commit.rs` | Validated human-decision occurrence, response/effect hashes and journal-derived gate commit records. |
-| `crates/surge-acp/src/process_evidence.rs` | Read-only host process identity and writer-liveness evidence, with Linux/macOS implementations. |
+| `crates/surge-acp/src/process_evidence.rs` | Host process identity and writer-liveness evidence; Windows named Job authentication lives in `process_evidence/windows.rs`. |
 | `crates/surge-acp/src/quota_observation.rs` | Typed subscription quota evidence; distinguishes unsupported probes, unknown availability and actual rate-limit observations. |
 | `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
 | `crates/surge-persistence/src/work_items/start_preparation.rs` | Exclusive host Start preparation lease, immutable snapshot fences and atomic reservation finalization; private `secure_lock.rs` owns descriptor-checked per-item OS locks. |
@@ -116,8 +117,11 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/commands/task.rs` | `surge task` controls routed to the durable daemon owner. |
 | `crates/surge-git/src/checkpoint.rs` | Immutable Git snapshots of stage-boundary working files, preserving the user index and HEAD. |
 | `crates/surge-process/src/owner_panic.rs` | Shared once-installed panic hook and fatal protected ownership scope. |
+| `crates/surge-process/src/windows_job.rs` | Windows process launch with atomic Job assignment, retained child settlement and authenticated Job reopening. |
+| `crates/surge-persistence/src/state_home/windows/namespace/private_objects.rs` | Retained Windows private preparation objects, protected publication, reads and enumeration. |
 | `scripts/test-support/runtime_home.rs` | Shared test-only retained runtime homes; callers settle actual writers, tasks and pools before explicit cleanup. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
+| `crates/surge-core/src/usage.rs` | Exact provider token reports, accepted deltas, unavailable evidence and separate context occupancy/currency contracts. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-ui/src/project_init.rs` | Empty-folder desktop project initialization: Git base commit and ignored local runtime configuration. |
 | `crates/surge-ui/src/work_items.rs` | Desktop task cache, project-scoped daemon queries and immutable operation retries. |

@@ -20,8 +20,20 @@ pub(crate) enum NativeError {
     Security(&'static str),
     #[error("native object open failed with {0:?}")]
     Open(NTSTATUS),
+    #[error("SQLite sidefile {name:?} observation failed: {source}")]
+    Sidefile {
+        name: std::ffi::OsString,
+        source: Box<Self>,
+    },
     #[error("native filesystem I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("native private handle close failed; consumed handle ownership is uncertain: {0}")]
+    CloseUncertain(windows::core::Error),
+    #[error("native operation failed: {primary}; cleanup also failed: {cleanup}")]
+    Cleanup {
+        primary: Box<Self>,
+        cleanup: Box<Self>,
+    },
 }
 pub(super) type NativeResult<T> = Result<T, NativeError>;
 

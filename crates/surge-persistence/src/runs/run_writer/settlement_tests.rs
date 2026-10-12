@@ -231,6 +231,14 @@ async fn actor_loss_is_closed_running_and_seal_still_joins_failure() {
     writer.flush().await.unwrap();
     let mut feed = writer.event_feed();
     writer.writer_join.as_ref().unwrap().abort();
+    // Abort requests cancellation; observe actual actor loss before offering a
+    // seal command, otherwise a still-running actor can win that race.
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), feed.changed())
+            .await
+            .unwrap(),
+        Err(FeedLifecycleError::WriterLost)
+    );
     let closed = writer.seal_for_read_drain().await;
     assert!(
         matches!(closed,Err(CloseError::ReceiptAndActor{actor,..}) if matches!(*actor,CloseError::JoinFailed(_)))
