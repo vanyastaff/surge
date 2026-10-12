@@ -1229,13 +1229,37 @@ async fn quota_dispatch_in_home(
                     .iter()
                     .rev()
                     .take(32)
-                    .map(|event| (event.seq, event.payload.payload().discriminant_str()))
+                    .map(|event| {
+                        (
+                            event.seq,
+                            event.payload.payload().discriminant_str(),
+                            event.timestamp_ms,
+                        )
+                    })
                     .collect::<Vec<_>>()
             },
             _ => Vec::new(),
         };
+        let terminal_progress = if finished.is_err() {
+            let active =
+                tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs())
+                    .await
+                    .map(|runs| {
+                        runs.into_iter()
+                            .map(|run| (run.run_id, run.status))
+                            .collect::<Vec<_>>()
+                    });
+            format!(
+                "active={active:?}; server_finished={}; quota_errors={}; fallback_closes={}",
+                server.is_finished(),
+                bridge.quota_errors.load(Ordering::SeqCst),
+                bridge.b_closes.load(Ordering::SeqCst),
+            )
+        } else {
+            String::new()
+        };
         let launch_evidence = format!(
-            "accepted={:?}/{:?}; durable={:?}/{:?}; journal_tail={journal_tail:?}; wire_counts={}/{}",
+            "accepted={:?}/{:?}; durable={:?}/{:?}; journal_tail={journal_tail:?}; wire_counts={}/{}; {terminal_progress}",
             next.state,
             next.diagnostic,
             durable.state,

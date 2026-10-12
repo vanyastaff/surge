@@ -785,7 +785,7 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         continue;
                     },
-                    Err(_) => panic!("unexpected initial journal inspection error"),
+                    Err(error) => panic!("unexpected initial journal inspection error: {error:?}"),
                 };
                 if let RunDatabaseInspection::Present { events } = history.database
                     && initial_mcp_evidence_ready(
