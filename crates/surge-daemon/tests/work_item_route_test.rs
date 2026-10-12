@@ -855,7 +855,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
             if bridge.last_prompt().await.is_some() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
