@@ -102,8 +102,16 @@ try {
         'state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner',
         'state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair',
         'state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error',
+        'state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier',
+        'state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target',
+        'state_home::windows::namespace::private_objects::tests::independent_final_reader_completes_own_barriers_before_publisher_parent_flush',
+        'state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final',
+        'state_home::windows::namespace::private_objects::tests::killed_native_preparation_owner_releases_os_lock_without_changing_original_identity',
         'work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority',
+        'work_items::owned_flow::tests::accepted_public_flow_replay_precedes_unavailable_private_storage',
         'work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque',
+        'work_items::owned_flow::private_inputs::tests::established_corrupt_host_key_never_regenerates_or_authenticates',
+        'work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed',
         'work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication'
     )
     foreach ($filter in $privateCases) {
@@ -143,8 +151,14 @@ try {
         if ($output -notmatch '(?m)^running 1 test\s*$' -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored;') {
             throw "Native probe did not report exactly one passed test: $($case.Filter)"
         }
-        if ($case.Native -and $output -notmatch ('(?m)^test ' + [regex]::Escape($case.Filter) + ' \.\.\. ok\s*$')) {
-            throw "Native probe exact named success absent: $($case.Filter)"
+        # Child OS stdout bypasses libtest capture and may interrupt the '... ok'
+        # line. --show-output also lists every passed test by its exact full name.
+        if ($case.Native) {
+            $escapedFilter = [regex]::Escape($case.Filter)
+            if ($output -notmatch ('(?m)^test ' + $escapedFilter + ' \.\.\.') -or
+                $output -notmatch ('(?m)^    ' + $escapedFilter + '\s*$')) {
+                throw "Native probe exact named success absent: $($case.Filter)"
+            }
         }
         if ($process.ExitCode -ne 0) { throw "Native probe failed with exit code $($process.ExitCode)" }
         foreach ($receipt in $case.Receipts) {
