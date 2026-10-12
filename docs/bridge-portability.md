@@ -120,3 +120,25 @@ SHA-256 values were verified against the manifest after copying.
 | macOS CI | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos-ci/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544365) | bridge complete: 383 passed, 4 inventory ignored |
 | Linux | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/linux/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544362) | bridge complete: 383 passed, 4 inventory ignored |
 | Windows | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/windows/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544341) | bridge complete: 382 passed, 4 inventory ignored |
+
+## Broader CI outcome for the initial revision
+
+Run [38192988110](https://github.com/vanyastaff/surge/actions/runs/38192988110)
+completed with overall `failure`. The retained [workflow/job status JSON](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/workflow-status.json)
+records a successful native bridge evidence step on all three operating systems;
+subsequent workspace suites failed. These results establish the #7 bridge coverage
+at the selected SHA, not successful verification of the whole workspace.
+
+| Broader workspace suite | Passed | Failed | Skipped |
+|---|---:|---:|---:|
+| Linux | 4084 | 7 | 36 |
+| macOS | 3858 | 5 | 37 |
+| Windows | 3733 | 67 | 53 |
+
+Investigation found recovery/continuation and gate-identity fixture failures on
+Unix. Windows also exposed unsupported private Start preparation in quota fixtures,
+artifact setup before run creation, temporary runtime-home/handle settlement,
+duplicate exclusive reservation and unresolved MCP readiness failures. These are
+broader suite failures; this ledger does not claim Windows workspace repairs are
+complete. Follow-up implementation revisions require their own three-platform
+receipts before replacing the selected source revision above.
