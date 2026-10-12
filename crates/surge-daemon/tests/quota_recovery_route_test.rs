@@ -33,6 +33,12 @@ use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
 use surge_persistence::runs::Storage;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
+
+// A normal run opens and closes two actual ACP subprocesses, then durably
+// checkpoints its route. Native Windows CI completed this path in about 7s;
+// reserve bounded scheduling margin for that work without changing crash cuts.
+const NORMAL_START_COMPLETION_TIMEOUT: Duration = Duration::from_secs(15);
+
 struct ObservedBridge {
     bridge: AcpBridge,
     quota_errors: AtomicUsize,
@@ -979,7 +985,7 @@ async fn quota_dispatch_in_home(
         .unwrap();
     }
     bridge.primary_continue.notify_one();
-    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+    let completed = tokio::time::timeout(NORMAL_START_COMPLETION_TIMEOUT, async {
         loop {
             let inspected = storage.inspect_run(attempt.run).await.unwrap();
             if let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
@@ -1176,7 +1182,7 @@ async fn quota_dispatch_in_home(
             "accepted ordinary Start was rejected before execution: {:?}",
             next.diagnostic,
         );
-        let finished = tokio::time::timeout(Duration::from_secs(5), async {
+        let finished = tokio::time::timeout(NORMAL_START_COMPLETION_TIMEOUT, async {
             loop {
                 let journal = storage.inspect_run(next.run).await.unwrap();
                 if let surge_persistence::runs::inspection::RunDatabaseInspection::Present {
