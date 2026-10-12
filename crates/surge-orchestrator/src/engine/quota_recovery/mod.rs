@@ -554,7 +554,7 @@ mod tests {
                 CapacityStatus::Known(window) if window.is_exhausted()),
             "the 429 is observed into the ledger before the decision"
         );
-        assert!(fx.rotations().await.is_empty());
+        assert_eq!(fx.rotations().await, Vec::<(String, String)>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -645,7 +645,7 @@ mod tests {
             matches!(outcome, AfterRateLimit::Park(_)),
             "got {outcome:?}"
         );
-        assert!(fx.rotations().await.is_empty());
+        assert_eq!(fx.rotations().await, Vec::<(String, String)>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -668,7 +668,7 @@ mod tests {
             matches!(outcome, AfterRateLimit::Park(_)),
             "got {outcome:?}"
         );
-        assert!(fx.rotations().await.is_empty());
+        assert_eq!(fx.rotations().await, Vec::<(String, String)>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -702,7 +702,7 @@ mod tests {
             matches!(outcome, AfterRateLimit::Surface),
             "a requested task suspension owns the 429: {outcome:?}"
         );
-        assert!(fx.rotations().await.is_empty());
+        assert_eq!(fx.rotations().await, Vec::<(String, String)>::new());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
