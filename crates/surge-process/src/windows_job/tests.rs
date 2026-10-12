@@ -53,11 +53,27 @@ fn wait_file(path: &std::path::Path) -> String {
 
 fn settle(child: &mut NativeChild) -> ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(15);
+    settle_before(child, deadline)
+}
+
+fn settle_before(child: &mut NativeChild, deadline: Instant) -> ExitStatus {
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
         }
         assert!(Instant::now() < deadline, "native job failed to settle");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_process_before(process: &OwnedHandle, deadline: Instant) {
+    // Job accounting and the independently retained process object are separate
+    // observations. Wait for actual termination without extending settlement's deadline.
+    while !wait_state(raw(process)).unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "descendant process failed to terminate"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -116,10 +132,11 @@ fn native_launch_contains_immediate_descendants_and_observes_empty_job() {
     let job = Job::open(child.job_name()).unwrap().unwrap();
     assert!(job.active_processes().unwrap() >= 2);
     let process = process_handle(descendant);
+    let deadline = Instant::now() + Duration::from_secs(15);
     child.kill().unwrap();
-    settle(&mut child);
+    settle_before(&mut child, deadline);
+    wait_process_before(&process, deadline);
     assert_eq!(job.active_processes().unwrap(), 0);
-    assert!(wait_state(raw(&process)).unwrap());
     if standard_user_probe {
         println!("SURGE_NATIVE_STANDARD_USER_PASS");
     }
@@ -175,9 +192,10 @@ fn native_leader_exit_settles_its_remaining_descendant() {
     let descendant: u32 = wait_file(&root.path().join("descendant")).parse().unwrap();
     let process = process_handle(descendant);
     let job = Job::open(child.job_name()).unwrap().unwrap();
-    assert!(settle(&mut child).success());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    assert!(settle_before(&mut child, deadline).success());
+    wait_process_before(&process, deadline);
     assert_eq!(job.active_processes().unwrap(), 0);
-    assert!(wait_state(raw(&process)).unwrap());
 }
 
 #[test]
