@@ -58,10 +58,17 @@ Decision order (first match wins):
 |---|-----------|--------|
 | 1 | Run already active in this engine process | `SkipAlreadyActive` (idempotency) |
 | 2 | Registry status `Completed`/`Failed`/`Aborted` | `SkipTerminal` |
-| 3 | Event log already reached a terminal event | `ReconcileTerminal { failed }` — update the registry to match |
+| 3a | Event log verdict is a **conflict** (two or more terminal claims) | `FlagTerminalConflict { first_seq, second_seq }` — operator notice; never resumed, reconciled or appended to |
+| 3b | Event log verdict is **one** terminal event | `ReconcileTerminal { kind }` — set the registry to exactly that kind (`Completed`, `Failed` or `Aborted`) |
 | 4 | Worktree directory is gone | `MarkFailedWorktreeLost` |
 | 5 | No new events for > 24h (`DEFAULT_STUCK_THRESHOLD`) | `FlagStuck { idle_ms }` — human-attention card, no auto-resume |
 | 6 | otherwise | `Resume` |
+
+The verdict is `surge_core::run_verdict::TerminalVerdict` over the run's log
+(#95): the same rule every surface uses. A conflict means the outcome is
+unconfirmed, so recovery neither picks one claim nor appends a third.
+Reconciliation maps the verdict kind 1:1; before #95 an aborted log was
+reconciled to `Completed`.
 
 The log-terminal check (3) deliberately precedes the worktree check (4): a
 run that genuinely completed has its worktree cleaned up, so an absent
@@ -92,7 +99,7 @@ were ("which stage were they at?").
 ## Telemetry
 
 Every pass logs a `surge.recovery` summary: `scanned`, `resumed`,
-`reconciled`, `failed_worktree`, `flagged_stuck`, `skipped`, `errors`. Each
+`reconciled`, `failed_worktree`, `flagged_stuck`, `flagged_conflict`, `skipped`, `errors`. Each
 resumed run logs its prior status and stage.
 
 ## CLI

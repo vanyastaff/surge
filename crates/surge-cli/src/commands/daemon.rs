@@ -138,13 +138,14 @@ async fn recover(dry_run: bool) -> Result<()> {
                 resume_pending += 1;
                 "resume (pending daemon start)".to_string()
             },
-            RecoveryAction::ReconcileTerminal { failed } => {
-                if *failed {
-                    "reconcile → failed".to_string()
-                } else {
-                    "reconcile → completed".to_string()
-                }
-            },
+            RecoveryAction::ReconcileTerminal { kind } => format!(
+                "reconcile → {}",
+                surge_daemon::recovery::reconciled_status(*kind).as_str()
+            ),
+            RecoveryAction::FlagTerminalConflict {
+                first_seq,
+                second_seq,
+            } => format!("conflicting terminal history (seq {first_seq}, {second_seq})"),
             RecoveryAction::MarkFailedWorktreeLost => "mark failed (worktree lost)".to_string(),
             RecoveryAction::FlagStuck { idle_ms } => {
                 format!("flag stuck (idle ~{}h)", idle_ms / 3_600_000)
@@ -188,12 +189,8 @@ async fn recover(dry_run: bool) -> Result<()> {
                     .map_err(|e| anyhow!("mark {} failed: {e}", d.run_id))?;
                     applied += 1;
                 },
-                RecoveryAction::ReconcileTerminal { failed } => {
-                    let status = if *failed {
-                        surge_core::RunStatus::Failed
-                    } else {
-                        surge_core::RunStatus::Completed
-                    };
+                RecoveryAction::ReconcileTerminal { kind } => {
+                    let status = surge_daemon::recovery::reconciled_status(*kind);
                     storage
                         .set_run_status(&d.run_id, status, Some(now_ms))
                         .await
