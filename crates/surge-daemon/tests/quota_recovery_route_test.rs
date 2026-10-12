@@ -1002,10 +1002,45 @@ async fn quota_dispatch_in_home(
     })
     .await;
     let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
+    let terminal_progress = if completed.is_err() {
+        let journal =
+            tokio::time::timeout(Duration::from_secs(1), storage.inspect_run(attempt.run))
+                .await
+                .map(|result| {
+                    result.map(|inspection| match inspection.database {
+                        surge_persistence::runs::inspection::RunDatabaseInspection::Present {
+                            events,
+                        } => events
+                            .into_iter()
+                            .rev()
+                            .take(32)
+                            .map(|event| (event.seq, event.kind, event.timestamp_ms))
+                            .collect::<Vec<_>>(),
+                        surge_persistence::runs::inspection::RunDatabaseInspection::Absent => {
+                            Vec::new()
+                        },
+                    })
+                });
+        let active = tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs())
+            .await
+            .map(|runs| {
+                runs.into_iter()
+                    .map(|run| (run.run_id, run.status))
+                    .collect::<Vec<_>>()
+            });
+        format!(
+            "journal(last32rev)={journal:?}; active={active:?}; server_finished={}; quota_errors={}; fallback_closes={}",
+            server.is_finished(),
+            bridge.quota_errors.load(Ordering::SeqCst),
+            bridge.b_closes.load(Ordering::SeqCst),
+        )
+    } else {
+        String::new()
+    };
     if check_predispatch {
         assert!(
             completed.is_ok(),
-            "real typed primary seed and fallback must complete"
+            "real typed primary seed and fallback must complete; {diagnostic}; {terminal_progress}"
         );
         if source_changed {
             let conn = storage.acquire_registry_conn().unwrap();
@@ -3731,7 +3766,9 @@ async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home
         .get_run(&run)
         .await
         .map(|row| row.map(|row| row.status));
-    let control = store.execution_control(run);
+    let control = store
+        .execution_control(run)
+        .map(|value| value.map(|control| (control.state, control.generation)));
     let capacity = store
         .execution_control(run)
         .and_then(|control| {
