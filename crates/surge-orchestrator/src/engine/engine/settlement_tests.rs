@@ -379,3 +379,103 @@ async fn registration_retirement(
         replacement_cancelled,
     }
 }
+
+#[test]
+fn active_run_registration_precedes_exact_gate_waiter_readiness() {
+    let home = runtime_home::FixtureHome::new().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let bridge = Arc::new(AcpBridge::with_defaults().unwrap());
+        let engine = Engine::new(
+            bridge.clone(),
+            storage.clone(),
+            Arc::new(UnusedDispatcher),
+            EngineConfig::default(),
+        );
+        let run = RunId::new();
+        let node = surge_core::NodeKey::try_from("approval").unwrap();
+        let request = surge_core::id::GateRequestId::new();
+        assert!(
+            !engine
+                .gate_waiter_is_ready_for_test(run, &node, request)
+                .await
+        );
+        let registration = engine.register_active_run(run).await;
+        assert!(
+            !engine
+                .gate_waiter_is_ready_for_test(run, &node, request)
+                .await
+        );
+        assert!(
+            matches!(
+                engine
+                    .resolve_gate_input(
+                        run,
+                        node.clone(),
+                        request,
+                        serde_json::json!({"outcome":"approve"})
+                    )
+                    .await,
+                Err(EngineError::StaleGateRequest)
+            ),
+            "active registration alone cannot receive an original gate answer"
+        );
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        registration.gate_resolutions.lock().await.insert(
+            node.clone(),
+            crate::engine::stage::human_gate::PendingGate {
+                recorder: writer.event_recorder(),
+                allowed_outcomes: vec![surge_core::OutcomeKey::try_from("approve").unwrap()],
+                allow_freetext: false,
+                request_id: request,
+                sender,
+            },
+        );
+        assert!(
+            engine
+                .gate_waiter_is_ready_for_test(run, &node, request)
+                .await
+        );
+        assert!(
+            !engine
+                .gate_waiter_is_ready_for_test(run, &node, surge_core::id::GateRequestId::new())
+                .await
+        );
+        assert!(
+            !engine
+                .gate_waiter_is_ready_for_test(
+                    run,
+                    &surge_core::NodeKey::try_from("different").unwrap(),
+                    request
+                )
+                .await
+        );
+        registration.gate_resolutions.lock().await.remove(&node);
+        assert!(
+            !engine
+                .gate_waiter_is_ready_for_test(run, &node, request)
+                .await
+        );
+        engine.runs.write().await.remove(&run);
+        drop(registration);
+        writer.close().await.unwrap();
+        drop(engine);
+        Arc::try_unwrap(bridge)
+            .ok()
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+        drop(storage);
+    });
+    drop(runtime);
+    home.close().unwrap();
+}

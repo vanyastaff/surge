@@ -1510,6 +1510,26 @@ impl Engine {
         }
     }
 
+    /// Observe an exact live gate waiter without submitting or mutating an answer.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn gate_waiter_is_ready_for_test(
+        &self,
+        run_id: RunId,
+        node: &surge_core::NodeKey,
+        request: surge_core::id::GateRequestId,
+    ) -> bool {
+        let runs = self.runs.read().await;
+        let Some(active) = runs.get(&run_id) else {
+            return false;
+        };
+        active
+            .gate_resolutions
+            .lock()
+            .await
+            .get(node)
+            .is_some_and(|pending| pending.request_id == request)
+    }
+
     /// Consume only the exact registered gate; never fall back to run-only input.
     pub async fn resolve_gate_input(
         &self,

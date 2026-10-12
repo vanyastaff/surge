@@ -4778,10 +4778,31 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         gate_request_id: surge_core::id::GateRequestId::from_event_call_id(call_id).unwrap(),
         response: json!({"outcome":"approve","comment":"same gate"}),
     };
-    assert_eq!(
-        request_frame(&socket, serde_json::to_value(answer).unwrap()).await["method"],
-        "resolve_human_input_ok"
-    );
+    let request_id = surge_core::id::GateRequestId::from_event_call_id(call_id).unwrap();
+    if !answer_while_suspended {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while !engine
+                .gate_waiter_is_ready_for_test(attempt.run, node, request_id)
+                .await
+            {
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'",
+                        [],
+                        |row| row.get::<_, u64>(0)
+                    )
+                    .unwrap(),
+                    1,
+                    "Continue must restore the original gate rather than replace it"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Continue must install the exact original gate waiter");
+    }
+    let response = request_frame(&socket, serde_json::to_value(answer).unwrap()).await;
+    assert_eq!(response["method"], "resolve_human_input_ok", "{response}");
     tokio::time::timeout(Duration::from_secs(8), async {
         while storage
             .work_items()
