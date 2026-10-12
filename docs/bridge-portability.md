@@ -77,13 +77,36 @@ of these trigger-to-observation assertions.
 
 ## Native evidence ledger
 
-The selected source SHA and links to receipts are recorded here after execution.
-Documentation can be committed afterward; its commit is distinct from the tested
-source revision. Linux and Windows remain pending until matching native receipts
-exist.
+Selected source revision: `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4`.
+The macOS receipt was produced locally on Darwin 27.0.0 arm64 with Rust/Cargo
+1.98.1 and cargo-nextest 0.9.145, starting at 2026-10-12 01:25:56 UTC. It is local
+native evidence, not a CI run (`job_url` is null). HEAD was identical and the working
+tree clean before and after execution. The documentation commit follows the tested
+source revision and does not change the identity of that evidence.
+
+The inventory contains **387 tests: 383 passed and 4 ignored**. JUnit contains
+383 executed test cases, with zero failures and zero skips; all seven required
+coverage tests passed. The four ignored inventory rows, including the isolated
+subprocess helper, are listed in the manifest and do not count as executed cases.
+Linux and Windows remain pending for this same SHA; no older CI result substitutes
+for either native receipt.
+
+The exact runner invocation was:
+
+```sh
+CARGO_INCREMENTAL=0 python3 scripts/bridge_portability.py --output /tmp/surge-bridge-portability-7f93714-macos
+```
+
+The [manifest](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/manifest.json)
+contains the exact build/list/run commands, native target, mock-path environment
+overrides and elapsed times. Byte-preserved [inventory](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/inventory.stdout.log),
+[JUnit](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/junit.xml)
+and [nextest log](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/tests.stderr.log)
+are retained alongside every command's separate stdout/stderr logs. All 21 artifact
+SHA-256 values were verified against the manifest after copying.
 
 | Native platform | Source SHA | Evidence | Status |
 |---|---|---|---|
-| macOS | pending | pending | pending |
-| Linux | pending | pending | pending |
-| Windows | pending | pending | pending |
+| macOS | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Local native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/manifest.json) | complete: 383 passed, 4 inventory ignored |
+| Linux | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | pending | pending |
+| Windows | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | pending | pending |

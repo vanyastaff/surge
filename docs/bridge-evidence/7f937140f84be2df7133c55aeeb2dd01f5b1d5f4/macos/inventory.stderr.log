@@ -1,0 +1,23 @@
+   Compiling num-traits v0.2.19
+   Compiling wait-timeout v0.2.1
+   Compiling ucd-trie v0.1.7
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.8.0
+   Compiling rand_xorshift v0.4.0
+   Compiling console v0.16.3
+   Compiling unarray v0.1.4
+   Compiling similar v2.7.0
+   Compiling pest v2.8.6
+   Compiling rusty-fork v0.3.1
+   Compiling bit-set v0.8.0
+   Compiling chrono v0.4.44
+   Compiling proptest v1.11.0
+   Compiling insta v1.47.2
+   Compiling schemars v1.2.1
+   Compiling serde_with v3.24.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling agent-client-protocol v2.2.0
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.34s

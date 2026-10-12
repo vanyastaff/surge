@@ -1,0 +1,389 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+────────────
+ Nextest run ID 9e812ddc-3ce4-4520-b429-73e48f177a98 with nextest profile: bridge-portability
+    Starting 383 tests across 34 binaries (4 tests skipped)
+        PASS [   0.016s] (  1/383) surge-acp agent_env::tests::empty_source_falls_back_to_default
+        PASS [   0.016s] (  2/383) surge-acp agent_env::tests::missing_optional_source_is_omitted_not_failed
+        PASS [   0.016s] (  3/383) surge-acp agent_env::tests::missing_required_source_is_a_typed_error_naming_var_and_agent
+        PASS [   0.020s] (  4/383) surge-acp agent_env::tests::injected_values_never_appear_in_the_error
+        PASS [   0.020s] (  5/383) surge-acp agent_env::tests::injection_reads_the_source_variable_at_spawn_time
+        PASS [   0.021s] (  6/383) surge-acp agent_env::tests::literal_resolves_verbatim
+        PASS [   0.022s] (  7/383) surge-acp agent_env::tests::default_fills_a_missing_source
+        PASS [   0.016s] (  8/383) surge-acp bridge::client::tests::permission_selection_uses_kind_not_misleading_id
+        PASS [   0.021s] (  9/383) surge-acp bridge::acp_bridge::tests::drop_without_shutdown_does_not_deadlock
+        PASS [   0.016s] ( 10/383) surge-acp bridge::client::tests::request_permission_allow_returns_allow_option
+        PASS [   0.019s] ( 11/383) surge-acp bridge::client::tests::permission_selection_never_invents_ids_or_persistent_grants
+        PASS [   0.026s] ( 12/383) surge-acp bridge::acp_bridge::tests::spawn_then_shutdown_clean
+        PASS [   0.033s] ( 13/383) surge-acp bridge::acp_bridge::tests::open_session_returns_skeleton_error
+        PASS [   0.014s] ( 14/383) surge-acp bridge::error::tests::bridge_error_is_send_sync
+        PASS [   0.014s] ( 15/383) surge-acp bridge::event::tests::outcome_reported_serde_round_trip
+        PASS [   0.017s] ( 16/383) surge-acp bridge::error::tests::open_no_outcomes_renders
+        PASS [   0.019s] ( 17/383) surge-acp bridge::error::tests::close_graceful_timeout_renders_with_killed_flag
+        PASS [   0.015s] ( 18/383) surge-acp bridge::event::tests::session_end_reason_serde_round_trip
+        PASS [   0.014s] ( 19/383) surge-acp bridge::facade_smoke::acp_bridge_impls_facade
+        PASS [   0.065s] ( 20/383) surge-acp agent_env::tests::literal_that_looks_like_a_key_is_flagged
+        PASS [   0.017s] ( 21/383) surge-acp bridge::event::tests::tool_result_payload_unsupported_round_trip
+        PASS [   0.015s] ( 22/383) surge-acp bridge::sandbox::tests::always_allow_boxed_clone_round_trip
+        PASS [   0.015s] ( 23/383) surge-acp bridge::sandbox::tests::always_allow_visibility_and_call_both_allow
+        PASS [   0.017s] ( 24/383) surge-acp bridge::sandbox::tests::deny_list_denies_named_mcp_server
+        PASS [   0.018s] ( 25/383) surge-acp bridge::sandbox::tests::deny_list_denies_named_tool
+        PASS [   0.014s] ( 26/383) surge-acp bridge::sandbox_resolver::tests::custom_mode_with_empty_allowlists_returns_custom_invalid
+        PASS [   0.016s] ( 27/383) surge-acp bridge::sandbox::tests::deny_list_visibility_and_allows_tool_parity
+        PASS [   0.013s] ( 28/383) surge-acp bridge::sandbox_resolver::tests::doctor_context_does_not_relax_unsupported_combo
+        PASS [   0.019s] ( 29/383) surge-acp bridge::sandbox_resolver::tests::custom_mode_short_circuits_matrix_lookup
+        PASS [   0.020s] ( 30/383) surge-acp bridge::sandbox_resolver::tests::missing_row_is_unsupported_combo
+        PASS [   0.018s] ( 31/383) surge-acp bridge::sandbox_resolver::tests::unverified_row_accepted_in_doctor_context
+        PASS [   0.017s] ( 32/383) surge-acp bridge::sandbox_resolver::tests::unverified_row_refuses_in_run_context
+        PASS [   0.078s] ( 33/383) surge-acp bridge::acp_bridge::tests::subscribe_yields_no_events_on_idle_bridge
+        PASS [   0.017s] ( 34/383) surge-acp bridge::session::tests::rejects_duplicate_tool_names
+        PASS [   0.018s] ( 35/383) surge-acp bridge::sandbox_resolver::tests::verified_row_returns_flags
+        PASS [   0.021s] ( 36/383) surge-acp bridge::session::tests::accepts_minimal_valid_config
+        PASS [   0.018s] ( 37/383) surge-acp bridge::session::tests::rejects_empty_outcomes
+        PASS [   0.021s] ( 38/383) surge-acp bridge::session::tests::rejects_oversized_bindings
+        PASS [   0.021s] ( 39/383) surge-acp bridge::session::tests::rejects_reserved_tool_name
+        PASS [   0.021s] ( 40/383) surge-acp bridge::tokens::tests::context_cost_preserves_currency_and_rejects_invalid_amounts
+        PASS [   0.020s] ( 41/383) surge-acp bridge::tokens::tests::optional_regression_does_not_charge_old_tokens_on_recovery
+        PASS [   0.018s] ( 42/383) surge-acp bridge::tokens::tests::reports_cumulative_deltas_without_resetting_on_missing_or_regression
+        PASS [   0.021s] ( 43/383) surge-acp bridge::tokens::tests::optional_counters_remain_unknown_when_missing_new_or_regressed
+        PASS [   0.020s] ( 44/383) surge-acp bridge::tokens::tests::restored_provider_history_is_not_charged_as_new_spend
+        PASS [   0.021s] ( 45/383) surge-acp bridge::tokens::tests::sdk_keeps_required_spend_when_optional_counter_is_malformed
+        PASS [   0.024s] ( 46/383) surge-acp bridge::tokens::tests::sdk_drops_malformed_usage_and_tracker_preserves_unknown
+        PASS [   0.024s] ( 47/383) surge-acp bridge::tools::tests::build_injected_tools_includes_human_input_when_enabled
+        PASS [   0.023s] ( 48/383) surge-acp bridge::tools::tests::build_injected_tools_skips_human_input_when_disabled
+        PASS [   0.025s] ( 49/383) surge-acp bridge::tools::tests::mcp_category_returns_id
+        PASS [   0.027s] ( 50/383) surge-acp bridge::tools::tests::report_stage_outcome_includes_dynamic_enum
+        PASS [   0.023s] ( 51/383) surge-acp bridge::tools::tests::report_stage_outcome_is_marked_injected
+        PASS [   0.017s] ( 52/383) surge-acp bridge::tools::tests::request_human_input_is_static_shape
+        PASS [   0.020s] ( 53/383) surge-acp bridge::worker::tests::build_agent_command_sets_resolved_env_on_the_child
+        PASS [   0.023s] ( 54/383) surge-acp bridge::worker::tests::classify_prompt_error_401_wins_over_rate_limit_vocabulary
+        PASS [   0.076s] ( 55/383) surge-acp bridge::session::tests::stage_descriptor_diagnostics_hide_environment_values
+        PASS [   0.023s] ( 56/383) surge-acp bridge::worker::tests::classify_prompt_error_bare_retry_after_prose_without_rate_limit_keyword_is_not_recognized
+        PASS [   0.022s] ( 57/383) surge-acp bridge::worker::tests::classify_prompt_error_captured_claude_limit
+        PASS [   0.022s] ( 58/383) surge-acp bridge::worker::tests::classify_prompt_error_captured_codex_usage_limit
+        PASS [   0.021s] ( 59/383) surge-acp bridge::worker::tests::classify_prompt_error_keeps_non_auth_as_bridge_error
+        PASS [   0.023s] ( 60/383) surge-acp bridge::worker::tests::classify_prompt_error_maps_unsupported_model_to_its_own_variant
+        PASS [   0.025s] ( 61/383) surge-acp bridge::worker::tests::classify_prompt_error_maps_401_to_agent_auth_failed
+        PASS [   0.025s] ( 62/383) surge-acp bridge::worker::tests::classify_prompt_error_rate_limit_shape_measurement
+        PASS [   0.022s] ( 63/383) surge-acp bridge::worker::tests::claude_kind_injects_acp_flag_before_extra_args
+        PASS [   0.018s] ( 64/383) surge-acp bridge::worker::tests::config_selection_matches_value_or_name_within_its_category
+        PASS [   0.024s] ( 65/383) surge-acp bridge::worker::tests::codex_kind_uses_acp_subcommand_not_flag
+        PASS [   0.023s] ( 66/383) surge-acp bridge::worker::tests::custom_kind_passes_args_verbatim_no_injected_flag
+        PASS [   0.026s] ( 67/383) surge-acp bridge::worker::tests::config_selection_the_agent_does_not_offer_is_refused_with_its_choices
+        PASS [   0.016s] ( 68/383) surge-acp bridge::worker::tests::gemini_kind_injects_acp_flag
+        PASS [   0.025s] ( 69/383) surge-acp bridge::worker::tests::filter_removes_denied_tools
+        PASS [   0.109s] ( 70/383) surge-acp bridge::tools::tests::outcome_enum_serializable_for_any_size
+        PASS [   0.021s] ( 71/383) surge-acp bridge::worker::tests::resolve_program_falls_back_to_original_when_missing
+        PASS [   0.025s] ( 72/383) surge-acp bridge::worker::tests::resolve_program_finds_path_extension_shim
+        PASS [   0.040s] ( 73/383) surge-acp bridge::worker::tests::forced_cleanup_closes_descendant_processes
+        PASS [   0.018s] ( 74/383) surge-acp client::tests::test_interactive_policy_returns_none
+        PASS [   0.112s] ( 75/383) surge-acp bridge::tools::tests::report_stage_outcome_schema_snapshot
+        PASS [   0.031s] ( 76/383) surge-acp client::tests::test_dangerous_command_detection
+        PASS [   0.028s] ( 77/383) surge-acp client::tests::test_dangerous_command_edge_cases
+        PASS [   0.019s] ( 78/383) surge-acp client::tests::test_new_with_nonexistent_path_does_not_panic
+        PASS [   0.023s] ( 79/383) surge-acp client::tests::test_permission_policy_auto_approve
+        PASS [   0.024s] ( 80/383) surge-acp client::tests::test_path_traversal_rejected
+        PASS [   0.021s] ( 81/383) surge-acp client::tests::test_smart_policy_delete_denied
+        PASS [   0.020s] ( 82/383) surge-acp client::tests::test_smart_policy_read_approved
+        PASS [   0.025s] ( 83/383) surge-acp client::tests::test_smart_policy_dangerous_bash_denied
+        PASS [   0.023s] ( 84/383) surge-acp client::tests::test_smart_policy_safe_bash_approved
+        PASS [   0.017s] ( 85/383) surge-acp connection::tests::test_surge_client_capabilities_smart_read_only
+        PASS [   0.025s] ( 86/383) surge-acp connection::tests::kill_joins_legacy_driver_and_closes_transport
+        PASS [   0.020s] ( 87/383) surge-acp connection::tests::test_surge_client_capabilities
+        PASS [   0.017s] ( 88/383) surge-acp discovery::tests::from_standard_paths_resolves_npx_launcher_for_any_user_configured_entry_too
+        PASS [   0.025s] ( 89/383) surge-acp connection::tests::shutdown::test_kill_unix_process
+        PASS [   0.015s] ( 90/383) surge-acp discovery::tests::from_standard_paths_resolves_npx_launcher_for_entry_with_no_cli_binary
+        PASS [   0.014s] ( 91/383) surge-acp discovery::tests::test_discovery_cache
+        PASS [   0.014s] ( 92/383) surge-acp discovery::tests::test_env_detection
+        PASS [   0.014s] ( 93/383) surge-acp discovery::tests::test_platform_detection
+        PASS [   0.016s] ( 94/383) surge-acp discovery::tests::test_discovery_new
+        PASS [   0.014s] ( 95/383) surge-acp display::tests::test_all_agents_have_metadata
+        PASS [   0.016s] ( 96/383) surge-acp discovery::tests::test_platform_standard_paths
+        PASS [   0.016s] ( 97/383) surge-acp discovery::tests::test_platform_paths
+        PASS [   0.015s] ( 98/383) surge-acp health::tests::anthropic_overload_is_unclassified_instead_of_quota_exhaustion
+        PASS [   0.015s] ( 99/383) surge-acp display::tests::test_extract_version
+        PASS [   0.014s] (100/383) surge-acp health::tests::test_capacity_status_clears_on_recovery_not_stuck_exhausted_forever
+        PASS [   0.032s] (101/383) surge-acp discovery::tests::test_version_detection
+        PASS [   0.014s] (102/383) surge-acp health::tests::test_capacity_status_resets_at_unknown_without_retry_after
+        PASS [   0.015s] (103/383) surge-acp health::tests::test_capacity_status_never_observed_before_any_failure
+        PASS [   0.015s] (104/383) surge-acp health::tests::test_capacity_status_known_via_record_failure_with_retry_after
+        PASS [   0.016s] (105/383) surge-acp health::tests::test_capacity_status_unclassified_for_a_failure_that_is_not_a_rate_limit
+        PASS [   0.014s] (106/383) surge-acp health::tests::test_capacity_status_unclassified_from_heartbeat_failures_alone
+        PASS [   0.014s] (107/383) surge-acp health::tests::test_fallback_routing
+        PASS [   0.014s] (108/383) surge-acp health::tests::test_error_rate
+        PASS [   0.015s] (109/383) surge-acp health::tests::test_health_status_degraded_before_offline
+        PASS [   0.014s] (110/383) surge-acp health::tests::test_health_status_healthy
+        PASS [   0.014s] (111/383) surge-acp health::tests::test_health_status_degraded_high_error_rate
+        PASS [   0.014s] (112/383) surge-acp health::tests::test_health_status_degraded_rate_limited
+        PASS [   0.014s] (113/383) surge-acp health::tests::test_health_status_offline
+        PASS [   0.122s] (114/383) surge-acp connection::tests::shutdown::test_wait_or_kill_grace_period
+        PASS [   0.014s] (115/383) surge-acp health::tests::test_heartbeat_failure_tracking
+        PASS [   0.014s] (116/383) surge-acp health::tests::test_health_status_recovery_from_offline
+        PASS [   0.015s] (117/383) surge-acp health::tests::test_healthy_by_default
+        PASS [   0.017s] (118/383) surge-acp health::tests::test_heartbeat_recovery
+        PASS [   0.015s] (119/383) surge-acp health::tests::test_is_rate_limited_for_routing_rejects_bare_too_many
+        PASS [   0.014s] (120/383) surge-acp health::tests::test_latency_percentiles
+        PASS [   0.016s] (121/383) surge-acp health::tests::test_latency_samples_bounded_to_100
+        PASS [   0.017s] (122/383) surge-acp health::tests::test_latency_percentiles_with_no_data
+        PASS [   0.017s] (123/383) surge-acp health::tests::test_parse_retry_after_various_formats
+        PASS [   0.016s] (124/383) surge-acp health::tests::test_rate_limit_with_retry_after
+        PASS [   0.014s] (125/383) surge-acp health::tests::test_rate_limit_without_retry_after
+        PASS [   0.014s] (126/383) surge-acp health::tests::test_record_connect_failure_is_observed_but_not_a_request
+        PASS [   0.018s] (127/383) surge-acp health::tests::test_rate_limit_detection
+        PASS [   0.016s] (128/383) surge-acp health::tests::test_record_connect_failure_still_classifies_subscription_quota_shape
+        PASS [   0.015s] (129/383) surge-acp health::tests::test_success_recording
+        PASS [   0.015s] (130/383) surge-acp health::tests::test_unhealthy_on_high_errors
+        PASS [   0.019s] (131/383) surge-acp health::tests::test_record_failure_capacity_shape_does_not_set_rate_limited_for_routing
+        PASS [   0.015s] (132/383) surge-acp onboarding::default_agent_selection_tests::a_launcher_only_runtime_never_becomes_the_default
+        PASS [   0.026s] (133/383) surge-acp health::tests::test_uptime_tracking
+        PASS [   0.017s] (134/383) surge-acp onboarding::default_agent_selection_tests::an_installed_runtime_outside_the_preference_list_still_wins
+        PASS [   0.017s] (135/383) surge-acp onboarding::default_agent_selection_tests::a_preferred_agent_wins_even_when_listed_later
+        PASS [   0.016s] (136/383) surge-acp pool::tests::parse_retry_after_behavior_is_unchanged_by_task_12
+        PASS [   0.015s] (137/383) surge-acp pool::tests::test_agent_pool_creation
+        PASS [   0.017s] (138/383) surge-acp pool::tests::shutdown::test_shutdown_cleanup
+        PASS [   0.015s] (139/383) surge-acp pool::tests::test_agent_pool_invalid_default
+        PASS [   0.014s] (140/383) surge-acp pool::tests::test_auto_reconnect
+        PASS [   0.013s] (141/383) surge-acp pool::tests::test_calculate_backoff_exponential
+        PASS [   0.013s] (142/383) surge-acp pool::tests::test_calculate_backoff_exponential_capped
+        PASS [   0.014s] (143/383) surge-acp pool::tests::test_calculate_backoff_exponential_overflow_protection
+        PASS [   0.014s] (144/383) surge-acp pool::tests::test_calculate_backoff_jitter
+        PASS [   0.013s] (145/383) surge-acp pool::tests::test_calculate_backoff_jitter_distribution
+        PASS [   0.014s] (146/383) surge-acp pool::tests::test_calculate_backoff_zero_max_delay
+        PASS [   0.014s] (147/383) surge-acp pool::tests::test_calculate_backoff_linear
+        PASS [   0.015s] (148/383) surge-acp pool::tests::test_calculate_backoff_zero_initial_delay
+        PASS [   0.321s] (149/383) surge-acp bridge::worker::tests::killing_an_exited_unreaped_child_is_not_an_error
+        PASS [   0.014s] (150/383) surge-acp pool::tests::test_is_auth_failure_case_insensitive
+        PASS [   0.014s] (151/383) surge-acp pool::tests::test_is_auth_failure_api_key
+        PASS [   0.014s] (152/383) surge-acp pool::tests::test_is_auth_failure_authentication_error
+        PASS [   0.013s] (153/383) surge-acp pool::tests::test_is_auth_failure_negative_cases
+        PASS [   0.014s] (154/383) surge-acp pool::tests::test_is_auth_failure_http_401
+        PASS [   0.014s] (155/383) surge-acp pool::tests::test_is_auth_failure_unauthorized
+        PASS [   0.016s] (156/383) surge-acp pool::tests::test_is_rate_limit_case_insensitive
+        PASS [   0.015s] (157/383) surge-acp pool::tests::test_is_rate_limit_excludes_capacity_only_patterns
+        PASS [   0.015s] (158/383) surge-acp pool::tests::test_is_rate_limit_http_429
+        PASS [   0.015s] (159/383) surge-acp pool::tests::test_is_rate_limit_negative_cases
+        PASS [   0.014s] (160/383) surge-acp pool::tests::test_is_rate_limit_quota
+        PASS [   0.119s] (161/383) surge-acp pool::tests::shutdown::test_drop_cleanup
+        PASS [   0.016s] (162/383) surge-acp pool::tests::test_parse_retry_after_default
+        PASS [   0.017s] (163/383) surge-acp pool::tests::test_is_rate_limit_rate_limit_text
+        PASS [   0.016s] (164/383) surge-acp pool::tests::test_parse_retry_after_mixed_content
+        PASS [   0.015s] (165/383) surge-acp pool::tests::test_parse_retry_after_out_of_range
+        PASS [   0.123s] (166/383) surge-acp pool::tests::shutdown::test_pool_initializes_pid_directory
+        PASS [   0.015s] (167/383) surge-acp pool::tests::test_parse_retry_after_seconds
+        PASS [   0.017s] (168/383) surge-acp pool::tests::test_pool_capacity_status_reflects_observed_429
+        PASS [   0.016s] (169/383) surge-acp pool::tests::test_token_validation
+        PASS [   0.019s] (170/383) surge-acp pool::tests::test_parse_retry_after_with_suffix
+        PASS [   0.020s] (171/383) surge-acp pool::tests::test_session_handle
+        PASS [   0.021s] (172/383) surge-acp pool::tests::test_pool_drop_requests_cleanup
+        PASS [   0.020s] (173/383) surge-acp pool::tests::test_try_health_degrades_to_none_when_lock_is_held
+        PASS [   0.020s] (174/383) surge-acp pool::tests::test_try_health_reflects_recorded_success
+        PASS [   0.021s] (175/383) surge-acp pool::tests::test_try_health_unknown_agent_is_none
+        PASS [   0.020s] (176/383) surge-acp pool::tests::test_warm_up_does_not_block
+        PASS [   0.031s] (177/383) surge-acp process_evidence::tests::stop_group_never_signals_an_already_empty_group
+        PASS [   0.025s] (178/383) surge-acp process_tracker::tests::test_cleanup_all
+        PASS [   0.021s] (179/383) surge-acp process_tracker::tests::test_is_running_self
+        PASS [   0.022s] (180/383) surge-acp process_tracker::tests::test_is_running_invalid_pid
+        PASS [   0.025s] (181/383) surge-acp process_tracker::tests::test_drop_cleans_up
+        PASS [   0.020s] (182/383) surge-acp process_tracker::tests::test_is_running_tracked
+        PASS [   0.025s] (183/383) surge-acp process_tracker::tests::test_is_running_untracked
+        PASS [   0.022s] (184/383) surge-acp process_tracker::tests::test_is_tracked
+        PASS [   0.023s] (185/383) surge-acp process_tracker::tests::test_list_tracked
+        PASS [   0.022s] (186/383) surge-acp process_tracker::tests::test_new_creates_directory
+        PASS [   0.025s] (187/383) surge-acp process_tracker::tests::test_read_pid
+        PASS [   0.023s] (188/383) surge-acp process_tracker::tests::test_read_pid_nonexistent
+        PASS [   0.018s] (189/383) surge-acp process_tracker::tests::test_track_overwrites_existing_pid
+        PASS [   0.018s] (190/383) surge-acp process_tracker::tests::test_track_writes_pid_file
+        PASS [   0.024s] (191/383) surge-acp process_tracker::tests::test_untrack_idempotent
+        PASS [   0.024s] (192/383) surge-acp process_tracker::tests::test_untrack_removes_pid_file
+        PASS [   0.022s] (193/383) surge-acp quota_observation::tests::typed_rejection_retains_unknown_reset_and_account
+        PASS [   0.023s] (194/383) surge-acp quota_observation::tests::malformed_account_and_observation_cannot_decode
+        PASS [   0.022s] (195/383) surge-acp quota_observation::tests::unsupported_probe_does_not_claim_available
+        PASS [   0.021s] (196/383) surge-acp registry::tests::builtin_entries_carry_runtime_mapping
+        PASS [   0.019s] (197/383) surge-acp registry::tests::dsh_pinned_version_matches_declared_policy
+        PASS [   0.023s] (198/383) surge-acp registry::tests::for_run_puts_user_agents_ahead_of_builtins
+        PASS [   0.023s] (199/383) surge-acp registry::tests::ollama_entry_declares_model_env_and_settings_seed
+        PASS [   0.029s] (200/383) surge-acp registry::tests::is_installed_for_npx_only_entry_checks_the_launcher_not_a_same_named_binary
+        PASS [   0.023s] (201/383) surge-acp registry::tests::registry_entry_parses_with_runtime_field
+        PASS [   0.020s] (202/383) surge-acp registry::tests::registry_entry_parses_without_runtime_field
+        PASS [   0.020s] (203/383) surge-acp registry::tests::test_all_are_code_capable
+        PASS [   0.020s] (204/383) surge-acp registry::tests::test_builtin_agent_count
+        PASS [   0.019s] (205/383) surge-acp registry::tests::test_capability_metadata_parsing
+        PASS [   0.020s] (206/383) surge-acp registry::tests::test_dsh_alias_normalizes_to_dsh_acp
+        PASS [   0.021s] (207/383) surge-acp registry::tests::test_dynamic_registry_end_to_end
+        PASS [   0.020s] (208/383) surge-acp registry::tests::test_find_claude
+        PASS [   0.021s] (209/383) surge-acp registry::tests::test_find_codex
+        PASS [   0.021s] (210/383) surge-acp registry::tests::test_find_copilot
+        PASS [   0.022s] (211/383) surge-acp registry::tests::test_find_gemini
+        PASS [   0.022s] (212/383) surge-acp registry::tests::test_find_dsh
+        PASS [   0.022s] (213/383) surge-acp registry::tests::test_from_config
+        PASS [   0.019s] (214/383) surge-acp registry::tests::test_merged_builtin_takes_priority_on_id_collision
+        PASS [   0.025s] (215/383) surge-acp registry::tests::test_installed_checks_cli_binary
+        PASS [   0.022s] (216/383) surge-acp registry::tests::test_load_from_toml
+        PASS [   0.019s] (217/383) surge-acp registry::tests::test_merged_empty_remote
+        PASS [   0.015s] (218/383) surge-acp registry::tests::test_merged_three_way
+        PASS [   0.017s] (219/383) surge-acp registry::tests::test_merged_remote_only_entries_appended
+        PASS [   0.016s] (220/383) surge-acp registry::tests::test_ollama_alias_normalizes_to_ollama_acp
+        PASS [   0.021s] (221/383) surge-acp registry::tests::test_refresh_discovery
+        PASS [   0.016s] (222/383) surge-acp registry::tests::test_to_agent_config
+        PASS [   0.019s] (223/383) surge-acp registry::tests::test_search
+        PASS [   0.019s] (224/383) surge-acp registry::tests::test_which_cache_works
+        PASS [   0.019s] (225/383) surge-acp registry::tests::test_which_finds_git
+        PASS [   0.021s] (226/383) surge-acp registry::tests::test_which_not_found
+        PASS [   0.020s] (227/383) surge-acp router::tests::test_complexity_routing
+        PASS [   0.018s] (228/383) surge-acp router::tests::test_default_routing
+        PASS [   0.019s] (229/383) surge-acp router::tests::test_fallback_to_default
+        PASS [   0.017s] (230/383) surge-acp router::tests::test_phase_routing
+        PASS [   0.018s] (231/383) surge-acp router::tests::test_route_with_capability_capable_agent
+        PASS [   0.018s] (232/383) surge-acp router::tests::test_route_with_capability_incapable_agent_falls_back
+        PASS [   0.022s] (233/383) surge-acp router::tests::test_route_with_capability_none_is_passthrough
+        PASS [   0.019s] (234/383) surge-acp router::tests::test_route_with_capability_unknown_agent_assumed_capable
+        PASS [   0.023s] (235/383) surge-acp sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response
+        PASS [   0.039s] (236/383) surge-acp sdk_v1::lifecycle_tests::blocked_owner_applies_transport_backpressure
+        PASS [   0.044s] (237/383) surge-acp sdk_v1::lifecycle_tests::completed_notification_and_prompt_response_survive_immediate_eof
+        PASS [   0.033s] (238/383) surge-acp sdk_v1::lifecycle_tests::incoming_line_limit_counts_fragmented_and_multiple_frames
+        PASS [   0.451s] (239/383) surge-acp process_evidence::tests::stop_group_escalates_to_kill_and_reports_an_empty_group
+        PASS [   0.121s] (240/383) surge-acp sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission
+        PASS [   0.027s] (241/383) surge-acp sdk_v1::lifecycle_tests::pump_read_failure_reaches_driver
+        PASS [   0.027s] (242/383) surge-acp sdk_v1::lifecycle_tests::stop_joins_outstanding_notification_callback
+        PASS [   0.220s] (243/383) surge-acp sdk_v1::lifecycle_tests::prompt_response_waits_for_notification_processing
+        PASS [   0.015s] (244/383) surge-acp sdk_v1::transport::tests::closed_channel_ends_producer
+        PASS [   0.128s] (245/383) surge-acp sdk_v1::lifecycle_tests::stop_remains_responsive_when_valid_frame_queue_is_saturated
+        PASS [   0.017s] (246/383) surge-acp sdk_v1::transport::tests::malformed_and_batch_frames_never_enter_sdk_channel
+        PASS [   0.056s] (247/383) surge-acp secrets::tests::test_anthropic_key_redacted
+        PASS [   0.174s] (248/383) surge-acp sdk_v1::lifecycle_tests::valid_frame_burst_is_backpressured_until_owner_processes
+        PASS [   0.061s] (249/383) surge-acp secrets::tests::test_aws_key_redacted
+        PASS [   0.055s] (250/383) surge-acp secrets::tests::test_github_pat_redacted
+        PASS [   0.056s] (251/383) surge-acp secrets::tests::test_generic_api_key_env_redacted
+        PASS [   0.051s] (252/383) surge-acp secrets::tests::test_jwt_redacted
+        PASS [   0.061s] (253/383) surge-acp secrets::tests::test_mongodb_dsn_redacted
+        PASS [   0.062s] (254/383) surge-acp secrets::tests::test_multiple_secrets_all_redacted
+        PASS [   0.057s] (255/383) surge-acp secrets::tests::test_no_secrets_unchanged
+        PASS [   0.057s] (256/383) surge-acp secrets::tests::test_ollama_key_pattern_leaves_ordinary_dotted_text_alone
+        PASS [   0.066s] (257/383) surge-acp secrets::tests::test_ollama_key_redacted_whole
+        PASS [   0.071s] (258/383) surge-acp secrets::tests::test_postgres_dsn_redacted
+        PASS [   0.071s] (259/383) surge-acp secrets::tests::test_private_key_header_redacted
+        PASS [   0.071s] (260/383) surge-acp secrets::tests::test_slack_token_redacted
+        PASS [   0.019s] (261/383) surge-acp settings_seed::tests::empty_declaration_is_a_noop
+        PASS [   0.068s] (262/383) surge-acp secrets::tests::test_stripe_key_redacted
+        PASS [   0.016s] (263/383) surge-acp settings_seed::tests::never_clobbers_an_existing_file
+        PASS [   0.018s] (264/383) surge-acp settings_seed::tests::refuses_absolute_and_parent_paths
+        PASS [   0.018s] (265/383) surge-acp settings_seed::tests::refuses_to_write_through_a_symlinked_parent
+        PASS [   0.019s] (266/383) surge-acp settings_seed::tests::writes_a_declared_file
+        PASS [   0.017s] (267/383) surge-acp shared::content_block::tests::text_block_round_trip
+        PASS [   0.017s] (268/383) surge-acp shared::content_block::tests::text_vec_yields_single_element
+        PASS [   0.016s] (269/383) surge-acp shared::path_guard::tests::accepts_path_inside_worktree
+        PASS [   0.025s] (270/383) surge-acp shared::path_guard::tests::rejects_path_escaping_worktree_via_dotdot
+        PASS [   0.025s] (271/383) surge-acp shared::path_guard::tests::rejects_relative_path
+        PASS [   0.739s] (272/383) surge-acp sdk_v1::lifecycle_tests::all_effect_methods_refuse_after_readiness_without_retry_or_cleanup_blocking
+        PASS [   0.049s] (273/383) surge-acp terminal::tests::test_concurrent_terminals
+        PASS [   0.031s] (274/383) surge-acp terminal::tests::test_default_output_byte_limit
+        PASS [   0.091s] (275/383) surge-acp shared::secrets::tests::inherited_stage_credential_is_redacted_and_absent_from_debug
+        PASS [   0.027s] (276/383) surge-acp terminal::tests::test_kill_terminal
+        PASS [   0.086s] (277/383) surge-acp shared::secrets::tests::redacts_a_known_pattern
+        PASS [   0.025s] (278/383) surge-acp terminal::tests::test_not_found
+        PASS [   0.024s] (279/383) surge-acp terminal::tests::test_release_terminal
+        PASS [   0.016s] (280/383) surge-acp transport::tests::test_serialize_mcp_config_empty
+        PASS [   0.017s] (281/383) surge-acp transport::tests::test_serialize_mcp_config_preserves_env
+        PASS [   0.014s] (282/383) surge-acp transport::tests::test_serialize_mcp_config_single_server
+        PASS [   0.016s] (283/383) surge-acp transport::tests::test_tcp_transport_returns_error
+        PASS [   0.082s] (284/383) surge-acp terminal::tests::test_output_byte_limit
+        PASS [   0.076s] (285/383) surge-acp terminal::tests::test_spawn_and_wait
+        PASS [   0.017s] (286/383) surge-acp::bridge_config rejects_each_zero_capacity_and_timeout
+        PASS [   0.047s] (287/383) surge-acp::bridge_config legacy_constructors_remain_usable_and_shutdown
+        PASS [   1.510s] (288/383) surge-acp discovery::tests::test_registry_integration
+        PASS [   0.205s] (289/383) surge-acp::bridge_config_options a_model_the_agent_does_not_offer_keeps_the_session_closed
+        PASS [   0.228s] (290/383) surge-acp::bridge_config_options a_best_effort_option_the_agent_does_not_offer_is_skipped
+        PASS [   0.177s] (291/383) surge-acp::bridge_config_options chosen_model_and_reasoning_level_are_set_on_the_agent_session
+        PASS [   0.058s] (292/383) surge-acp::bridge_control_lifecycle advertised_filesystem_capabilities_follow_permission_policy
+        PASS [   0.345s] (293/383) surge-acp::bridge_concurrent_sessions five_concurrent_sessions_complete_independently
+        PASS [   0.087s] (294/383) surge-acp::bridge_control_lifecycle callback_overload_preserves_pending_permission_and_stop
+        PASS [   0.044s] (295/383) surge-acp::bridge_control_lifecycle close_sends_wire_cancel_before_transport_teardown
+        PASS [   0.065s] (296/383) surge-acp::bridge_control_lifecycle child_exit_during_prompt_does_not_panic_worker
+        PASS [   0.037s] (297/383) surge-acp::bridge_control_lifecycle dropped_option_caller_settles_child_and_shutdown_promptly
+        PASS [   1.460s] (298/383) surge-acp registry::tests::test_detect_with_discovery
+        PASS [   0.062s] (299/383) surge-acp::bridge_control_lifecycle exit_before_handshake_response_never_announces_established
+        PASS [   2.023s] (300/383) surge-acp connection::tests::cleanup_driver_errors_reach_connection_caller
+        PASS [   0.114s] (301/383) surge-acp::bridge_control_lifecycle noisy_startup_is_drained_before_handshake
+        PASS [   0.543s] (302/383) surge-acp::bridge_control_lifecycle config_option_phase_shares_deadline_reaps_and_allows_next_open
+        PASS [   0.062s] (303/383) surge-acp::bridge_control_lifecycle spoofed_reserved_notification_has_no_outcome_authority
+        PASS [   0.538s] (304/383) surge-acp::bridge_control_lifecycle initialize_only_handshake_hang_is_retried_once_and_opens
+        PASS [   0.064s] (305/383) surge-acp::bridge_crash_detection crash_after_n_tool_calls_surfaces_within_2s
+        PASS [   0.012s] (306/383) surge-acp::bridge_dynamic_outcome_enum session_catalogs_have_exact_distinct_outcome_enums
+        PASS [   0.023s] (307/383) surge-acp::bridge_effect_fence cancelled_awaiter_does_not_drop_the_queued_worker_capability
+        PASS [   2.019s] (308/383) surge-acp sdk_v1::lifecycle_tests::eof_joins_outstanding_callback
+        PASS [   0.071s] (309/383) surge-acp::bridge_effect_fence permission_grant_is_checked_after_approval_await_and_automatic_allow
+        PASS [   0.042s] (310/383) surge-acp::bridge_effect_fence queued_prompt_checks_stored_session_fence_and_close_remains_available
+        PASS [   0.049s] (311/383) surge-acp::bridge_handshake_failure handshake_failure_returns_open_session_error
+        PASS [   0.093s] (312/383) surge-acp::bridge_effect_fence worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission
+        PASS [   0.048s] (313/383) surge-acp::bridge_open_cancellation bare_drop_during_opening_is_bounded_and_reaps
+        PASS [   0.703s] (314/383) surge-acp::bridge_control_lifecycle permission_reply_and_busy_response_work_during_prompt
+        PASS [   0.105s] (315/383) surge-acp::bridge_provider_recovery actual_saved_provider_id_is_restored_with_identical_cwd_without_new_session
+        PASS [   0.525s] (316/383) surge-acp::bridge_control_lifecycle uncertain_session_operation_is_never_automatically_reissued
+        PASS [   0.068s] (317/383) surge-acp::bridge_provider_recovery load_history_cannot_authorize_a_permission_before_a_new_prompt
+        PASS [   0.269s] (318/383) surge-acp::bridge_mock_discovery mock_executable_discovery_uses_native_paths
+        PASS [   0.066s] (319/383) surge-acp::bridge_provider_recovery unsupported_restore_does_not_silently_create_a_provider_session
+        PASS [   0.099s] (320/383) surge-acp::bridge_provider_recovery restored_usage_does_not_charge_unknown_provider_history
+        PASS [   0.061s] (321/383) surge-acp::bridge_reply_to_tool reply_to_observed_call_id_cannot_fabricate_tool_result
+        PASS [   0.021s] (322/383) surge-acp::bridge_reply_to_tool reply_to_unknown_session_returns_session_gone
+        PASS [   0.030s] (323/383) surge-acp::bridge_reply_to_tool reply_to_unknown_call_id_within_session_returns_unknown_call_id
+        PASS [   0.013s] (324/383) surge-acp::bridge_sandbox_m4_stub visibility_allow_diverges_from_allows_tool_for_escaping_path
+        PASS [   0.030s] (325/383) surge-acp::bridge_sandbox_filtering denied_tool_does_not_appear_in_visible_list
+        PASS [   0.013s] (326/383) surge-acp::bridge_sandbox_m4_stub workspace_write_sandbox_compiles_against_trait
+        PASS [   0.339s] (327/383) surge-acp::bridge_open_cancellation cancelled_open_settles_worker_and_child
+        PASS [   0.064s] (328/383) surge-acp::bridge_request_human_input request_human_input_notification_has_no_authority
+        PASS [   0.062s] (329/383) surge-acp::bridge_session_lifecycle builder_defaults_round_trip
+        PASS [   0.057s] (330/383) surge-acp::bridge_session_lifecycle builder_explicit_round_trip
+        PASS [   0.061s] (331/383) surge-acp::bridge_session_lifecycle builder_event_capacity_reports_lag_without_blocking_commands
+        PASS [   0.038s] (332/383) surge-acp::bridge_shutdown_with_open shutdown_emits_session_ended_for_each_open_session
+        PASS [   0.058s] (333/383) surge-acp::bridge_session_lifecycle open_send_close_round_trip
+        PASS [   1.547s] (334/383) surge-acp::bridge_control_lifecycle both_handshake_phases_have_deadlines_and_reap
+        PASS [   0.065s] (335/383) surge-acp::bridge_token_tracking cumulative_reports_and_context_remain_independent_across_turns
+        PASS [   0.057s] (336/383) surge-acp::bridge_token_tracking failed_prompt_marks_usage_unknown_before_session_end
+        PASS [   0.064s] (337/383) surge-acp::bridge_token_tracking sessions_have_independent_usage_baselines
+        PASS [   0.073s] (338/383) surge-acp::bridge_token_tracking token_usage_monotonic_and_precedes_session_end
+        PASS [   0.016s] (339/383) surge-acp::bridge_worker_panic worker_panic_surfaces_as_command_failure
+        PASS [   0.015s] (340/383) surge-acp::facade_contract minimal_mock_satisfies_facade_contract
+        PASS [   0.061s] (341/383) surge-acp::bridge_tool_injection report_stage_outcome_notification_has_no_authority
+        PASS [   0.029s] (342/383) surge-acp::facade_contract real_acp_bridge_satisfies_facade_contract
+        PASS [   0.528s] (343/383) surge-acp::bridge_session_lifecycle builder_applies_handshake_deadline
+        PASS [   0.569s] (344/383) surge-acp::bridge_token_tracking graceful_cancel_observes_response_usage_before_session_end
+        PASS [   1.074s] (345/383) surge-acp::bridge_streaming long_streaming_delivers_chunks_in_order
+        PASS [   0.117s] (346/383) surge-acp::platform_encoding_test test_binary_output_handling
+        PASS [   0.066s] (347/383) surge-acp::platform_encoding_test test_large_utf8_output
+        PASS [   0.065s] (348/383) surge-acp::platform_encoding_test test_stderr_utf8_capture
+        PASS [   0.064s] (349/383) surge-acp::platform_encoding_test test_truncation_exact_char_boundary
+        PASS [   0.069s] (350/383) surge-acp::platform_encoding_test test_truncation_respects_char_boundaries
+        PASS [   0.070s] (351/383) surge-acp::platform_encoding_test test_utf8_basic_output
+        PASS [   0.072s] (352/383) surge-acp::platform_encoding_test test_utf8_cjk_characters
+        PASS [   0.072s] (353/383) surge-acp::platform_encoding_test test_utf8_emoji_output
+        PASS [   0.072s] (354/383) surge-acp::platform_encoding_test test_utf8_locale_on_unix
+        PASS [   0.072s] (355/383) surge-acp::platform_encoding_test test_utf8_mixed_scripts
+        PASS [   0.121s] (356/383) surge-acp::platform_encoding_test test_zero_byte_limit
+        PASS [   0.022s] (357/383) surge-acp::platform_process_test test_basic_process_spawn_unix
+        PASS [   0.017s] (358/383) surge-acp::platform_process_test test_basic_process_spawn_windows
+        PASS [   0.015s] (359/383) surge-acp::platform_process_test test_git_env_vars_stripped
+        PASS [   0.014s] (360/383) surge-acp::platform_process_test test_invalid_command_returns_error
+        PASS [   0.013s] (361/383) surge-acp::platform_process_test test_multiple_processes_sequential
+        PASS [   0.015s] (362/383) surge-acp::platform_process_test test_process_cleanup_no_zombies
+        PASS [   0.011s] (363/383) surge-acp::platform_process_test test_process_stdin_stdout_capture
+        PASS [   0.010s] (364/383) surge-acp::platform_process_test test_process_termination_timeout
+        PASS [   0.013s] (365/383) surge-acp::platform_process_test test_process_with_working_directory
+        PASS [   2.022s] (366/383) surge-acp::health_integration_test test_multiple_agents_heartbeat_monitoring
+        PASS [   5.295s] (367/383) surge-acp::bridge_close_timeout close_against_stuck_mock_times_out
+        PASS [   5.036s] (368/383) surge-acp::bridge_control_lifecycle concurrent_close_never_claims_reap_while_first_cleanup_pending
+        PASS [   0.184s] (369/383) surge-acp::reconnect_integration_test test_reconnect_prevents_duplicate_attempts
+        PASS [   5.552s] (370/383) surge-acp::bridge_control_lifecycle ignored_wire_cancel_still_forces_and_reaps_child
+        PASS [   0.083s] (371/383) surge-acp::sdk_permission_secrets explicitly_enabled_upstream_trace_is_raw_provider_diagnostics
+        PASS [   0.051s] (372/383) surge-acp::sdk_permission_secrets permission_title_known_literal_is_redacted_without_changing_policy_input
+        PASS [   0.033s] (373/383) surge-acp::sdk_pool_usage optional_prompt_usage_preserves_unknown_and_emits_exactly_once
+        PASS [   0.011s] (374/383) surge-acp::stable_v1_wire fixed_v1_handshake_and_stdio_descriptor
+        PASS [   0.010s] (375/383) surge-acp::stable_v1_wire fixed_v1_observation_and_error_classification_input
+        PASS [   0.009s] (376/383) surge-acp::stable_v1_wire fixed_v1_permission_cancel_and_prompt
+        PASS [   6.029s] (377/383) surge-acp::health_integration_test test_heartbeat_consecutive_failure_count
+        PASS [   6.239s] (378/383) surge-acp::reconnect_integration_test test_backoff_strategy_exponential
+        PASS [   8.137s] (379/383) surge-acp::health_integration_test test_heartbeat_detects_nonexistent_agent
+        PASS [   6.360s] (380/383) surge-acp::reconnect_integration_test test_exponential_backoff_delays
+        PASS [   8.721s] (381/383) surge-acp::health_integration_test test_heartbeat_detects_terminated_process
+        PASS [   6.066s] (382/383) surge-acp::reconnect_integration_test test_reconnect_events_emitted_on_connection_loss
+        PASS [   6.657s] (383/383) surge-acp::reconnect_integration_test test_reconnect_respects_max_attempts
+────────────
+     Summary [  13.959s] 383 tests run: 383 passed, 4 skipped

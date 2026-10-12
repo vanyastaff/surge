@@ -1,0 +1,235 @@
+{
+  "schema": 1,
+  "status": "complete",
+  "errors": [],
+  "commands": [
+    {
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "head-before.stdout.log",
+      "stderr": "head-before.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.008
+    },
+    {
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "status-before.stdout.log",
+      "stderr": "status-before.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.019
+    },
+    {
+      "command": [
+        "rustc",
+        "-Vv"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "rustc.stdout.log",
+      "stderr": "rustc.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.183
+    },
+    {
+      "command": [
+        "cargo",
+        "-V"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "cargo.stdout.log",
+      "stderr": "cargo.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.021
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "--version"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "nextest.stdout.log",
+      "stderr": "nextest.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.045
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--bin",
+        "mock_acp_agent",
+        "--target",
+        "aarch64-apple-darwin",
+        "--target-dir",
+        "/Users/vanyastafford/Develop/surge/target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "build.stdout.log",
+      "stderr": "build.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 38.712
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "list",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--message-format",
+        "json",
+        "--target",
+        "aarch64-apple-darwin",
+        "--target-dir",
+        "/Users/vanyastafford/Develop/surge/target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {
+        "CARGO_BIN_EXE_mock_acp_agent": "/Users/vanyastafford/Develop/surge/target/aarch64-apple-darwin/debug/mock_acp_agent"
+      },
+      "stdout": "inventory.stdout.log",
+      "stderr": "inventory.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 38.977
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--profile",
+        "bridge-portability",
+        "--no-fail-fast",
+        "--target",
+        "aarch64-apple-darwin",
+        "--target-dir",
+        "/Users/vanyastafford/Develop/surge/target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {
+        "CARGO_BIN_EXE_mock_acp_agent": "/Users/vanyastafford/Develop/surge/target/aarch64-apple-darwin/debug/mock_acp_agent"
+      },
+      "stdout": "tests.stdout.log",
+      "stderr": "tests.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 15.634
+    },
+    {
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "head-after.stdout.log",
+      "stderr": "head-after.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.014
+    },
+    {
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "status-after.stdout.log",
+      "stderr": "status-after.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.048
+    }
+  ],
+  "started_utc": "2026-10-12T01:25:56.307225+00:00",
+  "host": {
+    "system": "Darwin",
+    "release": "27.0.0",
+    "machine": "arm64",
+    "python": "3.9.6"
+  },
+  "required_tests": [
+    "crash_after_n_tool_calls_surfaces_within_2s",
+    "close_against_stuck_mock_times_out",
+    "five_concurrent_sessions_complete_independently",
+    "shutdown_emits_session_ended_for_each_open_session",
+    "cancelled_open_settles_worker_and_child",
+    "bare_drop_during_opening_is_bounded_and_reaps",
+    "mock_executable_discovery_uses_native_paths"
+  ],
+  "job_url": null,
+  "revision": "7f937140f84be2df7133c55aeeb2dd01f5b1d5f4",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "build_target": "aarch64-apple-darwin",
+  "target_directory": "/Users/vanyastafford/Develop/surge/target",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.145 (00af4550e 2026-09-16)\nrelease: 0.9.145\ncommit-hash: 00af4550ec3b3b9f0e574b897b06acb95d325ba2\ncommit-date: 2026-09-16\nhost: aarch64-apple-darwin",
+  "inventory": {
+    "total": 387,
+    "ignored": [
+      "surge-acp::bridge_mock_discovery::isolated_mock_discovery_child",
+      "surge-acp::bridge_rate_limit_classification::real_429_with_retry_after_survives_the_acp_wire_as_rate_limited",
+      "surge-acp::ollama_acp_smoke::ollama_runtime_handshakes_and_answers",
+      "surge-acp::reconnect_integration_test::test_realistic_reconnect_delays"
+    ],
+    "required_unavailable": []
+  },
+  "results": {
+    "total": 383,
+    "passed": 383,
+    "failed": 0,
+    "skipped": 0,
+    "required_not_passed": []
+  },
+  "revision_after": "7f937140f84be2df7133c55aeeb2dd01f5b1d5f4",
+  "artifacts": {
+    "cargo.stdout.log": "9950bbb2d5c3417b1a068f0e81f6d3cac991a363193bdf2a22d447f5acf8b503",
+    "head-after.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-before.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "head-before.stdout.log": "a6a7635834ca3462ead598e656b7b838ff87481098491cbd61c82012a270c1a9",
+    "nextest.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rustc.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-after.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests.stderr.log": "824272f5ce68946c0b60e7baa2f791153c6a1176c07ec4a717cb66b9fac9636b",
+    "inventory.stdout.log": "a53609b6edbdfe39d7f2103bb1b300b7fb9b7628b749cbb291d81f347d5bfdd1",
+    "nextest.stdout.log": "2dd33b631455b8402a9aa8e3ddc37aca17e5c27e504a61bb1572f6c32708a755",
+    "head-before.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-before.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "head-after.stdout.log": "a6a7635834ca3462ead598e656b7b838ff87481098491cbd61c82012a270c1a9",
+    "build.stderr.log": "d07fedd255cb27aaf6923666374e9acd57cbbf21510e970659d69c2185ba04cc",
+    "status-after.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rustc.stdout.log": "e2211d4c0760a2a3b03eab88e42f8848952b7aa2ed649277a8fdbf3ce1838fd4",
+    "junit.xml": "44bee6bc275b9feaa1b72f0dce81f5792d81d6a5f241aa8750e399aaf3186166",
+    "inventory.stderr.log": "29d42adc888baa56f1b8d5cad5ccb35369050cbfbe0762d2a6a1f42868177ead",
+    "tests.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
