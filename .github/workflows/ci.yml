@@ -233,10 +233,10 @@ jobs:
         run: cargo clippy --locked -p surge-acp --all-targets -- -D warnings
 
       - name: Run clippy (strict workspace, all features)
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets --all-features -- -D warnings
 
       - name: Run clippy (strict workspace, default features)
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets -- -D warnings
 
   fmt:
     name: Format Check

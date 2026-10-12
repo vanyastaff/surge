@@ -49,6 +49,11 @@ fn runtime_drop_and_unpolled_close_settle_native_descendants() {
 
 #[test]
 fn native_host_probe() {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
     let Ok(case) = std::env::var("SURGE_MCP_JOB_CASE") else {
         return;
     };
@@ -84,10 +89,6 @@ fn native_host_probe() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let pid: u32 = std::fs::read_to_string(&pidfile).unwrap().parse().unwrap();
-    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-    };
     // SAFETY: the live fixture PID is supplied by its retained native job leader;
     // request only synchronization access and retain the returned owned handle.
     let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.unwrap();
