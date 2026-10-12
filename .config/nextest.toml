@@ -15,3 +15,13 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 # ceiling applies there too.
 [profile.ci]
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+# Native ACP portability receipts; inherited test timeout remains bounded.
+[profile.bridge-portability]
+fail-fast = false
+retries = 0
+
+[profile.bridge-portability.junit]
+path = "junit.xml"
+store-success-output = true
+store-failure-output = true

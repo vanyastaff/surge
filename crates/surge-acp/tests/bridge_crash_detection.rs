@@ -49,35 +49,39 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
     // Drain SessionEstablished
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
-    // Trigger a prompt — mock crashes on first prompt.
-    bridge
-        .send_message(sid, MessageContent::Text("crash now".into()))
-        .await
-        .ok();
-
     let crash_start = Instant::now();
-    let mut saw_crash = false;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match timeout(Duration::from_millis(200), events.recv()).await {
-            Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => match reason
-            {
-                SessionEndReason::AgentCrashed { exit_code, .. } => {
-                    assert_eq!(exit_code, Some(137));
-                    saw_crash = true;
-                    let elapsed = crash_start.elapsed();
-                    assert!(
-                        elapsed <= Duration::from_secs(2),
-                        "crash detection took {elapsed:?}, expected ≤2s"
-                    );
-                    break;
-                },
-                other => panic!("expected AgentCrashed, got {other:?}"),
-            },
-            _ => continue,
-        }
+    let (prompt, ended) = timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            bridge.send_message(sid, MessageContent::Text("crash now".into())),
+            async {
+                loop {
+                    if let BridgeEvent::SessionEnded { session, reason } =
+                        events.recv().await.unwrap()
+                    {
+                        assert_eq!(session, sid);
+                        break reason;
+                    }
+                }
+            }
+        )
+    })
+    .await
+    .expect("prompt dispatch and crash detection exceeded 2s");
+    assert!(prompt.is_err(), "crashed prompt unexpectedly succeeded");
+    assert!(crash_start.elapsed() <= Duration::from_secs(2));
+    match ended {
+        SessionEndReason::AgentCrashed {
+            exit_code,
+            stderr_tail,
+        } => {
+            assert_eq!(exit_code, Some(137));
+            assert!(
+                stderr_tail.contains("crash_after=0 threshold reached at prompt #1; exiting 137"),
+                "{stderr_tail}"
+            );
+        },
+        other => panic!("expected AgentCrashed, got {other:?}"),
     }
-    assert!(saw_crash, "did not observe AgentCrashed within deadline");
 
     bridge.shutdown().await.unwrap();
 }

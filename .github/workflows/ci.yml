@@ -2,6 +2,7 @@ name: CI
 
 on:
   workflow_call:
+  workflow_dispatch:
   push:
     branches: [ main, develop ]
   pull_request:
@@ -39,6 +40,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install Python for bridge evidence
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -83,6 +89,21 @@ jobs:
       # Building test targets alone does not create target/debug/mock_acp_agent.
       - name: Build mock_acp_agent for engine integration tests
         run: cargo build --locked -p surge-acp --bin mock_acp_agent
+
+      - name: Test bridge evidence runner
+        run: python -m unittest discover -s scripts -p 'test_bridge_portability.py' -v
+
+      - name: Record native ACP bridge portability
+        run: python scripts/bridge_portability.py --output "${{ runner.temp }}/bridge-evidence-${{ github.run_id }}-${{ github.run_attempt }}"
+        timeout-minutes: 45
+
+      - name: Upload native ACP bridge evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-portability-${{ runner.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/bridge-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
 
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
       # in its own process by default, which avoids parallel SQLite/WAL races

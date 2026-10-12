@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use surge_acp::bridge::{
     AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
+    SessionEndReason,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::{OutcomeKey, SessionId};
@@ -62,32 +63,31 @@ async fn inner_test() {
         "session ids must be distinct"
     );
 
-    for sid in &sids {
-        bridge
-            .send_message(*sid, MessageContent::Text("hi".into()))
-            .await
-            .ok();
+    let prompts = futures::future::join_all(
+        sids.iter()
+            .map(|sid| bridge.send_message(*sid, MessageContent::Text("hi".into()))),
+    )
+    .await;
+    for result in prompts {
+        result.expect("concurrent prompt failed");
     }
-    for sid in &sids {
-        bridge.close_session(*sid).await.ok();
+    let closes = futures::future::join_all(sids.iter().map(|sid| bridge.close_session(*sid))).await;
+    for result in closes {
+        result.expect("concurrent close failed");
     }
 
     // Drain events; expect 5 SessionEnded events.
     let mut ended = HashSet::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while tokio::time::Instant::now() < deadline && ended.len() < 5 {
-        if let Ok(Ok(BridgeEvent::SessionEnded { session, .. })) =
+        if let Ok(Ok(BridgeEvent::SessionEnded { session, reason })) =
             timeout(Duration::from_millis(200), events.recv()).await
         {
-            ended.insert(session);
+            assert_eq!(reason, SessionEndReason::Normal);
+            assert!(ended.insert(session), "duplicate terminal event");
         }
     }
-    assert_eq!(
-        ended.len(),
-        5,
-        "expected 5 SessionEnded; got {}",
-        ended.len()
-    );
+    assert_eq!(ended, sids.into_iter().collect());
 
     bridge.shutdown().await.unwrap();
 }
