@@ -282,8 +282,10 @@ mod tests {
             bytes[..4].copy_from_slice(&96_u32.to_le_bytes());
             bytes[60..64].copy_from_slice(&counter.to_le_bytes());
             let words = bytes
-                .chunks_exact(8)
-                .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|chunk| u64::from_le_bytes(*chunk))
                 .collect::<Vec<_>>();
             assert_eq!(
                 parse_boot(&words, 96).unwrap(),
