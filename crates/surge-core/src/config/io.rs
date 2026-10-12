@@ -5,6 +5,8 @@ use super::*;
 
 #[cfg(windows)]
 mod windows_atomic;
+#[cfg(windows)]
+mod windows_read;
 
 /// Overwrites `slot` with the parsed value of env var `key`. An unset variable
 /// keeps the value; an unparsable one is reported and ignored rather than
@@ -20,7 +22,11 @@ fn override_from_env<T: std::str::FromStr>(key: &str, slot: &mut T) {
 impl SurgeConfig {
     /// Load config from a TOML file at the given path.
     pub fn load(path: &Path) -> Result<Self, crate::SurgeError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
+        #[cfg(windows)]
+        let content = windows_read::read_to_string(path);
+        #[cfg(not(windows))]
+        let content = std::fs::read_to_string(path);
+        let content = content.map_err(|e| {
             crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display()))
         })?;
         let config: Self = toml::from_str(&content).map_err(|e| {
@@ -432,30 +438,15 @@ mod save_tests {
         completed_reads: usize,
         finished: &std::sync::atomic::AtomicUsize,
     ) -> String {
-        use std::io::Read as _;
         use std::sync::atomic::Ordering;
 
-        let opened = std::fs::File::open(destination);
-        // Capture this thread's last native status before formatting. This is
-        // supporting evidence: std does not promise it belongs to this open.
-        let native_status = windows_atomic::last_native_status_for_test();
-        let mut file = opened.unwrap_or_else(|error| {
+        windows_read::read_to_string(destination).unwrap_or_else(|error| {
             panic!(
-                "config reader open failed: raw_os_error={:?}, last_native_status={native_status:#010x}, completed_reads={completed_reads}, finished_writers={}: {error}",
+                "config reader failed: raw_os_error={:?}, completed_reads={completed_reads}, finished_writers={}: {error}",
                 error.raw_os_error(),
                 finished.load(Ordering::Acquire),
             );
-        });
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap_or_else(|error| {
-            panic!(
-                "config reader read failed: raw_os_error={:?}, completed_reads={completed_reads}, finished_writers={}, buffered_bytes={}: {error}",
-                error.raw_os_error(),
-                finished.load(Ordering::Acquire),
-                contents.len(),
-            );
-        });
-        contents
+        })
     }
 
     #[cfg(windows)]

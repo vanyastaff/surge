@@ -191,17 +191,6 @@ fn invalid_length() -> io::Error {
 }
 
 #[cfg(test)]
-pub(super) fn last_native_status_for_test() -> u32 {
-    #[link(name = "ntdll")]
-    unsafe extern "system" {
-        fn RtlGetLastNtStatus() -> i32;
-    }
-    // SAFETY: parameterless thread-local diagnostic query. This status is only
-    // reported, never used to retry an open or override its Win32 result.
-    unsafe { RtlGetLastNtStatus() as u32 }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
