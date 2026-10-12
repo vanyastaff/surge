@@ -510,14 +510,17 @@ impl Engine {
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
             agent_registry: run_agent_registry.clone(),
-            capacity_ledger,
-            capacity_estimator,
-            capacity_policy: self.config.capacity.clone(),
-            escalation: self.config.escalation.clone(),
-            fallback_agents: self.config.fallback_agents.clone(),
-            storage: self.storage.clone(),
             // A fresh run was never parked — nothing to bypass.
-            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
+            capacity: crate::engine::quota_recovery::RunCapacity::new(
+                capacity_ledger,
+                capacity_estimator,
+                self.config.capacity.clone(),
+                self.config.fallback_agents.clone(),
+                run_agent_registry.clone(),
+                false,
+            ),
+            escalation: self.config.escalation.clone(),
+            storage: self.storage.clone(),
         };
 
         let join = self.spawn_run_execution(params, feed);
@@ -1093,7 +1096,7 @@ impl Engine {
         // `set_run_parked` itself already applies), before anything else
         // about the resume proceeds. Also the source of truth for whether
         // this resumed run's first agent dispatch bypasses the capacity
-        // precheck once (see `RunTaskParams::capacity_precheck_bypass_once`'s
+        // precheck once (see `quota_recovery::RunCapacity`'s bypass
         // doc) — a resumed *non*-parked run (e.g. crash recovery of a
         // `Crashed` row) gets no such bypass.
         // Neither of these two may be best-effort. If the row still reads
@@ -1386,15 +1389,16 @@ impl Engine {
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
             agent_registry: run_agent_registry.clone(),
-            capacity_ledger,
-            capacity_estimator,
-            capacity_policy: self.config.capacity.clone(),
-            escalation: self.config.escalation.clone(),
-            fallback_agents: self.config.fallback_agents.clone(),
-            storage: self.storage.clone(),
-            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(
+            capacity: crate::engine::quota_recovery::RunCapacity::new(
+                capacity_ledger,
+                capacity_estimator,
+                self.config.capacity.clone(),
+                self.config.fallback_agents.clone(),
+                run_agent_registry.clone(),
                 was_parked || capacity_continue,
             ),
+            escalation: self.config.escalation.clone(),
+            storage: self.storage.clone(),
         };
 
         let join = self.spawn_run_execution(params, feed);
