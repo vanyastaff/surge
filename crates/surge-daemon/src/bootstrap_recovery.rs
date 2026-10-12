@@ -146,19 +146,9 @@ fn fold_lifecycle(
     expected: &ExpectedBootstrapRun,
 ) -> StartupState {
     let registry_status = registry.status;
-    let mut terminal = None;
     let mut parked = None;
     for event in events {
-        let outcome = match &event.payload.payload {
-            EventPayload::RunCompleted { terminal_node } => Some(RunOutcome::Completed {
-                terminal: terminal_node.clone(),
-            }),
-            EventPayload::RunFailed { error } => Some(RunOutcome::Failed {
-                error: error.clone(),
-            }),
-            EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
-                reason: reason.clone(),
-            }),
+        match &event.payload.payload {
             EventPayload::RunParked {
                 wake_at, worktree, ..
             } => {
@@ -166,21 +156,21 @@ fn fold_lifecycle(
                     return StartupState::Incomplete(StartupConflict::Identity);
                 }
                 parked = Some(*wake_at);
-                None
             },
-            EventPayload::RunWokeFromPark {} => {
-                parked = None;
-                None
-            },
-            _ => None,
-        };
-        if let Some(outcome) = outcome {
-            if terminal.is_some() {
-                return StartupState::Incomplete(StartupConflict::ConflictingOutcomes);
-            }
-            terminal = Some(outcome);
+            EventPayload::RunWokeFromPark {} => parked = None,
+            _ => {},
         }
     }
+    // The shared terminal verdict (#95).
+    let terminal = match surge_persistence::runs::ReadEvent::terminal_verdict(events) {
+        surge_core::run_verdict::TerminalVerdict::Conflict { .. } => {
+            return StartupState::Incomplete(StartupConflict::ConflictingOutcomes);
+        },
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+            Some(RunOutcome::from_terminal(&claim.outcome))
+        },
+        surge_core::run_verdict::TerminalVerdict::Open => None,
+    };
     if let Some(outcome) = terminal {
         let agrees = match registry_status {
             RunStatus::Completed => matches!(outcome, RunOutcome::Completed { .. }),

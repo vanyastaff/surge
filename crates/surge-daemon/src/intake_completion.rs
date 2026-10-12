@@ -242,20 +242,19 @@ pub(crate) async fn durable_outcome(
             return None;
         },
     }
-    events.iter().rev().find_map(|event| match &event.payload {
-        surge_core::run_event::EventPayload::RunCompleted { terminal_node } => {
-            Some(RunOutcome::Completed {
-                terminal: terminal_node.clone(),
-            })
+    // The shared terminal verdict (#95): a conflicting history is not a
+    // historical outcome, so the ticket state is preserved.
+    match surge_core::run_verdict::TerminalVerdict::of_run_events(&events) {
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+            Some(RunOutcome::from_terminal(&claim.outcome))
         },
-        surge_core::run_event::EventPayload::RunFailed { error } => Some(RunOutcome::Failed {
-            error: error.clone(),
-        }),
-        surge_core::run_event::EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
-            reason: reason.clone(),
-        }),
-        _ => None,
-    })
+        verdict @ surge_core::run_verdict::TerminalVerdict::Conflict { .. } => {
+            warn!(%run_id, seqs = ?verdict.conflicting_seqs(),
+                "conflicting terminal history; preserving ticket state");
+            None
+        },
+        surge_core::run_verdict::TerminalVerdict::Open => None,
+    }
 }
 
 async fn reconcile_pending(

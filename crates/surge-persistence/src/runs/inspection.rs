@@ -762,7 +762,7 @@ fn read_folded_with_gate_receipt(
     let mut bindings = 0;
     let mut flow_input_bindings = 0;
     let mut startup_open = true;
-    let mut definitive_terminal_seen = false;
+    let mut terminal_history = surge_core::run_verdict::TerminalHistory::default();
     let mut recent = std::collections::VecDeque::new();
     let mut opened_connections = std::collections::HashMap::new();
     let mut seen_connections = std::collections::HashSet::new();
@@ -989,16 +989,16 @@ fn read_folded_with_gate_receipt(
                     ));
                 }
             }
+            // The shared terminal verdict (#95): a second definitive
+            // terminal event makes the history ambiguous.
+            terminal_history.observe(sequence, &payload);
             if matches!(
-                payload,
-                E::RunCompleted { .. } | E::RunFailed { .. } | E::RunAborted { .. }
+                terminal_history.verdict(),
+                surge_core::run_verdict::TerminalVerdict::Conflict { .. }
             ) {
-                if definitive_terminal_seen {
-                    return Err(StorageError::MigrationFailed(
-                        "owned history contains ambiguous definitive terminal events".into(),
-                    ));
-                }
-                definitive_terminal_seen = true;
+                return Err(StorageError::MigrationFailed(
+                    "owned history contains ambiguous definitive terminal events".into(),
+                ));
             }
             startup_open &= matches!(
                 &payload,

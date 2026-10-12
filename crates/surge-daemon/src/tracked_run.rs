@@ -382,7 +382,6 @@ pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
     if matches!(outcome, RunOutcome::SettlementFailed { .. }) {
         return false;
     }
-    let mut definitive = None;
     let mut parked = None;
     let mut suspended = None;
     let mut recovery = None;
@@ -390,16 +389,7 @@ pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
         if event.seq.0 != index as u64 + 1 {
             return false;
         }
-        let terminal = match &event.payload.payload {
-            EventPayload::RunCompleted { terminal_node } => Some(RunOutcome::Completed {
-                terminal: terminal_node.clone(),
-            }),
-            EventPayload::RunFailed { error } => Some(RunOutcome::Failed {
-                error: error.clone(),
-            }),
-            EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
-                reason: reason.clone(),
-            }),
+        match &event.payload.payload {
             EventPayload::RunRecoveryRequired {
                 control_generation,
                 diagnostic,
@@ -408,34 +398,27 @@ pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
                     control_generation: *control_generation,
                     diagnostic: diagnostic.clone(),
                 });
-                None
             },
             EventPayload::RunSuspended { fence } if fence.cleanup_confirmed => {
                 suspended = Some(fence.clone());
-                None
             },
             EventPayload::RunContinued { .. } => {
                 suspended = None;
                 recovery = None;
-                None
             },
-            EventPayload::RunParked { wake_at, .. } => {
-                parked = Some(*wake_at);
-                None
-            },
-            EventPayload::RunWokeFromPark {} => {
-                parked = None;
-                None
-            },
-            _ => None,
-        };
-        if let Some(terminal) = terminal {
-            if definitive.is_some() {
-                return false;
-            }
-            definitive = Some(terminal);
+            EventPayload::RunParked { wake_at, .. } => parked = Some(*wake_at),
+            EventPayload::RunWokeFromPark {} => parked = None,
+            _ => {},
         }
     }
+    // The shared terminal verdict (#95): a conflict never confirms.
+    let definitive = match ReadEvent::terminal_verdict(events) {
+        surge_core::run_verdict::TerminalVerdict::Conflict { .. } => return false,
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+            Some(RunOutcome::from_terminal(&claim.outcome))
+        },
+        surge_core::run_verdict::TerminalVerdict::Open => None,
+    };
     definitive
         .or(recovery)
         .or_else(|| {
