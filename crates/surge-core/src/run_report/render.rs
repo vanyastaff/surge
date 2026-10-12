@@ -432,7 +432,21 @@ fn completion_label(completion: &RunCompletion) -> String {
             )
         },
         RunCompletion::Incomplete => "NOT FINISHED".to_string(),
+        RunCompletion::Conflicted { claims } => format!(
+            "CONFLICTED — unconfirmed; the log claims termination {} times ({})",
+            claims.len(),
+            escape_markdown(&conflict_claims(claims))
+        ),
     }
+}
+
+/// The conflicting claims, in log order, for every renderer.
+fn conflict_claims(claims: &[crate::run_verdict::TerminalClaim]) -> String {
+    claims
+        .iter()
+        .map(|claim| format!("seq {}: {:?}", claim.seq, claim.outcome.kind()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Shared by [`render_markdown`] (raw; escaped with [`escape_markdown`] at
@@ -609,6 +623,14 @@ pub fn render_html(report: &RunReport) -> String {
             )
         },
         RunCompletion::Incomplete => ("warn", "NOT FINISHED".to_string()),
+        RunCompletion::Conflicted { claims } => (
+            "bad",
+            format!(
+                "CONFLICTED — unconfirmed; the log claims termination {} times ({})",
+                claims.len(),
+                conflict_claims(claims)
+            ),
+        ),
     };
     body.push_str(&format!(
         "<p class=\"status {status_class}\">{}</p>\n",

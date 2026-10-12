@@ -266,27 +266,36 @@ impl StageSpan {
     }
 }
 
-/// Status and attributes for the run's root span from its terminal event.
+/// Status and attributes for the run's root span from its terminal verdict
+/// (#95). A conflict is an error with `surge.terminal_conflict` naming the
+/// claims' sequence numbers.
 fn run_outcome(events: &[RunEvent]) -> (u8, Option<String>, Vec<Value>) {
-    for event in events.iter().rev() {
-        match &event.payload {
-            EventPayload::RunCompleted { terminal_node } => {
-                return (
-                    STATUS_OK,
-                    None,
-                    vec![attr("surge.terminal_node", terminal_node.as_str())],
-                );
-            },
-            EventPayload::RunFailed { error } => {
-                return (STATUS_ERROR, Some(error.clone()), Vec::new());
-            },
-            EventPayload::RunAborted { reason } => {
-                return (STATUS_ERROR, Some(reason.clone()), Vec::new());
-            },
-            _ => {},
-        }
+    use crate::run_verdict::{TerminalOutcome, TerminalVerdict};
+    match TerminalVerdict::of_run_events(events) {
+        TerminalVerdict::Terminal(claim) => match claim.outcome {
+            TerminalOutcome::Completed { terminal_node } => (
+                STATUS_OK,
+                None,
+                vec![attr("surge.terminal_node", terminal_node.as_str())],
+            ),
+            TerminalOutcome::Failed { error } => (STATUS_ERROR, Some(error), Vec::new()),
+            TerminalOutcome::Aborted { reason } => (STATUS_ERROR, Some(reason), Vec::new()),
+        },
+        verdict @ TerminalVerdict::Conflict { .. } => {
+            let seqs = verdict
+                .conflicting_seqs()
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                STATUS_ERROR,
+                Some("conflicting terminal history; outcome unconfirmed".into()),
+                vec![attr("surge.terminal_conflict", seqs.as_str())],
+            )
+        },
+        TerminalVerdict::Open => (STATUS_UNSET, None, vec![attr("surge.in_progress", true)]),
     }
-    (STATUS_UNSET, None, vec![attr("surge.in_progress", true)])
 }
 
 #[allow(clippy::too_many_arguments)]
