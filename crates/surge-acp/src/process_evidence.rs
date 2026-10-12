@@ -6,6 +6,10 @@ use surge_core::execution_recovery::process::{
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::observe_named_container;
 
 /// Observation failed; callers must retain Unknown rather than infer cleanup.
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +26,11 @@ pub fn observe(pid: u32) -> Result<(ProcessIdentity, u32), ObservationError> {
     {
         macos::observe(pid)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows::observe(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = pid;
         Err(ObservationError(
@@ -35,14 +43,24 @@ pub fn observe_container(
     pid: u32,
     coverage: WriterCoverage,
 ) -> Result<WriterContainer, ObservationError> {
-    let (identity, group) = observe(pid)?;
-    if group != pid {
-        return Err(ObservationError(
-            "process is not its own isolated group leader".into(),
-        ));
+    #[cfg(windows)]
+    {
+        let _ = (pid, coverage);
+        Err(ObservationError(
+            "Windows requires an actual named Job Object observation".into(),
+        ))
     }
-    WriterContainer::new(identity, group, coverage)
-        .map_err(|error| ObservationError(error.to_string()))
+    #[cfg(not(windows))]
+    {
+        let (identity, group) = observe(pid)?;
+        if group != pid {
+            return Err(ObservationError(
+                "process is not its own isolated group leader".into(),
+            ));
+        }
+        WriterContainer::new(identity, group, coverage)
+            .map_err(|error| ObservationError(error.to_string()))
+    }
 }
 /// Prove old-boot absence only for the same captured machine and supported platform.
 pub fn old_boot_gone(identity: &ProcessIdentity) -> Result<bool, ObservationError> {
@@ -77,92 +95,114 @@ pub enum GroupState {
 /// Observe whether the recorded group still has members.
 #[must_use]
 pub fn group_state(container: &WriterContainer) -> GroupState {
-    match old_boot_gone(container.identity()) {
-        Ok(true) => return GroupState::Empty,
-        Ok(false) => {},
-        Err(error) => return GroupState::Unknown(error.to_string()),
-    }
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        let Ok(group) = i32::try_from(container.group()) else {
-            return GroupState::Unknown("group identity is out of range".into());
-        };
-        match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None) {
-            Ok(()) => match observe(container.identity().pid()) {
-                Ok((current, current_group))
-                    if &current == container.identity() && current_group == container.group() =>
-                {
-                    GroupState::LeaderAlive
-                },
-                _ => GroupState::Unmatched,
-            },
-            Err(nix::errno::Errno::ESRCH) => GroupState::Empty,
-            Err(error) => GroupState::Unknown(format!("group observation failed: {error}")),
+        windows::group_state(container)
+    }
+    #[cfg(not(windows))]
+    {
+        match old_boot_gone(container.identity()) {
+            Ok(true) => return GroupState::Empty,
+            Ok(false) => {},
+            Err(error) => return GroupState::Unknown(error.to_string()),
         }
-    }
-    #[cfg(not(unix))]
-    {
-        GroupState::Unknown("platform container probe unavailable".into())
+        #[cfg(unix)]
+        {
+            let Ok(group) = i32::try_from(container.group()) else {
+                return GroupState::Unknown("group identity is out of range".into());
+            };
+            match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None) {
+                Ok(()) => match observe(container.identity().pid()) {
+                    Ok((current, current_group))
+                        if &current == container.identity()
+                            && current_group == container.group() =>
+                    {
+                        GroupState::LeaderAlive
+                    },
+                    _ => GroupState::Unmatched,
+                },
+                Err(nix::errno::Errno::ESRCH) => GroupState::Empty,
+                Err(error) => GroupState::Unknown(format!("group observation failed: {error}")),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            GroupState::Unknown("platform container probe unavailable".into())
+        }
     }
 }
 
 /// Stop a recorded group whose leader identity still matches (ADR-0021).
 ///
-/// Sends SIGTERM to the group, waits up to `grace`, then SIGKILL and waits up to
-/// `grace` again. A group whose leader identity cannot be matched is never
-/// signalled, so a reused group id cannot be hit. Blocking: run off async workers.
+/// On Unix, sends SIGTERM, waits up to `grace`, then SIGKILL and waits up to
+/// `grace` again. On Windows, terminates the retained, ACL-verified named Job
+/// Object and waits up to `grace`. An unmatched leader is never signalled.
+/// Blocking: run off async workers.
 #[must_use]
 pub fn stop_group(container: &WriterContainer, grace: std::time::Duration) -> GroupState {
-    let state = group_state(container);
-    if state != GroupState::LeaderAlive {
-        return state;
-    }
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use nix::sys::signal::{Signal, killpg};
-        let Ok(group) = i32::try_from(container.group()) else {
-            return GroupState::Unknown("group identity is out of range".into());
-        };
-        let group = nix::unistd::Pid::from_raw(group);
-        for signal in [Signal::SIGTERM, Signal::SIGKILL] {
-            if group_state(container) != GroupState::LeaderAlive {
-                break;
-            }
-            match killpg(group, signal) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {},
-                Err(error) => {
-                    return GroupState::Unknown(format!("group {signal} failed: {error}"));
-                },
-            }
-            let deadline = std::time::Instant::now() + grace;
-            while std::time::Instant::now() < deadline {
-                if group_state(container) == GroupState::Empty {
-                    return GroupState::Empty;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
+        windows::stop_group(container, grace)
+    }
+    #[cfg(not(windows))]
+    {
+        let state = group_state(container);
+        if state != GroupState::LeaderAlive {
+            return state;
         }
-        group_state(container)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = grace;
-        state
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{Signal, killpg};
+            let Ok(group) = i32::try_from(container.group()) else {
+                return GroupState::Unknown("group identity is out of range".into());
+            };
+            let group = nix::unistd::Pid::from_raw(group);
+            for signal in [Signal::SIGTERM, Signal::SIGKILL] {
+                if group_state(container) != GroupState::LeaderAlive {
+                    break;
+                }
+                match killpg(group, signal) {
+                    Ok(()) | Err(nix::errno::Errno::ESRCH) => {},
+                    Err(error) => {
+                        return GroupState::Unknown(format!("group {signal} failed: {error}"));
+                    },
+                }
+                let deadline = std::time::Instant::now() + grace;
+                while std::time::Instant::now() < deadline {
+                    if group_state(container) == GroupState::Empty {
+                        return GroupState::Empty;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            group_state(container)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = grace;
+            state
+        }
     }
 }
 
 pub fn probe(container: &WriterContainer) -> WriterLiveness {
-    match old_boot_gone(container.identity()) {
-        Ok(true) => return WriterLiveness::Gone,
-        Ok(false) => {},
-        Err(error) => return WriterLiveness::Unknown(error.to_string()),
-    }
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        let Ok(group) = i32::try_from(container.group()) else {
-            return WriterLiveness::Unknown("group identity is out of range".into());
-        };
-        match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group),None) {
+        windows::probe(container)
+    }
+    #[cfg(not(windows))]
+    {
+        match old_boot_gone(container.identity()) {
+            Ok(true) => return WriterLiveness::Gone,
+            Ok(false) => {},
+            Err(error) => return WriterLiveness::Unknown(error.to_string()),
+        }
+        #[cfg(unix)]
+        {
+            let Ok(group) = i32::try_from(container.group()) else {
+                return WriterLiveness::Unknown("group identity is out of range".into());
+            };
+            match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group),None) {
             Ok(())=>match observe(container.identity().pid()) {
                 Ok((current,current_group)) if &current==container.identity() && current_group==container.group()=>WriterLiveness::Alive,
                 _=>WriterLiveness::Unknown("group exists but leader identity cannot be matched; descendants or a reused identity may exist".into()),
@@ -171,10 +211,11 @@ pub fn probe(container: &WriterContainer) -> WriterLiveness {
             Err(nix::errno::Errno::ESRCH)=>WriterLiveness::Unknown("group is empty but unrestricted descendant/effect coverage is incomplete".into()),
             Err(error)=>WriterLiveness::Unknown(format!("group observation failed: {error}")),
         }
-    }
-    #[cfg(not(unix))]
-    {
-        WriterLiveness::Unknown("platform container probe unavailable".into())
+        }
+        #[cfg(not(unix))]
+        {
+            WriterLiveness::Unknown("platform container probe unavailable".into())
+        }
     }
 }
 
