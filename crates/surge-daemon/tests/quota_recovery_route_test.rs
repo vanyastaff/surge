@@ -499,6 +499,53 @@ async fn quota_dispatch_fixture_source(
     }
 }
 
+// Server shutdown stops admission, but detached completion supervisors retain the
+// engine through joined run/writer completion and final task-registry reconciliation.
+// Require those actual owners to release it before removing the fixture directories.
+async fn unwrap_settled_owner<T>(mut owner: Arc<T>, name: &str) -> T {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match Arc::try_unwrap(owner) {
+            Ok(value) => return value,
+            Err(retained) => owner = retained,
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{name} still has {} retained owners at fixture teardown",
+            Arc::strong_count(&owner)
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn settle_quota_fixture(
+    engine: Arc<Engine>,
+    host_budget: Arc<host_budget_bridge::HostBudgetBridge>,
+    bridge: Arc<ObservedBridge>,
+) {
+    drop(unwrap_settled_owner(engine, "quota engine").await);
+    host_budget.shutdown().await;
+    drop(host_budget);
+    let observed = unwrap_settled_owner(bridge, "quota bridge").await;
+    observed.bridge.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn fixture_settlement_waits_for_retained_owner_release() {
+    let owner = Arc::new(());
+    let retained = owner.clone();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        released.await.unwrap();
+        drop(retained);
+    });
+    let mut settlement = Box::pin(unwrap_settled_owner(owner, "controlled owner"));
+    assert!(futures::poll!(&mut settlement).is_pending());
+    release.send(()).unwrap();
+    worker.await.unwrap();
+    settlement.await;
+}
+
 async fn quota_dispatch_in_home(
     home: &Path,
     project: &Path,
@@ -813,7 +860,7 @@ async fn quota_dispatch_in_home(
             .unwrap()
             .unwrap()
             .unwrap();
-        host_budget.shutdown().await;
+        settle_quota_fixture(engine, host_budget, bridge).await;
         return;
     }
     assert_eq!(started["method"], "work_item_ok", "{started}");
@@ -1178,7 +1225,7 @@ async fn quota_dispatch_in_home(
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            host_budget.shutdown().await;
+            settle_quota_fixture(engine, host_budget, bridge).await;
             return;
         }
         assert!(
@@ -1259,8 +1306,9 @@ async fn quota_dispatch_in_home(
             bridge.primary_continue.notify_one();
             // A fresh engine and ACP bridge must restore the real persisted plan,
             // frozen routing snapshot and task workspace rather than in-memory state.
+            let restored_bridge = Arc::new(AcpBridge::with_defaults().unwrap());
             let restored_budget = host_budget_bridge::HostBudgetBridge::new(
-                Arc::new(AcpBridge::with_defaults().unwrap()),
+                restored_bridge.clone(),
                 storage.clone(),
                 cancel.clone(),
             );
@@ -1389,7 +1437,14 @@ async fn quota_dispatch_in_home(
             );
             cancel.cancel();
             scheduler_task.await.unwrap();
+            drop(unwrap_settled_owner(restored_engine, "restored engine").await);
             restored_budget.shutdown().await;
+            drop(restored_budget);
+            unwrap_settled_owner(restored_bridge, "restored bridge")
+                .await
+                .shutdown()
+                .await
+                .unwrap();
         }
         let _ = engine
             .stop_run(next.run, "predispatch fixture cleanup".into())
@@ -1475,7 +1530,7 @@ async fn quota_dispatch_in_home(
             finished.is_ok(),
             "normal start must finish or durably park according to exact capacity proof: {failures:?}"
         );
-        host_budget.shutdown().await;
+        settle_quota_fixture(engine, host_budget, bridge).await;
         return;
     }
     let _ = engine
@@ -1594,10 +1649,7 @@ async fn quota_dispatch_in_home(
         .entries;
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].run, attempt.run);
-    host_budget.shutdown().await;
-    drop(engine);
-    drop(host_budget);
-    drop(bridge);
+    settle_quota_fixture(engine, host_budget, bridge).await;
     drop(storage);
 }
 

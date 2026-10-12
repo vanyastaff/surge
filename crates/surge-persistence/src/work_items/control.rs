@@ -148,13 +148,7 @@ impl WorkItemStore {
         claim.verify_lock()?;
         if serde_json::to_value(&current)? != serde_json::to_value(observed)?
             || control.as_ref() != observed_control
-            || !matches!(
-                current.state,
-                WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
-            )
-            || control.as_ref().is_some_and(|value| {
-                !matches!(value.state, State::Executing | State::SuspendRequested)
-            })
+            || !reconciliation_state_eligible(current.state, control.as_ref())
         {
             return Ok(ReconciliationSettlement::Superseded);
         }
@@ -422,6 +416,24 @@ impl WorkItemStore {
         tx.commit()?;
         Ok(control)
     }
+}
+
+fn reconciliation_state_eligible(state: WorkItemAttemptState, control: Option<&Control>) -> bool {
+    if matches!(
+        state,
+        WorkItemAttemptState::Suspended | WorkItemAttemptState::Attention
+    ) {
+        return control.is_some_and(|value| value.state == State::ContinueReserved);
+    }
+    matches!(
+        state,
+        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+    ) && control.is_none_or(|value| {
+        matches!(
+            value.state,
+            State::Executing | State::SuspendRequested | State::ContinueReserved
+        )
+    })
 }
 
 fn write_reconciliation_result(

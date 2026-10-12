@@ -2015,6 +2015,15 @@ async fn wait_for_continue_confirmation(
     }
 }
 
+fn bounded_child_log(path: &Path) -> String {
+    use std::io::Read;
+    let mut log = String::new();
+    match std::fs::File::open(path).and_then(|file| file.take(16 * 1024).read_to_string(&mut log)) {
+        Ok(_) => log,
+        Err(error) => format!("child log unavailable: {error}"),
+    }
+}
+
 async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: bool) {
     let home = FixtureHome::new().unwrap();
     committed_continue_fixture_in_home(&home, crash_ack, successor_gate).await;
@@ -2058,8 +2067,9 @@ async fn committed_continue_fixture_in_home(
         while !barrier.with_extension("ready").exists() {
             if let Some(status) = child.try_wait().unwrap() {
                 panic!(
-                    "owned child exited {status}; retained log={}",
-                    child_log.display()
+                    "owned child exited {status}; log={}; contents={}",
+                    child_log.display(),
+                    bounded_child_log(&child_log)
                 );
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2070,8 +2080,9 @@ async fn committed_continue_fixture_in_home(
         let _ = child.kill();
         let _ = child.wait();
         panic!(
-            "owned child did not reach close barrier; retained log={}",
-            child_log.display()
+            "owned child did not reach close barrier; log={}; contents={}",
+            child_log.display(),
+            bounded_child_log(&child_log)
         );
     }
     let command = WorkItemCommand::Suspend {

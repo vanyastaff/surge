@@ -465,3 +465,50 @@ async fn suspension_after_eligibility_survives_inner_dispatch_refusal() {
     drop(storage);
     home.close().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suspended_attempt_requires_a_durable_continue_for_reconciliation() {
+    use surge_core::execution_recovery::{
+        ExecutionControlState as State, WorkItemExecutionControl,
+    };
+    let home = FixtureHome::new().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let (storage, mut attempt, _) = reserve(home.path(), project.path()).await;
+    attempt.state = WorkItemAttemptState::Suspended;
+    let mut authority = ReconciliationAuthority {
+        attempt,
+        control: None,
+    };
+    assert!(!reconciliation_eligible(&authority));
+    for state in [
+        State::Executing,
+        State::SuspendRequested,
+        State::Suspended,
+        State::Attention,
+        State::ContinueReserved,
+    ] {
+        authority.control = Some(WorkItemExecutionControl {
+            item: authority.attempt.item,
+            run: authority.attempt.run,
+            attempt_generation: authority.attempt.binding.generation,
+            generation: 2,
+            operation: WorkItemOperationId::new(),
+            state,
+            fence: None,
+            allow_new_session: false,
+            diagnostic: None,
+        });
+        for attempt_state in [
+            WorkItemAttemptState::Suspended,
+            WorkItemAttemptState::Attention,
+        ] {
+            authority.attempt.state = attempt_state;
+            assert_eq!(
+                reconciliation_eligible(&authority),
+                state == State::ContinueReserved
+            );
+        }
+    }
+    drop(storage);
+    home.close().unwrap();
+}

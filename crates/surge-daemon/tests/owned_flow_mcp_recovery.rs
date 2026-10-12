@@ -1955,10 +1955,23 @@ async fn cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effe
                 .unwrap();
             corrupt(root.home(), &accepted, Corruption::ManifestBinding);
             let mut host = phase(root.path(), root.home(), "refuse-held", "wake.ready").await;
-            let transaction = connection
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            let journal_path = root
+                .home()
+                .join("runs")
+                .join(receipt.run.to_string())
+                .join("events.sqlite");
+            let baseline_epoch: u64 = connection
+                .query_row(
+                    "SELECT MAX(epoch) FROM run_host_openings WHERE run_id=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
                 .unwrap();
-            let pending: Option<u64> = transaction
+            // Gate the append, not admission: the actual refusal writer must
+            // commit its host opening before we block the separate registry ACK.
+            let journal_barrier = rusqlite::Connection::open(&journal_path).unwrap();
+            journal_barrier.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let pending: Option<u64> = connection
                 .query_row(
                     "SELECT delivered_event_seq FROM owned_flow_wake_refusal_outbox",
                     [],
@@ -1987,11 +2000,11 @@ async fn cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effe
                 b"allow actual journal append, registry ACK blocked",
             )
             .unwrap();
-            let journal_path = root
-                .home()
-                .join("runs")
-                .join(receipt.run.to_string())
-                .join("events.sqlite");
+            wait_actual_refusal_opening(&connection, receipt.run, baseline_epoch).await;
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            journal_barrier.execute_batch("ROLLBACK").unwrap();
             let (original_seq, original_payload) = wait_actual_refusal_event(&journal_path).await;
             let payload: surge_core::VersionedEventPayload =
                 serde_json::from_slice(&original_payload).unwrap();
@@ -2121,6 +2134,31 @@ async fn cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effe
         }
         root.close();
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn wait_actual_refusal_opening(
+    connection: &rusqlite::Connection,
+    run: surge_core::RunId,
+    baseline: u64,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let epoch: u64 = connection
+                .query_row(
+                    "SELECT MAX(epoch) FROM run_host_openings WHERE run_id=?",
+                    [run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if epoch > baseline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("actual refusal writer must enter its retained host opening");
 }
 
 async fn wait_actual_refusal_ack(path: &Path) {

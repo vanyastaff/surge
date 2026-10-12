@@ -1044,7 +1044,10 @@ async fn reconcile_candidate(
 ) -> Result<(), WorkItemError> {
     if !matches!(
         captured.state,
-        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+        WorkItemAttemptState::Reserved
+            | WorkItemAttemptState::Launched
+            | WorkItemAttemptState::Suspended
+            | WorkItemAttemptState::Attention
     ) {
         return Ok(());
     }
@@ -1059,7 +1062,10 @@ async fn reconcile_candidate(
         .ok_or(WorkItemError::NotFound)?;
     if !matches!(
         current.state,
-        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+        WorkItemAttemptState::Reserved
+            | WorkItemAttemptState::Launched
+            | WorkItemAttemptState::Suspended
+            | WorkItemAttemptState::Attention
     ) {
         return Ok(());
     }
@@ -1070,7 +1076,10 @@ async fn reconcile_candidate(
             if store.for_run(captured.run)?.is_some_and(|current| {
                 !matches!(
                     current.state,
-                    WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+                    WorkItemAttemptState::Reserved
+                        | WorkItemAttemptState::Launched
+                        | WorkItemAttemptState::Suspended
+                        | WorkItemAttemptState::Attention
                 )
             }) {
                 return Ok(());
@@ -1117,13 +1126,26 @@ async fn reconcile_candidate(
 
 fn reconciliation_eligible(authority: &ReconciliationAuthority) -> bool {
     use surge_core::execution_recovery::ExecutionControlState;
+    // Continue is already durable operator authorization, even while its
+    // attempt still carries the last confirmed suspension projection.
+    if matches!(
+        authority.attempt.state,
+        WorkItemAttemptState::Suspended | WorkItemAttemptState::Attention
+    ) {
+        return authority
+            .control
+            .as_ref()
+            .is_some_and(|control| control.state == ExecutionControlState::ContinueReserved);
+    }
     matches!(
         authority.attempt.state,
         WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
     ) && authority.control.as_ref().is_none_or(|control| {
         matches!(
             control.state,
-            ExecutionControlState::Executing | ExecutionControlState::SuspendRequested
+            ExecutionControlState::Executing
+                | ExecutionControlState::SuspendRequested
+                | ExecutionControlState::ContinueReserved
         )
     })
 }

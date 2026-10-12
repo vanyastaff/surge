@@ -466,3 +466,89 @@ async fn reconciliation_changed_eligible_attempt_is_superseded() {
     drop(store);
     home.close().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciliation_current_continue_settles_failure_and_projection() {
+    for (attempt_state, terminal) in [
+        (WorkItemAttemptState::Suspended, false),
+        (WorkItemAttemptState::Suspended, true),
+        (WorkItemAttemptState::Attention, false),
+        (WorkItemAttemptState::Attention, true),
+    ] {
+        let (home, store, claim) = fixture().await;
+        let mut pending = request_suspend(&store, &claim);
+        pending.state = ExecutionControlState::ContinueReserved;
+        // Storage CAS input only; daemon integration supplies the actual
+        // suspension journal and accepted human Continue authorization.
+        control::write_control(&store.pool.get().unwrap(), &pending).unwrap();
+        let mut observed = store.for_run(claim.run()).unwrap().unwrap();
+        observed.state = attempt_state;
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE work_item_attempts SET state=?,payload=? WHERE run=?",
+                rusqlite::params![
+                    serde_json::to_value(attempt_state)
+                        .unwrap()
+                        .as_str()
+                        .unwrap(),
+                    serde_json::to_string(&observed).unwrap(),
+                    claim.run().to_string()
+                ],
+            )
+            .unwrap();
+        let stale = pending.clone();
+        pending = request_suspend(&store, &claim);
+        pending.state = ExecutionControlState::ContinueReserved;
+        control::write_control(&store.pool.get().unwrap(), &pending).unwrap();
+        assert_superseded(&store, &claim, &observed, Some(&stale));
+        let settled = if terminal {
+            store.settle_reconciliation_projection(
+                &claim,
+                &observed,
+                Some(&pending),
+                ReconciliationProjection::Completed,
+            )
+        } else {
+            store.settle_reconciliation_error(
+                &claim,
+                &observed,
+                Some(&pending),
+                "continue recovery refused",
+            )
+        }
+        .unwrap();
+        assert_eq!(settled, ReconciliationSettlement::Settled);
+        let current = store.for_run(claim.run()).unwrap().unwrap();
+        assert_eq!(
+            current.state,
+            if terminal {
+                WorkItemAttemptState::Completed
+            } else {
+                WorkItemAttemptState::Attention
+            }
+        );
+        let control = store.execution_control(claim.run()).unwrap().unwrap();
+        assert_eq!(
+            control.state,
+            if terminal {
+                ExecutionControlState::Terminal
+            } else {
+                ExecutionControlState::Attention
+            }
+        );
+        assert_eq!(
+            control.diagnostic.as_deref(),
+            if terminal {
+                None
+            } else {
+                Some("continue recovery refused")
+            }
+        );
+        drop(claim);
+        drop(store);
+        home.close().unwrap();
+    }
+}
