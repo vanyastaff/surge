@@ -43,6 +43,24 @@ pub struct ReadEvent {
     pub payload: VersionedEventPayload,
 }
 
+impl ReadEvent {
+    /// The terminal verdict over persisted events, in sequence order (#95).
+    #[must_use]
+    pub fn terminal_verdict(events: &[Self]) -> surge_core::run_verdict::TerminalVerdict {
+        Self::terminal_history(events).into_verdict()
+    }
+
+    /// The verdict plus the post-terminal activity diagnostic.
+    #[must_use]
+    pub fn terminal_history(events: &[Self]) -> surge_core::run_verdict::TerminalHistory {
+        surge_core::run_verdict::TerminalHistory::of(
+            events
+                .iter()
+                .map(|event| (event.seq.as_u64(), event.payload.payload())),
+        )
+    }
+}
+
 impl RunReader {
     /// Run id this reader is bound to.
     #[must_use]
