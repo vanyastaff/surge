@@ -88,8 +88,17 @@ The inventory contains **387 tests: 383 passed and 4 ignored**. JUnit contains
 383 executed test cases, with zero failures and zero skips; all seven required
 coverage tests passed. The four ignored inventory rows, including the isolated
 subprocess helper, are listed in the manifest and do not count as executed cases.
-Linux and Windows remain pending for this same SHA; no older CI result substitutes
-for either native receipt.
+CI run [38192988110](https://github.com/vanyastaff/surge/actions/runs/38192988110)
+produced complete native Linux, macOS and Windows receipts for this exact SHA.
+Linux and macOS each have a 387-test inventory and 383 passed cases; Windows has
+386 inventory tests and 382 passed cases. The inventories differ by seven Unix-only
+tests and six Windows-only tests; the required bridge scenarios exist on every host.
+Each platform has four ignored inventory
+rows, zero failures, zero JUnit skips and all seven required tests passing. These
+receipts retain Rust/Cargo 1.99.0 and nextest 0.9.148; Linux and Windows are x86_64,
+macOS is arm64. All 21 artifact digests per receipt were verified after copying.
+A complete bridge receipt describes the bridge step only; the broader workflow
+status is independent.
 
 The exact runner invocation was:
 
@@ -108,5 +117,6 @@ SHA-256 values were verified against the manifest after copying.
 | Native platform | Source SHA | Evidence | Status |
 |---|---|---|---|
 | macOS | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Local native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos/manifest.json) | complete: 383 passed, 4 inventory ignored |
-| Linux | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | pending | pending |
-| Windows | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | pending | pending |
+| macOS CI | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/macos-ci/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544365) | bridge complete: 383 passed, 4 inventory ignored |
+| Linux | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/linux/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544362) | bridge complete: 383 passed, 4 inventory ignored |
+| Windows | `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4` | [Native receipt](bridge-evidence/7f937140f84be2df7133c55aeeb2dd01f5b1d5f4/windows/manifest.json), [CI job](https://github.com/vanyastaff/surge/actions/runs/38192988110/job/114629544341) | bridge complete: 382 passed, 4 inventory ignored |

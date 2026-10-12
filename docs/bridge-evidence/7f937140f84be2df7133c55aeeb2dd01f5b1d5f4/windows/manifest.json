@@ -1,0 +1,235 @@
+{
+  "schema": 1,
+  "status": "complete",
+  "errors": [],
+  "commands": [
+    {
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "head-before.stdout.log",
+      "stderr": "head-before.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.031
+    },
+    {
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "status-before.stdout.log",
+      "stderr": "status-before.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.25
+    },
+    {
+      "command": [
+        "rustc",
+        "-Vv"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "rustc.stdout.log",
+      "stderr": "rustc.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.047
+    },
+    {
+      "command": [
+        "cargo",
+        "-V"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "cargo.stdout.log",
+      "stderr": "cargo.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.031
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "--version"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "nextest.stdout.log",
+      "stderr": "nextest.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.062
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--bin",
+        "mock_acp_agent",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--target-dir",
+        "D:\\a\\surge\\surge\\target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "build.stdout.log",
+      "stderr": "build.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 80.282
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "list",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--message-format",
+        "json",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--target-dir",
+        "D:\\a\\surge\\surge\\target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {
+        "CARGO_BIN_EXE_mock_acp_agent": "D:\\a\\surge\\surge\\target\\x86_64-pc-windows-msvc\\debug\\mock_acp_agent.exe"
+      },
+      "stdout": "inventory.stdout.log",
+      "stderr": "inventory.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 114.25
+    },
+    {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "-p",
+        "surge-acp",
+        "--all-features",
+        "--profile",
+        "bridge-portability",
+        "--no-fail-fast",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--target-dir",
+        "D:\\a\\surge\\surge\\target"
+      ],
+      "timed_out": false,
+      "environment_overrides": {
+        "CARGO_BIN_EXE_mock_acp_agent": "D:\\a\\surge\\surge\\target\\x86_64-pc-windows-msvc\\debug\\mock_acp_agent.exe"
+      },
+      "stdout": "tests.stdout.log",
+      "stderr": "tests.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 30.656
+    },
+    {
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "head-after.stdout.log",
+      "stderr": "head-after.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.031
+    },
+    {
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed_out": false,
+      "environment_overrides": {},
+      "stdout": "status-after.stdout.log",
+      "stderr": "status-after.stderr.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.031
+    }
+  ],
+  "started_utc": "2026-10-12T01:45:54.849922+00:00",
+  "host": {
+    "system": "Windows",
+    "release": "2025Server",
+    "machine": "AMD64",
+    "python": "3.12.10"
+  },
+  "required_tests": [
+    "crash_after_n_tool_calls_surfaces_within_2s",
+    "close_against_stuck_mock_times_out",
+    "five_concurrent_sessions_complete_independently",
+    "shutdown_emits_session_ended_for_each_open_session",
+    "cancelled_open_settles_worker_and_child",
+    "bare_drop_during_opening_is_bounded_and_reaps",
+    "mock_executable_discovery_uses_native_paths"
+  ],
+  "job_url": "https://github.com/vanyastaff/surge/actions/runs/38192988110",
+  "revision": "7f937140f84be2df7133c55aeeb2dd01f5b1d5f4",
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "build_target": "x86_64-pc-windows-msvc",
+  "target_directory": "D:\\a\\surge\\surge\\target",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "nextest": "cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)\nrelease: 0.9.148\ncommit-hash: cd1d6d5467322dbc0d39a80cb671d000ac302798\ncommit-date: 2026-10-07\nhost: x86_64-pc-windows-msvc",
+  "inventory": {
+    "total": 386,
+    "ignored": [
+      "surge-acp::bridge_mock_discovery::isolated_mock_discovery_child",
+      "surge-acp::bridge_rate_limit_classification::real_429_with_retry_after_survives_the_acp_wire_as_rate_limited",
+      "surge-acp::ollama_acp_smoke::ollama_runtime_handshakes_and_answers",
+      "surge-acp::reconnect_integration_test::test_realistic_reconnect_delays"
+    ],
+    "required_unavailable": []
+  },
+  "results": {
+    "total": 382,
+    "passed": 382,
+    "failed": 0,
+    "skipped": 0,
+    "required_not_passed": []
+  },
+  "revision_after": "7f937140f84be2df7133c55aeeb2dd01f5b1d5f4",
+  "artifacts": {
+    "build.stderr.log": "04431f511f5fc6ba7849393ad4c0b686bf6eded09579053102ece1acd7814f0c",
+    "build.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo.stdout.log": "b871c86bb07dd7f9f441fcaada9d078da35d4cfd779b90f3dc63cccbbf72d337",
+    "head-after.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "head-after.stdout.log": "2fe0930f09df5a61bec55208eeaf782ac80a7fd23a216b0648de95a5e4b2a63b",
+    "head-before.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "head-before.stdout.log": "2fe0930f09df5a61bec55208eeaf782ac80a7fd23a216b0648de95a5e4b2a63b",
+    "inventory.stderr.log": "2fa49772244970737509ba7f065d7c6da3271cc71a58b431d0d8bb2a5d362327",
+    "inventory.stdout.log": "2c3e41e9e68f9f15ba47a2b629e344f68f92dc21354984022815fc4ddb8811a6",
+    "junit.xml": "0e3cf2663952f88137bce24da6bf9a1011367a552e2eb37443ae2bb0b6c55dd8",
+    "nextest.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "nextest.stdout.log": "da1ae132c5a8cd4cc8bd2c1aa46b426292e09e66b3629b9013da5351bb1ca088",
+    "rustc.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rustc.stdout.log": "10d838f8896732d1aee793e4694fa2678274fb4e37780fe8209bafe88cd3316d",
+    "status-after.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-after.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-before.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status-before.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests.stderr.log": "e2719246f791ca08539e3e566a374e9fe80bc059f944a7b77e22a06a9e995f82",
+    "tests.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
