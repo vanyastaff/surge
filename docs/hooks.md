@@ -72,8 +72,12 @@ The hook process exits with a status. The mapping table:
 | `124`| Same as `≠ 0`. The runtime sets exit `124` when the per-hook timeout fires. |                                  |                          |
 
 A `Reject` from `pre_tool_use` cancels the dispatch. A `Reject` from
-`on_outcome` retries until `AgentLimits::max_retries` is exhausted, at
-which point the engine writes `StageFailed { reason, retry_available: false }`.
+`on_outcome` retries until `AgentLimits::max_retries` is exhausted. The
+stage then fails with a typed "outcome rejection budget exhausted" error
+(naming the last rejecting hook or rule); like any other stage failure it
+reaches the node's `on_error` hooks first, and only if none suppresses it
+does the run task write the single
+`StageFailed { reason, retry_available: false }`.
 A `Reject` from `on_error` is treated as `Proceed` — once a stage has
 already failed, you cannot reject it harder.
 
@@ -90,6 +94,12 @@ The supplied outcome must be declared on the failing node. If it is
 not declared, the engine logs a `WARN [hooks][on_error]
 suppression-with-undeclared-outcome` and lets the original `StageFailed`
 event fire as if the hook had returned `Proceed`.
+
+An exhausted outcome-rejection budget may be suppressed into any declared
+outcome **except** one that was rejected during the same stage visit:
+suppressing back into the rejected outcome would launder a validation
+failure. Such a suppression is refused with a `WARN` and the original
+failure stands, exactly as for an undeclared outcome.
 
 Suppression directives are only honoured for the `on_error` trigger —
 `pre_tool_use`, `post_tool_use`, and `on_outcome` ignore them.

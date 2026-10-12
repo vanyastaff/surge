@@ -2376,7 +2376,26 @@ async fn resolve_stage_error(
         .await);
     }
 
-    if let Some(suppressed) = on_error_resolution.outcome {
+    // An `on_error` hook may suppress an exhausted outcome budget, but never
+    // into an outcome the stage's validation rejected during this visit:
+    // that would launder the rejected result. Refuse it like a suppression
+    // into an undeclared outcome — the failure stands.
+    let suppressed = on_error_resolution.outcome.filter(|suppressed| {
+        let StageError::OutcomeBudgetExhausted { rejected, .. } = &error else {
+            return true;
+        };
+        if rejected.contains(suppressed) {
+            tracing::warn!(
+                target: "engine::stage::error",
+                node = %state.cursor.node,
+                outcome = %suppressed,
+                "on_error suppression into an outcome rejected this visit is refused"
+            );
+            return false;
+        }
+        true
+    });
+    if let Some(suppressed) = suppressed {
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 

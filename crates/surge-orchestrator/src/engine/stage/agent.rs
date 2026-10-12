@@ -1175,6 +1175,7 @@ async fn execute_agent_attempt(
     // can surface `StageFailed` once the agent burns its retry budget.
     let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
     let mut outcome_rejection_attempts: u32 = 0;
+    let mut rejected_outcomes: Vec<OutcomeKey> = Vec::new();
 
     let execution_writer = session_config.writer_id;
     p.writer
@@ -1696,9 +1697,7 @@ async fn execute_agent_attempt(
                     record_outcome_rejection(
                         RejectionRecordParams {
                             writer: p.writer,
-                            bridge: p.bridge,
                             node: p.node,
-                            session_id,
                             outcome: &outcome,
                             hook_id,
                             reason,
@@ -1706,6 +1705,7 @@ async fn execute_agent_attempt(
                             max_rejections: max_outcome_rejections,
                         },
                         &mut outcome_rejection_attempts,
+                        &mut rejected_outcomes,
                     )
                     .await?;
                     retry_feedback = Some(validation_retry_prompt(&format!("{hook_id}: {reason}")));
@@ -1725,9 +1725,7 @@ async fn execute_agent_attempt(
                     record_outcome_rejection(
                         RejectionRecordParams {
                             writer: p.writer,
-                            bridge: p.bridge,
                             node: p.node,
-                            session_id,
                             outcome: &outcome,
                             hook_id: "verification_authority",
                             reason: "a Verified outcome requires a sealed \
@@ -1736,6 +1734,7 @@ async fn execute_agent_attempt(
                             max_rejections: max_outcome_rejections,
                         },
                         &mut outcome_rejection_attempts,
+                        &mut rejected_outcomes,
                     )
                     .await?;
                     retry_feedback = Some(validation_retry_prompt("A verified outcome requires a sealed read-only sandbox. Report an appropriate non-verified outcome instead."));
@@ -1749,7 +1748,7 @@ async fn execute_agent_attempt(
                     match super::verification::seal(p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
                         Ok(report) => Some(report),
                         Err(reason) => {
-                            record_outcome_rejection(RejectionRecordParams { writer: p.writer, bridge: p.bridge, node: p.node, session_id, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts).await?;
+                            record_outcome_rejection(RejectionRecordParams { writer: p.writer, node: p.node, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts, &mut rejected_outcomes).await?;
                             retry_feedback = Some(validation_retry_prompt(&reason));
                             continue;
                         }
@@ -1770,9 +1769,7 @@ async fn execute_agent_attempt(
                     record_outcome_rejection(
                         RejectionRecordParams {
                             writer: p.writer,
-                            bridge: p.bridge,
                             node: p.node,
-                            session_id,
                             outcome: &outcome,
                             hook_id: &rejection.hook_id,
                             reason: &rejection.reason,
@@ -1780,6 +1777,7 @@ async fn execute_agent_attempt(
                             max_rejections: max_outcome_rejections,
                         },
                         &mut outcome_rejection_attempts,
+                        &mut rejected_outcomes,
                     )
                     .await?;
                     retry_feedback = Some(validation_retry_prompt(&format!("{}: {}", rejection.hook_id, rejection.reason)));
@@ -2579,9 +2577,7 @@ fn discovered_task_events(
 
 struct RejectionRecordParams<'a> {
     writer: &'a RunWriter,
-    bridge: &'a Arc<dyn BridgeFacade>,
     node: &'a NodeKey,
-    session_id: surge_core::id::SessionId,
     outcome: &'a OutcomeKey,
     hook_id: &'a str,
     reason: &'a str,
@@ -2622,6 +2618,7 @@ fn missing_outcome_prompt(declared: &[OutcomeDecl]) -> String {
 async fn record_outcome_rejection(
     params: RejectionRecordParams<'_>,
     attempts: &mut u32,
+    rejected: &mut Vec<OutcomeKey>,
 ) -> Result<(), StageError> {
     params
         .writer
@@ -2636,6 +2633,9 @@ async fn record_outcome_rejection(
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
     *attempts += 1;
+    if !rejected.contains(params.outcome) {
+        rejected.push(params.outcome.clone());
+    }
     tracing::info!(
         target: "engine::stage::agent",
         node = %params.node,
@@ -2648,24 +2648,14 @@ async fn record_outcome_rejection(
         "outcome rejected; awaiting agent retry"
     );
 
+    // Exhaustion is the run task's decision to finalize: no `StageFailed`
+    // and no session close here. The stage's cleanup closes the session once.
     if *attempts > params.max_rejections {
-        let exhausted_reason = format!(
-            "on_outcome rejection budget exhausted (last reject from '{}')",
-            params.hook_id
-        );
-        params
-            .writer
-            .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
-                node: params.node.clone(),
-                reason: exhausted_reason.clone(),
-                retry_available: false,
-            }))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?;
-        // Close the session before bailing — the agent isn't going to recover
-        // at this point.
-        let _ = params.bridge.close_session(params.session_id).await;
-        return Err(StageError::AgentCrashed(exhausted_reason));
+        return Err(StageError::OutcomeBudgetExhausted {
+            hook_id: params.hook_id.to_owned(),
+            rule: params.source.to_owned(),
+            rejected: std::mem::take(rejected),
+        });
     }
 
     Ok(())

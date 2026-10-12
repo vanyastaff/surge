@@ -358,7 +358,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn retry_budget_exhausted_emits_stage_failed() {
+async fn retry_budget_exhausted_returns_a_typed_error_and_writes_nothing_terminal() {
     let dir = FixtureHome::new().unwrap();
     {
         let storage = Storage::open(dir.path()).await.unwrap();
@@ -434,13 +434,13 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         pump.await.unwrap();
 
         match result {
-            Err(StageError::AgentCrashed(reason)) => {
-                assert!(
-                    reason.contains("rejection budget exhausted"),
-                    "unexpected reason: {reason}"
-                );
+            Err(StageError::OutcomeBudgetExhausted {
+                hook_id, rejected, ..
+            }) => {
+                assert_eq!(hook_id, "deny-pass");
+                assert_eq!(rejected, vec![OutcomeKey::from_str("pass").unwrap()]);
             },
-            other => panic!("expected AgentCrashed after retries exhausted, got {other:?}"),
+            other => panic!("expected OutcomeBudgetExhausted, got {other:?}"),
         }
 
         writer.close().await.unwrap();
@@ -453,18 +453,11 @@ async fn retry_budget_exhausted_emits_stage_failed() {
             .unwrap();
 
         let mut rejection_count = 0;
-        let mut saw_stage_failed = false;
         for ev in events {
             match ev.payload.payload {
                 EventPayload::OutcomeRejectedByHook { .. } => rejection_count += 1,
-                EventPayload::StageFailed {
-                    reason,
-                    retry_available,
-                    ..
-                } => {
-                    assert!(reason.contains("rejection budget exhausted"));
-                    assert!(!retry_available);
-                    saw_stage_failed = true;
+                EventPayload::StageFailed { .. } => {
+                    panic!("only the run task writes StageFailed; the stage returns the error");
                 },
                 EventPayload::OutcomeReported { .. } => {
                     panic!("OutcomeReported must not be persisted while hooks reject");
@@ -476,10 +469,278 @@ async fn retry_budget_exhausted_emits_stage_failed() {
             rejection_count, 2,
             "expected exactly max_retries+1 OutcomeRejectedByHook events"
         );
-        assert!(
-            saw_stage_failed,
-            "missing StageFailed event after exhaustion"
-        );
     }
     dir.close().unwrap();
+}
+
+// --- #94: terminal failure of an exhausted outcome-retry budget is owned by
+// the run task. These drive a real run through `Engine::start_run`, so the
+// whole path between the agent stage and stage-error resolution is covered.
+
+mod exhaustion {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
+    use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+    use surge_core::id::RunId;
+    use surge_core::keys::EdgeKey;
+    use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
+    use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+    use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
+
+    /// Liveness guard against a hang, not a latency assertion.
+    const RUN_WAIT: Duration = Duration::from_secs(60);
+
+    fn suppress_hook(dir: &Path, outcome: &str) -> Hook {
+        let path = dir.join(format!("suppress-{outcome}.json"));
+        std::fs::write(
+            &path,
+            format!(r#"{{"action":"suppress","outcome":"{outcome}"}}"#),
+        )
+        .unwrap();
+        let command = if cfg!(target_os = "windows") {
+            let literal = path.display().to_string().replace('\'', "''");
+            format!("powershell -NoProfile -Command Get-Content -Raw -LiteralPath '{literal}'")
+        } else {
+            format!(r#"cat "{}""#, path.display())
+        };
+        Hook {
+            id: "recover".into(),
+            trigger: HookTrigger::OnError,
+            matcher: MatcherSpec::default(),
+            command,
+            on_failure: HookFailureMode::Warn,
+            timeout_seconds: Some(30),
+            inherit: HookInheritance::Extend,
+        }
+    }
+
+    fn decl(id: &str) -> OutcomeDecl {
+        OutcomeDecl {
+            id: OutcomeKey::try_from(id).unwrap(),
+            description: format!("{id} outcome"),
+            edge_kind_hint: EdgeKind::Forward,
+            is_terminal: false,
+            ledger_effect: Default::default(),
+        }
+    }
+
+    /// `agent_1` declares `done` and `retry_later`, both routed to `end`; an
+    /// `on_outcome` hook rejects every `done`, with `max_retries = 1`.
+    fn graph(on_error: Vec<Hook>) -> Graph {
+        let agent = NodeKey::try_from("agent_1").unwrap();
+        let end = NodeKey::try_from("end").unwrap();
+        let mut hooks = vec![outcome_reject_hook("deny-done", "done")];
+        hooks.extend(on_error);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            agent.clone(),
+            Node {
+                id: agent.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![decl("done"), decl("retry_later")],
+                config: NodeConfig::Agent(agent_cfg(hooks, 1)),
+            },
+        );
+        nodes.insert(
+            end.clone(),
+            Node {
+                id: end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let edge = |id: &str, outcome: &str| Edge {
+            id: EdgeKey::try_from(id).unwrap(),
+            from: PortRef {
+                node: agent.clone(),
+                outcome: OutcomeKey::try_from(outcome).unwrap(),
+            },
+            to: end.clone(),
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        };
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "outcome-budget-exhaustion".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: agent.clone(),
+            nodes,
+            edges: vec![edge("done_to_end", "done"), edge("later_to_end", "retry_later")],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    struct Exhausted {
+        outcome: RunOutcome,
+        events: Vec<EventPayload>,
+        bridge_closes: usize,
+    }
+
+    /// Run `agent_1` until its `done` outcome is rejected past the budget.
+    async fn exhaust(on_error: impl FnOnce(&Path) -> Vec<Hook>) -> Exhausted {
+        let dir = FixtureHome::new().unwrap();
+        let memory_dir = FixtureHome::new().unwrap();
+        let result = {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let mock = Arc::new(MockBridge::new());
+            let bridge: Arc<dyn BridgeFacade> = mock.clone();
+            let engine = Engine::new(
+                bridge,
+                storage.clone(),
+                Arc::new(UnusedDispatcher),
+                EngineConfig::default(),
+            );
+            let session = SessionId::new();
+            mock.pin_next_session_id(session).await;
+            for summary in ["first", "second"] {
+                mock.enqueue_event(BridgeEvent::OutcomeReported {
+                    session,
+                    outcome: OutcomeKey::from_str("done").unwrap(),
+                    summary: summary.into(),
+                    artifacts_produced: vec![],
+                    verification_report: None,
+                })
+                .await;
+            }
+            let run_id = RunId::new();
+            let handle = engine
+                .start_run(
+                    run_id,
+                    graph(on_error(dir.path())),
+                    dir.path().to_path_buf(),
+                    EngineRunConfig {
+                        memory_store_path: Some(memory_dir.path().join("memory.db")),
+                        ..EngineRunConfig::default()
+                    },
+                )
+                .await
+                .expect("start_run");
+            let pump_mock = mock.clone();
+            let pump = tokio::spawn(async move { pump_mock.pump_after_subscribe(1).await });
+            let outcome = tokio::time::timeout(RUN_WAIT, handle.await_completion())
+                .await
+                .expect("run timed out")
+                .expect("run handle join");
+            pump.await.unwrap();
+            drop(engine);
+            let bridge_closes = mock
+                .recorded_calls
+                .lock()
+                .await
+                .iter()
+                .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::CloseSession(_)))
+                .count();
+            let reader = storage.open_run_reader(run_id).await.unwrap();
+            let last = reader.current_seq().await.unwrap();
+            let events = reader
+                .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|event| event.payload.payload)
+                .collect();
+            Exhausted {
+                outcome,
+                events,
+                bridge_closes,
+            }
+        };
+        memory_dir.close().unwrap();
+        dir.close().unwrap();
+        result
+    }
+
+    fn count(events: &[EventPayload], matches: impl Fn(&EventPayload) -> bool) -> usize {
+        events.iter().filter(|event| matches(event)).count()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exhausted_budget_fails_the_stage_once_and_closes_the_session_once() {
+        let run = exhaust(|_| Vec::new()).await;
+        assert!(
+            matches!(run.outcome, RunOutcome::Failed { .. }),
+            "got {:?}",
+            run.outcome
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            1,
+            "one StageFailed per failed stage visit: {:#?}",
+            run.events
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::SessionClosed { .. })),
+            1
+        );
+        assert_eq!(run.bridge_closes, 1, "the provider session is closed once");
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::OutcomeRejectedByHook { .. })),
+            2
+        );
+        let reason = run
+            .events
+            .iter()
+            .find_map(|e| match e {
+                EventPayload::StageFailed { reason, .. } => Some(reason.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(
+            reason.contains("rejection budget exhausted") && reason.contains("deny-done"),
+            "the reason names the exhausted budget and the last rejecting hook: {reason}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn suppressing_exhaustion_into_another_outcome_routes_without_a_stage_failure() {
+        let run = exhaust(|dir| vec![suppress_hook(dir, "retry_later")]).await;
+        assert!(
+            matches!(run.outcome, RunOutcome::Completed { .. }),
+            "got {:?}",
+            run.outcome
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            0,
+            "a suppressed failure never follows a written StageFailed: {:#?}",
+            run.events
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::OutcomeReported { outcome, .. } if outcome.as_str() == "retry_later")),
+            1
+        );
+        assert_eq!(run.bridge_closes, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn suppressing_exhaustion_into_a_rejected_outcome_is_refused() {
+        let run = exhaust(|dir| vec![suppress_hook(dir, "done")]).await;
+        assert!(
+            matches!(run.outcome, RunOutcome::Failed { .. }),
+            "an on_error hook cannot launder the rejected outcome: {:?}",
+            run.outcome
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            1
+        );
+        assert_eq!(
+            count(&run.events, |e| matches!(e, EventPayload::OutcomeReported { .. })),
+            0,
+            "{:#?}",
+            run.events
+        );
+    }
 }

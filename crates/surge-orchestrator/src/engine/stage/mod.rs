@@ -48,6 +48,24 @@ pub enum StageError {
     #[error("agent crashed: {0}")]
     AgentCrashed(String),
 
+    /// The agent's reported outcomes were rejected past the node's
+    /// `limits.max_retries` budget (an `on_outcome` hook, the verification
+    /// authority or binding rule, or a profile artifact contract). Nothing
+    /// crashed and nothing terminal was written: the session closes through
+    /// the stage's ordinary cleanup and the run task owns the decision —
+    /// `on_error` hooks may suppress it, except into an outcome in
+    /// `rejected` (every key rejected during this stage visit), and otherwise
+    /// the run task writes the single `StageFailed`.
+    #[error("outcome rejection budget exhausted (last reject from '{hook_id}', {rule})")]
+    OutcomeBudgetExhausted {
+        /// The hook or rule id that rejected last.
+        hook_id: String,
+        /// Which acceptance rule rejected last.
+        rule: String,
+        /// Every outcome key rejected during this stage visit.
+        rejected: Vec<surge_core::keys::OutcomeKey>,
+    },
+
     /// The agent reported an outcome not declared in the node's spec.
     #[error("agent reported undeclared outcome: {0}")]
     UndeclaredOutcome(String),
