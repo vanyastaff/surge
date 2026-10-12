@@ -1039,7 +1039,14 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             || {
                 resolved_profile.as_ref().map_or_else(
                     || agent_kind.label().into(),
-                    |profile| canonical_runtime_id_for(p.agent_config, profile).into_string(),
+                    |profile| {
+                        canonical_runtime_id_for(
+                            p.agent_registry.as_deref(),
+                            p.agent_config,
+                            profile,
+                        )
+                        .into_string()
+                    },
                 )
             },
             |permit| permit.launch().candidate().candidate().runtime().to_owned(),
@@ -1263,9 +1270,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             agent_id: if is_quota_fallback {
                 Some(logical_runtime.clone())
             } else {
-                resolved_profile
-                    .as_ref()
-                    .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string())
+                resolved_profile.as_ref().map(|rp| {
+                    canonical_runtime_id_for(p.agent_registry.as_deref(), p.agent_config, rp)
+                        .into_string()
+                })
             },
         }))
         .await;
@@ -1562,9 +1570,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 {
                     if let Some(target) = policy.candidates().iter().find(|target|Some(target.candidate().runtime())==quota.cycle.selected_runtime.as_deref())
                         && target.configured_pin().is_some() {
-                        let builtin = surge_acp::Registry::builtin();
-                        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-                        if crate::engine::capacity_routes::verify_skipped_snapshot(store.host_home(),p.worktree_path,registry,target).is_err() {
+                        let registry = crate::engine::capacity::run_agent_registry_or_builtin(p.agent_registry.as_deref());
+                        if crate::engine::capacity_routes::verify_skipped_snapshot(store.host_home(),p.worktree_path,&registry,target).is_err() {
                             store.invalidate_admitted_configured_pin(execution_writer).map_err(|e|StageError::Storage(e.to_string()))?;
                         }
                     }
@@ -2484,16 +2491,12 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                         "revalidate exhausted configured skips: {error}"
                     ))
                 })?;
-            let builtin = surge_acp::Registry::builtin();
-            let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-            for skip in &skips {
-                crate::engine::capacity_routes::verify_skipped_snapshot(
-                    store.host_home(),
-                    p.worktree_path,
-                    registry,
-                    &skip.candidate,
-                )?;
-            }
+            crate::engine::quota_recovery::verify_skipped_snapshots(
+                store,
+                p.worktree_path,
+                p.agent_registry.as_deref(),
+                skips.iter().map(|skip| &skip.candidate),
+            )?;
             store.request_capacity_suspend_with_skips(
                 claim,
                 &scheduled,
@@ -2523,22 +2526,18 @@ fn validate_configured_capacity_sources(
                 p.quota_opening.as_ref(),
             )
             .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-        let builtin = surge_acp::Registry::builtin();
-        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-        for skip in &skips {
-            crate::engine::capacity_routes::verify_skipped_snapshot(
-                store.host_home(),
-                p.worktree_path,
-                registry,
-                &skip.candidate,
-            )?;
-        }
+        crate::engine::quota_recovery::verify_skipped_snapshots(
+            store,
+            p.worktree_path,
+            p.agent_registry.as_deref(),
+            skips.iter().map(|skip| &skip.candidate),
+        )?;
     }
     if let Some(permit) = p.quota_opening.as_ref()
         && let Some(route) = permit.launch().candidate().configured_route()
     {
-        let builtin = surge_acp::Registry::builtin();
-        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
+        let registry =
+            crate::engine::capacity::run_agent_registry_or_builtin(p.agent_registry.as_deref());
         if registry
             .find_normalized(&session_config.runtime)
             .and_then(|entry| entry.capacity_route.as_ref())
@@ -3544,11 +3543,12 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
 /// never quietly diverge on what "the runtime" means for the same profile
 /// (Task 12 M3, acceptance criterion A).
 fn canonical_runtime_id_for(
+    agent_registry: Option<&surge_acp::Registry>,
     agent_config: &AgentConfig,
     rp: &ResolvedProfile,
 ) -> crate::engine::capacity::CanonicalRuntimeId {
-    crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
+    crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
+        agent_registry,
         effective_agent_id(agent_config, rp),
     )
 }
@@ -3619,12 +3619,17 @@ fn effective_agent_id<'a>(agent_config: &'a AgentConfig, rp: &'a ResolvedProfile
 #[must_use]
 pub(crate) fn resolve_node_runtime_id(
     profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    agent_registry: Option<&surge_acp::Registry>,
     agent_config: &AgentConfig,
 ) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let registry = profile_registry?;
     let key_ref = surge_core::profile::keyref::parse_key_ref(agent_config.profile.as_ref()).ok()?;
     let resolved = registry.resolve(&key_ref).ok()?;
-    Some(canonical_runtime_id_for(agent_config, &resolved))
+    Some(canonical_runtime_id_for(
+        agent_registry,
+        agent_config,
+        &resolved,
+    ))
 }
 
 /// Resolve the canonical agent-runtime id a node's `agent_config.profile`
@@ -3642,15 +3647,18 @@ pub(crate) fn resolve_node_runtime_id(
 #[must_use]
 pub(crate) fn resolve_profile_runtime_id(
     profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    agent_registry: Option<&surge_acp::Registry>,
     profile_str: &str,
 ) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let registry = profile_registry?;
     let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).ok()?;
     let resolved = registry.resolve(&key_ref).ok()?;
-    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
-        &resolved.profile.runtime.agent_id,
-    ))
+    Some(
+        crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
+            agent_registry,
+            &resolved.profile.runtime.agent_id,
+        ),
+    )
 }
 
 /// Why legacy runtime-only capacity routing refuses a rotation target.
@@ -3772,8 +3780,7 @@ pub(crate) fn derive_agent_kind_from_id(
     if agent_id == "mock" {
         return Ok(AgentLaunch::mock());
     }
-    let builtin = surge_acp::Registry::builtin();
-    let agent_registry = registry.unwrap_or(&builtin);
+    let agent_registry = crate::engine::capacity::run_agent_registry_or_builtin(registry);
     let normalized_agent_id = agent_registry.normalize_agent_id(agent_id).ok_or_else(|| {
         let known = agent_registry.known_ids_and_aliases().join(", ");
         tracing::warn!(
@@ -4532,6 +4539,6 @@ mod tests {
         // The legacy no-registry path: no runtime identity exists to check
         // capacity for, so the pre-dispatch capacity check must skip
         // entirely rather than fabricate a key.
-        assert!(resolve_profile_runtime_id(None, "mock").is_none());
+        assert!(resolve_profile_runtime_id(None, None, "mock").is_none());
     }
 }

@@ -1,6 +1,7 @@
 //! Per-run tokio task. Drives one Graph through stage execution, snapshots,
 //! and persistence writes.
 
+use crate::engine::capacity::run_agent_registry_or_builtin;
 use crate::engine::config::EngineRunConfig;
 use crate::engine::handle::{EngineRunEvent, RunOutcome};
 use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome};
@@ -1445,9 +1446,16 @@ fn runtime_rotation_config(
     Some(cfg.with_runtime_override(&rotation.to, None))
 }
 
-/// Canonical capacity-ledger key for a configured agent id.
-fn canonical_runtime(id: &str) -> crate::engine::capacity::CanonicalRuntimeId {
-    crate::engine::capacity::CanonicalRuntimeId::resolve(&surge_acp::Registry::builtin(), id)
+/// Canonical capacity-ledger key for a configured agent id, under the run's
+/// own agent registry.
+fn canonical_runtime(
+    params: &RunTaskParams,
+    id: &str,
+) -> crate::engine::capacity::CanonicalRuntimeId {
+    crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
+        params.agent_registry.as_deref(),
+        id,
+    )
 }
 
 /// Runtimes of the agent nodes paired with `node` by a capped retry edge in
@@ -1492,6 +1500,7 @@ fn partner_runtimes(params: &RunTaskParams, state: &RunExecutionState) -> Vec<St
             };
             crate::engine::stage::agent::resolve_node_runtime_id(
                 params.profile_registry.as_deref(),
+                params.agent_registry.as_deref(),
                 &cfg,
             )
             .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
@@ -1535,15 +1544,15 @@ async fn try_rotate_agent(
     };
     let own_runtime = crate::engine::stage::agent::resolve_node_runtime_id(
         params.profile_registry.as_deref(),
+        params.agent_registry.as_deref(),
         own,
     )
     .map(crate::engine::capacity::CanonicalRuntimeId::into_string);
-    let builtin = surge_acp::Registry::builtin();
-    let registry = params.agent_registry.as_deref().unwrap_or(&builtin);
+    let registry = run_agent_registry_or_builtin(params.agent_registry.as_deref());
     let now = chrono::Utc::now();
     let mut candidates = Vec::new();
     for id in own_runtime.iter().chain(params.fallback_agents.iter()) {
-        let canonical = canonical_runtime(id);
+        let canonical = canonical_runtime(params, id);
         let runnable = registry
             .find_normalized(id)
             .is_some_and(|entry| surge_acp::agent_env::resolve(&entry.id, &entry.env).is_ok());
@@ -1754,10 +1763,7 @@ async fn observe_rate_limited_runtime(
         retry_after,
         observed_at,
     );
-    let canonical_runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
-        raw_runtime,
-    );
+    let canonical_runtime = canonical_runtime(params, raw_runtime);
     if let Err(error) = params
         .capacity_ledger
         .observe(&canonical_runtime, &window)
@@ -1867,6 +1873,7 @@ async fn dispatch_agent_node_with_capacity_gate(
     // use the actual provider opening, which may belong to a quota fallback.
     let runtime = crate::engine::stage::agent::resolve_node_runtime_id(
         params.profile_registry.as_deref(),
+        params.agent_registry.as_deref(),
         cfg,
     );
 
@@ -1930,7 +1937,7 @@ async fn dispatch_agent_node_with_capacity_gate(
                     params,
                     state,
                     node,
-                    &canonical_runtime(&raw_runtime),
+                    &canonical_runtime(params, &raw_runtime),
                     &reason,
                 )
                 .await
@@ -1978,10 +1985,7 @@ async fn successful_dispatch_runtime(
             _ => None,
         })
         .flatten()?;
-    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
-        runtime,
-    ))
+    Some(canonical_runtime(params, runtime))
 }
 
 /// Apply the recovery proven by this stage's successful dispatch. Losing it to
@@ -2270,16 +2274,12 @@ fn select_current_plan(
             cycle,
             skipped,
         } => {
-            let builtin = surge_acp::Registry::builtin();
-            let registry = params.agent_registry.as_deref().unwrap_or(&builtin);
-            for skip in &skipped {
-                crate::engine::capacity_routes::verify_skipped_snapshot(
-                    store.host_home(),
-                    &params.worktree_path,
-                    registry,
-                    &skip.candidate,
-                )?;
-            }
+            crate::engine::quota_recovery::verify_skipped_snapshots(
+                store,
+                &params.worktree_path,
+                params.agent_registry.as_deref(),
+                skipped.iter().map(|skip| &skip.candidate),
+            )?;
             store
                 .suspend_planned_capacity(claim, &cycle, store.clock().now_ms())
                 .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;

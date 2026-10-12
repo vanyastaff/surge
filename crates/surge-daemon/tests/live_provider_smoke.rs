@@ -221,7 +221,7 @@ fn seed_catalog_baseline(
 ) {
     let agents = surge_acp::Registry::for_run(config);
     let mut unavailable = std::collections::BTreeMap::new();
-    for runtime in surge_orchestrator::profile_loader::catalog_runtimes(registry) {
+    for runtime in surge_orchestrator::profile_loader::catalog_runtimes(registry, Some(&agents)) {
         if let Some(entry) = agents.find_normalized(&runtime)
             && let Err(error) = surge_acp::agent_env::resolve(&entry.id, &entry.env)
         {
@@ -233,7 +233,11 @@ fn seed_catalog_baseline(
     std::fs::create_dir(worktree.join(".surge")).unwrap();
     std::fs::write(
         worktree.join(".surge/profile_catalog.md"),
-        surge_orchestrator::profile_loader::render_profile_catalog_with(registry, &unavailable),
+        surge_orchestrator::profile_loader::render_profile_catalog_with(
+            registry,
+            Some(&agents),
+            &unavailable,
+        ),
     )
     .unwrap();
     git(worktree, &["add", ".surge/profile_catalog.md"]);

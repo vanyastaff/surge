@@ -143,6 +143,32 @@ pub(crate) fn record_selected_rate_limit(
     )
 }
 
+/// Recheck every skipped configured candidate against today's declared source
+/// snapshot (no provider RPCs), under the run's own agent registry. The one
+/// loop every skip-revalidation path shares.
+///
+/// # Errors
+/// The first candidate whose route declaration or source snapshot changed.
+pub(crate) fn verify_skipped_snapshots<'a>(
+    store: &WorkItemStore,
+    working_dir: &std::path::Path,
+    run_agent_registry: Option<&surge_acp::Registry>,
+    skipped: impl IntoIterator<
+        Item = &'a surge_persistence::work_items::recovery_cycles::FrozenQuotaCandidate,
+    >,
+) -> Result<(), crate::engine::stage::StageError> {
+    let registry = crate::engine::capacity::run_agent_registry_or_builtin(run_agent_registry);
+    for candidate in skipped {
+        crate::engine::capacity_routes::verify_skipped_snapshot(
+            store.host_home(),
+            working_dir,
+            &registry,
+            candidate,
+        )?;
+    }
+    Ok(())
+}
+
 /// Choose an actual future reset or an explicit bounded policy retry.
 ///
 /// A reset is trusted only while its observation is still fresh; otherwise

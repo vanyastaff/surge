@@ -409,6 +409,7 @@ impl Engine {
         if let Some(policy) = super::capacity_routes::freeze_policy(
             graph,
             &self.config,
+            self.agent_registry_for(&config).as_deref(),
             self.storage.home(),
             working_dir,
         )? {
@@ -418,6 +419,7 @@ impl Engine {
             graph,
             &config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&config).as_deref(),
         )?;
         self.seed_profile_catalog(&mut config).await?;
         crate::engine::validate::validate_loop_seeds(graph, &config.seed_artifacts)?;
@@ -651,6 +653,7 @@ impl Engine {
             graph,
             &run_config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&run_config).as_deref(),
         )?;
 
         run_config.memory_store_path =
@@ -817,13 +820,10 @@ impl Engine {
         let Some(registry) = self.config.profile_registry.as_ref() else {
             return Ok(());
         };
-        let agents = run_config
-            .agent_registry
-            .clone()
-            .or_else(|| self.config.agent_registry.clone())
-            .unwrap_or_else(|| Arc::new(surge_acp::Registry::builtin()));
+        let run_agents = self.agent_registry_for(run_config);
+        let agents = crate::engine::capacity::run_agent_registry_or_builtin(run_agents.as_deref());
         let mut unavailable = std::collections::BTreeMap::new();
-        for runtime in crate::profile_loader::catalog_runtimes(registry) {
+        for runtime in crate::profile_loader::catalog_runtimes(registry, run_agents.as_deref()) {
             // A runtime that cannot even start (e.g. a required environment
             // variable is unset) would fail its stage at spawn.
             if let Some(entry) = agents.find_normalized(&runtime)
@@ -839,7 +839,11 @@ impl Engine {
                 unavailable.insert(runtime, why);
             }
         }
-        let catalog = crate::profile_loader::render_profile_catalog_with(registry, &unavailable);
+        let catalog = crate::profile_loader::render_profile_catalog_with(
+            registry,
+            run_agents.as_deref(),
+            &unavailable,
+        );
         let seed = RunSeedArtifact::new(
             PROFILE_CATALOG_ARTIFACT_NAME,
             PROFILE_CATALOG_ARTIFACT_RELPATH,
@@ -1268,6 +1272,7 @@ impl Engine {
             &replayed.graph,
             &resume_run_config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&resume_run_config).as_deref(),
         )?;
         // Task 12 M4 review: `memory_store_path` is deliberately never
         // persisted (see `EngineRunConfig::memory_store_path`'s own doc),

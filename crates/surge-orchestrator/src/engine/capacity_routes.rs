@@ -65,6 +65,7 @@ fn requested_primary_model(
 pub(crate) fn freeze_policy(
     graph: &surge_core::Graph,
     config: &EngineConfig,
+    run_agent_registry: Option<&surge_acp::Registry>,
     home: &Path,
     working_dir: &Path,
 ) -> Result<Option<FrozenQuotaPolicy>, EngineError> {
@@ -77,8 +78,7 @@ pub(crate) fn freeze_policy(
     let profiles = config.profile_registry.as_deref().ok_or_else(|| {
         EngineError::GraphInvalid("configured rotation requires host profile registry".into())
     })?;
-    let builtin = surge_acp::Registry::builtin();
-    let registry = config.agent_registry.as_deref().unwrap_or(&builtin);
+    let registry = super::capacity::run_agent_registry_or_builtin(run_agent_registry);
     let target = profiles
         .resolve(
             &surge_core::profile::keyref::parse_key_ref(target_profile)
@@ -116,7 +116,7 @@ pub(crate) fn freeze_policy(
                     Some(target.profile.runtime.recommended_model.clone()),
                 ),
             ],
-            registry,
+            &registry,
             home,
             working_dir,
         )?;
