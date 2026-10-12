@@ -657,6 +657,47 @@ async fn cold_host_with_config(
     .expect("cold host must accept a connection within its readiness deadline");
     (engine, cancel, server, socket)
 }
+async fn unwrap_settled_fixture_owner<T>(mut owner: Arc<T>) -> T {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match Arc::try_unwrap(owner) {
+            Ok(value) => return value,
+            Err(retained) => owner = retained,
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fixture owner still retained by {} actual tasks",
+            Arc::strong_count(&owner)
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn fixture_cleanup_waits_for_actual_retained_owner() {
+    let owner = Arc::new(());
+    let retained = owner.clone();
+    let mut settled = Box::pin(unwrap_settled_fixture_owner(owner));
+    assert!(futures::poll!(&mut settled).is_pending());
+    drop(retained);
+    settled.await;
+}
+
+fn provider_session_requested(wire: &str) -> bool {
+    wire.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| entry["operation"] == "new_session")
+}
+
+#[test]
+fn provider_readiness_requires_complete_new_session_receipt() {
+    assert!(!provider_session_requested(
+        "{\"operation\":\"new_session\""
+    ));
+    assert!(!provider_session_requested(r#"{"operation":"initialize"}"#));
+    assert!(provider_session_requested(r#"{"operation":"new_session"}"#));
+}
+
 async fn write_owned_startup(
     storage: &Arc<Storage>,
     attempt: &surge_core::work_item::WorkItemAttempt,
@@ -1003,7 +1044,7 @@ async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_
         .unwrap();
     }
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (_engine, cancel, server, socket) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge).await;
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert_eq!(
@@ -1060,8 +1101,20 @@ async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_
         storage.work_items().show(attempt.item).unwrap().usage.runs,
         1
     );
+    let stopped = engine
+        .stop_run(attempt.run, "fixture cleanup after retry assertions".into())
+        .await;
+    assert!(
+        match &stopped {
+            Ok(()) => true,
+            Err(surge_orchestrator::engine::EngineError::RunNotFound(run)) => *run == attempt.run,
+            Err(_) => false,
+        },
+        "fixture run stop failed: {stopped:?}"
+    );
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3631,27 +3684,23 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
         .join("runs")
         .join(attempt.run.to_string())
         .join("events.sqlite");
-    // Start acceptance precedes asynchronous journal creation and migration.
-    let conn = tokio::time::timeout(Duration::from_secs(8), async {
+    // The provider request follows writer initialization. Probing sqlite_master
+    // before this receipt can contend with the host's exclusive schema migrations.
+    tokio::time::timeout(Duration::from_secs(8), async {
         loop {
-            if let Ok(conn) = rusqlite::Connection::open_with_flags(
-                &path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-            ) {
-                let ready = conn.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
-                    [],
-                    |row| row.get::<_, bool>(0),
-                );
-                if matches!(ready, Ok(true)) {
-                    break conn;
-                }
+            let wire = std::fs::read_to_string(home.path().join("commit-provider-wire.jsonl"))
+                .unwrap_or_default();
+            if provider_session_requested(&wire) {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("accepted run must publish its migrated journal before gate inspection");
+    .expect("accepted run must initialize its writer before requesting a provider session");
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .unwrap();
     let original = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let rows: Vec<Vec<u8>> = conn
