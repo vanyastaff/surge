@@ -407,6 +407,8 @@ async fn commit_restored_continuation(
     params: &RunTaskParams,
     control_generation: u64,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    restored_continuation_barrier(control_generation).await?;
     params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
@@ -415,6 +417,30 @@ async fn commit_restored_continuation(
         .await
         .map(|_| ())
         .map_err(|error| format!("authorize restored routing phase: {error}"))
+}
+
+/// Isolated crash fixtures select this boundary only in their child host.
+/// The marker grants no authority: release still requires the real journal append.
+#[cfg(debug_assertions)]
+async fn restored_continuation_barrier(control_generation: u64) -> Result<(), String> {
+    let Some(path) = std::env::var_os("SURGE_CONTINUE_ACK_BARRIER") else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path);
+    let pending = path.with_extension("pending");
+    tokio::fs::write(&pending, control_generation.to_string())
+        .await
+        .map_err(|error| format!("publish Continue fixture boundary: {error}"))?;
+    tokio::fs::rename(&pending, path.with_extension("ready"))
+        .await
+        .map_err(|error| format!("publish complete Continue fixture boundary: {error}"))?;
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        while !path.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|error| format!("release Continue fixture boundary: {error}"))
 }
 
 fn validate_suspended_commit(

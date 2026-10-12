@@ -2131,6 +2131,7 @@ async fn committed_continue_fixture_in_home(
     )
     .unwrap();
     let barrier = home.path().join("control-close-barrier");
+    let ack_barrier = home.path().join("continuation-ack-barrier");
     let child_log = home.path().join("control-child.log");
     let child_output = std::fs::File::create(&child_log).unwrap();
     let mut child = ContinueFixtureChild(
@@ -2143,6 +2144,7 @@ async fn committed_continue_fixture_in_home(
             .env("SURGE_TEST_COMMIT_HOME", home.path())
             .env("SURGE_TEST_COMMIT_PROJECT", project.path())
             .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
+            .env("SURGE_CONTINUE_ACK_BARRIER", &ack_barrier)
             .stdout(child_output.try_clone().unwrap())
             .stderr(child_output)
             .spawn()
@@ -2230,9 +2232,10 @@ async fn committed_continue_fixture_in_home(
         .join("events.sqlite");
     let conn = rusqlite::Connection::open(&path).unwrap();
     if let Some(after_journal_ack) = crash_ack {
-        // The fixture's SQLite computation exposes the real committed route /
-        // uncommitted continuation interval; assertions observe journal facts.
-        conn.execute_batch("CREATE TRIGGER fixture_ack_interval BEFORE INSERT ON events WHEN NEW.kind='RunContinued' BEGIN SELECT sum(x) FROM (WITH RECURSIVE delay(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM delay WHERE x<5000000) SELECT x FROM delay); END;").unwrap();
+        assert!(
+            !ack_barrier.with_extension("ready").exists(),
+            "ordinary Start and suspension must not enter restored Continue acknowledgement"
+        );
         let continue_operation = WorkItemOperationId::new();
         let continue_command = WorkItemCommand::Continue {
             operation_id: continue_operation,
@@ -2266,6 +2269,7 @@ async fn committed_continue_fixture_in_home(
                 ])
                 .env("SURGE_TEST_COMMIT_HOME", home.path())
                 .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+                .env("SURGE_CONTINUE_ACK_BARRIER", &ack_barrier)
                 .stdout(diagnostic.try_clone().unwrap())
                 .stderr(diagnostic)
                 .spawn()
@@ -2287,7 +2291,14 @@ async fn committed_continue_fixture_in_home(
                         |row| row.get(0),
                     )
                     .unwrap();
-                if routes == 1 {
+                if ack_barrier.with_extension("ready").exists() {
+                    assert_eq!(routes, 1, "barrier must follow the actual committed route");
+                    let generation: u64 =
+                        std::fs::read_to_string(ack_barrier.with_extension("ready"))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                    assert_eq!(generation, paused.generation + 1);
                     assert_eq!(
                         acknowledgements, 0,
                         "fixture failed to expose the pre-ack crash interval"
@@ -2302,6 +2313,7 @@ async fn committed_continue_fixture_in_home(
         let registry_barrier = if cut.is_ok() && after_journal_ack {
             let registry = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
             registry.execute_batch("BEGIN IMMEDIATE").unwrap();
+            std::fs::write(&ack_barrier, b"release").unwrap();
             let continued = tokio::time::timeout(
                 Duration::from_secs(8),
                 wait_for_event_count(&conn, "RunContinued", 1),
@@ -2346,8 +2358,6 @@ async fn committed_continue_fixture_in_home(
             .unwrap(),
             u64::from(after_journal_ack)
         );
-        conn.execute_batch("DROP TRIGGER fixture_ack_interval")
-            .unwrap();
         let bridge = Arc::new(wire_bridge::WireBridge {
             bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
             flags: commit_wire_flags(home.path()),
