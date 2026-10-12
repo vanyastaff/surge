@@ -529,6 +529,8 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
             "legacy-resumed.jsonl"
         } else if phase.starts_with("legacy") {
             "legacy.jsonl"
+        } else if phase == "populated-default" {
+            "original.jsonl"
         } else {
             "replacement.jsonl"
         },
@@ -543,6 +545,8 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         "denied",
         if phase.starts_with("legacy") {
             "legacy-denied.jsonl"
+        } else if phase == "populated-default" {
+            "denied.jsonl"
         } else {
             "replacement-denied.jsonl"
         },
@@ -718,7 +722,7 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
     } else {
         let mcp = match phase {
             "explicit-empty" => McpSelection::Explicit(Vec::new()),
-            "default-empty" => McpSelection::HostDefault,
+            "default-empty" | "populated-default" => McpSelection::HostDefault,
             "populated" | "populated-unconfirmed" => McpSelection::Explicit(vec![
                 server(root, "oracle", "original.jsonl"),
                 server(root, "denied", "denied.jsonl")
@@ -815,12 +819,30 @@ impl RetainedFixture {
 }
 
 fn fixture() -> RetainedFixture {
+    fixture_with_host_defaults(false)
+}
+
+fn fixture_with_host_defaults(populated: bool) -> RetainedFixture {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(root.path().join("mcp.py"), CHILD).unwrap();
     std::fs::write(project.join("tracked.txt"), b"retained source").unwrap();
-    std::fs::write(project.join("surge.toml"), b"mcp_servers = []\n").unwrap();
+    let mut host = surge_core::SurgeConfig::default();
+    if populated {
+        host.mcp_servers = vec![
+            server(root.path(), "oracle", "original.jsonl"),
+            server(root.path(), "denied", "denied.jsonl")
+                .with_sandbox(Some(surge_core::sandbox::SandboxMode::ReadOnly)),
+        ];
+    }
+    // The public HostDefault resolver reads this committed source checkout.
+    let config = if populated {
+        toml::to_string(&host).unwrap()
+    } else {
+        "mcp_servers = []\n".into()
+    };
+    std::fs::write(project.join("surge.toml"), config).unwrap();
     let repo = git2::Repository::init(&project).unwrap();
     let mut index = repo.index().unwrap();
     for name in ["tracked.txt", "surge.toml"] {
@@ -1170,12 +1192,12 @@ async fn legacy_engine_catalog_enforces_actual_configured_deadline() {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn verify_actual_transport(root: &Path, accepted: &Value) {
     let rows = records(&root.join("original.jsonl"));
     let spawned: Vec<_> = rows.iter().filter(|row| row["kind"] == "spawn").collect();
     assert!(!spawned.is_empty(), "actual owned child must have spawned");
     let probe = std::process::Command::new(python())
+        .env("PYTHONIOENCODING", "utf-8")
         .args([
             "-c",
             "import os,sys; print(os.path.realpath(sys.executable))",
@@ -1191,7 +1213,8 @@ fn verify_actual_transport(root: &Path, accepted: &Value) {
     let workspace = std::fs::canonicalize(accepted["workspace"]["path"].as_str().unwrap()).unwrap();
     for row in spawned {
         assert!(
-            row["exe"].as_str() == Some(executable.trim()),
+            std::fs::canonicalize(row["exe"].as_str().unwrap()).unwrap()
+                == std::fs::canonicalize(executable.trim()).unwrap(),
             "actual executable identity altered"
         );
         assert!(
@@ -1203,7 +1226,7 @@ fn verify_actual_transport(root: &Path, accepted: &Value) {
             "actual declared environment altered"
         );
         assert!(
-            row["cwd"].as_str() == workspace.to_str(),
+            std::fs::canonicalize(row["cwd"].as_str().unwrap()).unwrap() == workspace,
             "actual working directory altered"
         );
     }
@@ -1240,71 +1263,97 @@ fn verify_actual_transport(root: &Path, accepted: &Value) {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn populated_initial_transport_is_exact_and_public_snapshot_opaque() {
-    let root = fixture();
-    {
-        let accepted = start_park(root.path(), root.home(), "populated").await;
-        verify_actual_transport(root.path(), &accepted);
-        let storage = Storage::open(root.home()).await.unwrap();
-        let receipt: OwnedFlowReceipt =
-            serde_json::from_value(accepted["receipt"].clone()).unwrap();
-        let public = format!(
-            "{} {} {:?}",
-            accepted,
-            serde_json::to_string(&storage.work_items().for_run(receipt.run).unwrap()).unwrap(),
-            storage.inspect_run(receipt.run).await.unwrap()
-        );
-        assert_private_absent(&public);
+    for mode in ["populated", "populated-default"] {
+        let root = fixture_with_host_defaults(mode == "populated-default");
+        {
+            let accepted = start_park(root.path(), root.home(), mode).await;
+            verify_actual_transport(root.path(), &accepted);
+            assert_stage_whitelist(root.path(), mode);
+            let storage = Storage::open(root.home()).await.unwrap();
+            let receipt: OwnedFlowReceipt =
+                serde_json::from_value(accepted["receipt"].clone()).unwrap();
+            let public = format!(
+                "{} {} {:?}",
+                accepted,
+                serde_json::to_string(&storage.work_items().for_run(receipt.run).unwrap()).unwrap(),
+                storage.inspect_run(receipt.run).await.unwrap()
+            );
+            assert_private_absent(&public);
+        }
+        root.close();
     }
-    root.close();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn populated_cold_valid_twin_keeps_original_transport_and_writer_history() {
-    let root = fixture();
-    {
-        let accepted = start_park(root.path(), root.home(), "populated").await;
-        let before = records(&root.path().join("original.jsonl")).len();
-        cold_wake(root.path(), root.home(), &accepted, "wake").await;
-        verify_actual_transport(root.path(), &accepted);
-        let after = records(&root.path().join("original.jsonl"));
-        assert!(
-            after[before..].iter().any(|row| row["kind"] == "spawn"),
-            "cold twin must execute original MCP"
-        );
-        // Actual original MCP writer must have production-owned cleanup evidence.
-        let storage = Storage::open(root.home()).await.unwrap();
-        let receipt: OwnedFlowReceipt =
-            serde_json::from_value(accepted["receipt"].clone()).unwrap();
-        let RunDatabaseInspection::Present { events } =
-            storage.inspect_run(receipt.run).await.unwrap().database
-        else {
-            panic!("original writer journal")
-        };
-        // ADR-0021 records cleanup for writers of the phase before the suspension
-        // when the run resumes; the resumed phase's own writers end with the run.
-        let suspended_at = events
-            .iter()
-            .find(|row| matches!(row.payload.payload, EventPayload::RunSuspended { .. }))
-            .map(|row| row.seq)
-            .expect("populated park must suspend");
-        for event in events.iter().filter(|row| row.seq < suspended_at) {
-            if let EventPayload::ExecutionWriterIntent { intent } = &event.payload.payload
-                && matches!(&intent.kind,surge_core::execution_recovery::process::ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
-            {
-                // ADR-0021: an empty group is recorded as best-effort cleanup, never as closure.
-                assert!(events.iter().any(|row|matches!(row.payload.payload,
-                EventPayload::ExecutionWriterClosed { writer } | EventPayload::ExecutionWriterGroupStopped { writer } if writer==intent.writer)),"MCP cold twin has no persisted cleanup record");
-            }
+    for mode in ["populated", "populated-default"] {
+        let root = fixture_with_host_defaults(mode == "populated-default");
+        {
+            let accepted = start_park(root.path(), root.home(), mode).await;
+            let before = records(&root.path().join("original.jsonl")).len();
+            cold_wake(root.path(), root.home(), &accepted, "wake").await;
+            verify_actual_transport(root.path(), &accepted);
+            assert_stage_whitelist(root.path(), mode);
+            assert_stage_whitelist(root.path(), "wake");
+            let after = records(&root.path().join("original.jsonl"));
+            assert!(
+                after[before..].iter().any(|row| row["kind"] == "spawn"),
+                "cold twin must execute original MCP"
+            );
+            // Actual original MCP writer must have production-owned cleanup evidence.
+            let storage = Storage::open(root.home()).await.unwrap();
+            let receipt: OwnedFlowReceipt =
+                serde_json::from_value(accepted["receipt"].clone()).unwrap();
+            let RunDatabaseInspection::Present { events } =
+                storage.inspect_run(receipt.run).await.unwrap().database
+            else {
+                panic!("original writer journal")
+            };
+            assert_mcp_writer_settlement(&events);
         }
+        root.close();
     }
-    root.close();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_mcp_writer_settlement(events: &[surge_persistence::runs::ReadEvent]) {
+    // ADR-0021 records cleanup for writers of the phase before the suspension
+    // when the run resumes; the resumed phase's own writers end with the run.
+    let suspended_at = events
+        .iter()
+        .find(|row| matches!(row.payload.payload, EventPayload::RunSuspended { .. }))
+        .map(|row| row.seq)
+        .expect("populated park must suspend");
+    let mut mcp_writers = 0;
+    for event in events.iter().filter(|row| row.seq < suspended_at) {
+        if let EventPayload::ExecutionWriterIntent { intent } = &event.payload.payload
+            && matches!(&intent.kind,surge_core::execution_recovery::process::ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
+        {
+            mcp_writers += 1;
+            // ADR-0021: an empty group is recorded as best-effort cleanup, never as closure.
+            assert!(
+                events.iter().any(|row| {
+                    matches!(row.payload.payload,
+                        EventPayload::ExecutionWriterGroupStopped { writer } if writer == intent.writer)
+                }),
+                "MCP cold twin has no persisted best-effort cleanup record"
+            );
+            assert!(
+                !events.iter().any(|row| {
+                    matches!(row.payload.payload,
+                        EventPayload::ExecutionWriterClosed { writer } if writer == intent.writer)
+                }),
+                "GroupOnly MCP writer was upgraded to confirmed closure"
+            );
+        }
+    }
+    assert!(
+        mcp_writers > 0,
+        "actual MCP spawn has no pre-suspension writer intent"
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Corruption {
     MissingKey,
@@ -1317,7 +1366,6 @@ enum Corruption {
     ManifestBinding,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_manifest_update_rejected(
     connection: &rusqlite::Connection,
     run: RunId,
@@ -1434,7 +1482,6 @@ async fn ordinary_accepted_manifest_updates_preserve_exact_first_snapshot() {
     root.close();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn corrupt(home: &Path, accepted: &Value, fault: Corruption) {
     let private = home.join("work-items/private-flow-inputs");
     let manifest = &accepted["manifest"];
@@ -1512,7 +1559,6 @@ fn corrupt(home: &Path, accepted: &Value, fault: Corruption) {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn corruption_refuses_before_any_new_actual_effect(fault: Corruption) {
     let root = fixture();
     {
@@ -1533,6 +1579,17 @@ async fn corruption_refuses_before_any_new_actual_effect(fault: Corruption) {
                 "{fault:?} allowed actual effect in {name:?}"
             );
         }
+        if matches!(fault, Corruption::CorruptKey) {
+            assert_eq!(
+                std::fs::read(
+                    root.home()
+                        .join("work-items/private-flow-inputs/host-key-v1")
+                )
+                .unwrap(),
+                b"corrupt existing key",
+                "hydration regenerated corrupt established key",
+            );
+        }
         if matches!(fault, Corruption::MissingKey) {
             assert!(
                 !root
@@ -1546,7 +1603,6 @@ async fn corruption_refuses_before_any_new_actual_effect(fault: Corruption) {
     root.close();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_and_corrupt_private_inputs_refuse_real_cold_writers() {
     for fault in [
