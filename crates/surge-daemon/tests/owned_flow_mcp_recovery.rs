@@ -272,6 +272,10 @@ async fn request(socket: &Path, body: Value) -> Value {
     )
     .await
     .unwrap();
+    request_stream(stream, body).await
+}
+
+async fn request_stream(stream: LocalSocketStream, body: Value) -> Value {
     let (read, mut write) = stream.split();
     let mut frame = serde_json::to_vec(&body).unwrap();
     frame.push(b'\n');
@@ -286,6 +290,18 @@ async fn request(socket: &Path, body: Value) -> Value {
     .unwrap();
     assert!(!line.is_empty(), "real daemon closed without a reply");
     serde_json::from_str(&line).unwrap()
+}
+
+async fn ping_readiness(stream: LocalSocketStream) -> Result<(), Value> {
+    let response = request_stream(stream, json!({"method":"ping", "request_id":0})).await;
+    if matches!(
+        serde_json::from_value::<surge_orchestrator::engine::ipc::DaemonResponse>(response.clone()),
+        Ok(surge_orchestrator::engine::ipc::DaemonResponse::PingOk { request_id: 0, .. })
+    ) {
+        Ok(())
+    } else {
+        Err(response)
+    }
 }
 
 fn initial_mcp_evidence_ready(
@@ -596,7 +612,10 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         loop {
             let name =
                 surge_orchestrator::engine::ipc::local_socket_name_from_path(&socket).unwrap();
-            if LocalSocketStream::connect(name).await.is_ok() {
+            if let Ok(stream) = LocalSocketStream::connect(name).await {
+                ping_readiness(stream).await.unwrap_or_else(|response| {
+                    panic!("daemon readiness requires its exact Ping reply: {response}")
+                });
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2259,4 +2278,60 @@ async fn wait_actual_refusal_event(path: &Path) -> (u64, Vec<u8>) {
     })
     .await
     .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ping_readiness_requires_actual_accept_and_exact_reply() {
+    let home = FixtureHome::new().unwrap();
+    for (index, response, expected) in [
+        (
+            0,
+            json!({"method":"ping_ok", "request_id":0, "version":"fixture"}),
+            true,
+        ),
+        (
+            1,
+            json!({"method":"ping_ok", "request_id":1, "version":"fixture"}),
+            false,
+        ),
+        (2, json!({"method":"not_a_reply"}), false),
+    ] {
+        let socket = home.path().join(format!("readiness-{index}.sock"));
+        let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&socket).unwrap();
+        let listener = interprocess::local_socket::ListenerOptions::new()
+            .name(name)
+            .create_tokio()
+            .unwrap();
+        let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&socket).unwrap();
+        let connected = LocalSocketStream::connect(name).await.unwrap();
+        let mut readiness = tokio::spawn(ping_readiness(connected));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut readiness)
+                .await
+                .is_err(),
+            "connection alone cannot establish protocol readiness before accept"
+        );
+        let accepted = listener.accept().await.unwrap();
+        let (read, mut write) = accepted.split();
+        let mut line = String::new();
+        BufReader::new(read).read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            json!({"method":"ping", "request_id":0})
+        );
+        let mut frame = serde_json::to_vec(&response).unwrap();
+        frame.push(b'\n');
+        write.write_all(&frame).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), readiness)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.is_ok(), expected, "{result:?}");
+        if !expected {
+            assert_eq!(result.unwrap_err(), response);
+        }
+        drop(write);
+        drop(listener);
+    }
+    home.close().unwrap();
 }
