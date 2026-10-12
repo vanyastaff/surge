@@ -36,8 +36,14 @@ fn deny_decision() -> EngineElevationDecision {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resolve_elevation_returns_run_not_found_for_unknown_run() {
     let dir = FixtureHome::new().unwrap();
+    #[cfg(windows)]
+    let registry_settlement;
     {
         let storage = Storage::open(dir.path()).await.unwrap();
+        #[cfg(windows)]
+        {
+            registry_settlement = storage.registry_pool_witness().unwrap();
+        }
         let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
         let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
             as Arc<dyn ToolDispatcher>;
@@ -53,6 +59,22 @@ async fn resolve_elevation_returns_run_not_found_for_unknown_run() {
             )
             .await;
         assert!(matches!(result, Err(EngineError::RunNotFound(_))));
+        #[cfg(windows)]
+        assert!(
+            registry_settlement.is_retained(),
+            "live Engine retains registry ownership"
+        );
+    }
+    #[cfg(windows)]
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while registry_settlement.is_retained() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "registry owners did not settle"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
     }
     dir.close().unwrap();
 }

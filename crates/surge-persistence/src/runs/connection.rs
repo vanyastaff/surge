@@ -12,15 +12,19 @@ pub struct RetainedConnection {
     _namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
 }
 impl RetainedConnection {
-    #[cfg(all(test, windows))]
-    pub(crate) fn settlement(&self) -> Option<PoolSettlement> {
+    #[cfg(all(windows, any(test, feature = "test-support")))]
+    pub(crate) fn settlement_marker(&self) -> Option<std::sync::Weak<()>> {
         let Self {
             _namespace: namespace,
             ..
         } = self;
-        namespace.as_ref().map(|owner| PoolSettlement {
-            owner: std::sync::Arc::downgrade(owner),
-        })
+        namespace.as_ref().map(|owner| owner.settlement_marker())
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn settlement(&self) -> Option<PoolSettlement> {
+        self.settlement_marker()
+            .map(|owner| PoolSettlement { owner })
     }
 
     pub(crate) fn read_only(path: &Path) -> rusqlite::Result<Self> {
@@ -176,7 +180,7 @@ pub struct OwnedSqliteConnectionManager {
 // Observe the manager AND all actual connections without keeping either alive.
 #[cfg(all(test, windows))]
 pub(crate) struct PoolSettlement {
-    owner: std::sync::Weak<crate::state_home::SqliteNamespaceOwner>,
+    owner: std::sync::Weak<()>,
 }
 
 #[cfg(all(test, windows))]
@@ -193,7 +197,7 @@ impl PoolSettlement {
     }
 
     pub(crate) fn is_settled(&self) -> bool {
-        // Every RetainedConnection releases this owner after checked close.
+        // The final marker drops after all namespace handles, following checked close.
         self.owner.strong_count() == 0
     }
 }
@@ -205,7 +209,7 @@ impl OwnedSqliteConnectionManager {
     #[cfg(test)]
     pub(crate) fn settlement(&self) -> PoolSettlement {
         PoolSettlement {
-            owner: std::sync::Arc::downgrade(&self.namespace),
+            owner: self.namespace.settlement_marker(),
         }
     }
 

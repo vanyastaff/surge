@@ -75,6 +75,8 @@ impl StateHomeOwner {
             namespace: self.db.retained_clone()?,
             name: OsString::from("registry.sqlite"),
             artifacts: None,
+            #[cfg(any(test, feature = "test-support"))]
+            settlement_marker: Arc::new(()),
         }))
     }
     pub(crate) fn verify(&self) -> NativeResult<()> {
@@ -92,6 +94,10 @@ pub(crate) struct SqliteNamespaceOwner {
     namespace: Namespace,
     name: OsString,
     artifacts: Option<Namespace>,
+    // Keep LAST: its release observes completed destruction of all native
+    // ownership above, rather than the earlier Arc strong-count transition.
+    #[cfg(any(test, feature = "test-support"))]
+    settlement_marker: Arc<()>,
 }
 
 /// Existing-only root for registry-gated run namespace preparation.
@@ -185,12 +191,19 @@ impl RunRoute {
             home: None,
             namespace: self.namespace.retained_clone()?,
             artifacts: Some(self.artifacts.retained_clone()?),
+            #[cfg(any(test, feature = "test-support"))]
+            settlement_marker: Arc::new(()),
             name,
             file,
         }))
     }
 }
 impl SqliteNamespaceOwner {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn settlement_marker(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.settlement_marker)
+    }
+
     pub(crate) fn identity(&self) -> NativeResult<Vec<u8>> {
         self.verify()?;
         namespace::file_identity(&self.file, false)
@@ -233,6 +246,8 @@ impl StateHomeOwner {
             file,
             name,
             artifacts,
+            #[cfg(any(test, feature = "test-support"))]
+            settlement_marker: Arc::new(()),
         }))
     }
 }
@@ -265,6 +280,8 @@ impl SqliteNamespaceOwner {
             name,
             file,
             artifacts: None,
+            #[cfg(any(test, feature = "test-support"))]
+            settlement_marker: Arc::new(()),
         }))
     }
 }
