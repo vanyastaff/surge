@@ -580,8 +580,39 @@ async fn append_loop_escalations(
 /// Returns [`StageError::AgentCrashed`] if the session ends without reporting
 /// an outcome.
 /// Returns [`StageError::Storage`] if event persistence fails.
-#[allow(clippy::too_many_lines)]
+///
+/// # Task-owned quota
+/// When the stage is task-owned and its selected candidate reports
+/// exhaustion, the next frozen candidate runs as a fresh attempt — one
+/// provider opening per attempt, decided between attempts by
+/// [`crate::engine::quota_recovery::TaskQuotaOwner::after_exhaustion`]. When
+/// no candidate remains the original rate-limit error is returned with the
+/// capacity suspension already requested.
 pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
+    loop {
+        let mut exhausted = None;
+        let result = execute_agent_attempt(&mut p, &mut exhausted).await;
+        let (Some(quota), Some(owner)) = (exhausted, p.quota_owner.as_ref()) else {
+            return result;
+        };
+        match owner.after_exhaustion(&quota, p.worktree_path, p.agent_registry.as_deref())? {
+            crate::engine::quota_recovery::AfterExhaustion::Retry(next) => {
+                p.quota_cycle = Some(next.cycle);
+                p.quota_opening = Some(next.opening);
+            },
+            crate::engine::quota_recovery::AfterExhaustion::Suspended => return result,
+        }
+    }
+}
+
+/// One provider attempt of [`execute_agent_stage`]. On a rate limit with a
+/// task-owned cycle, `exhausted` receives the cycle carrying the recorded
+/// exhaustion so the caller can decide the next candidate.
+#[allow(clippy::too_many_lines)]
+async fn execute_agent_attempt(
+    p: &mut AgentStageParams<'_>,
+    exhausted: &mut Option<crate::engine::quota_recovery::TaskQuotaCycle>,
+) -> StageResult {
     let mut targets = BTreeSet::new();
     for binding in &p.agent_config.bindings {
         if !targets.insert(&binding.target.0) {
@@ -598,7 +629,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         resolve_bindings(&p.agent_config.bindings, p.run_memory, p.worktree_path)
             .await
             .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
-    let memory_receipt = apply_memory_claim_pack(&p, &mut resolved_bindings).await?;
+    let memory_receipt = apply_memory_claim_pack(p, &mut resolved_bindings).await?;
 
     // Resolve the profile once (when a registry is wired) so we can use
     // its `runtime.agent_id` to derive `AgentKind` AND fall back to its
@@ -752,7 +783,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         .current_seq()
         .await
         .map_err(|error| StageError::Storage(error.to_string()))?;
-    let verification_input = super::verification::begin(&p).await?;
+    let verification_input = super::verification::begin(p).await?;
     let mut prompt_text = prompt_text;
     if let Some(input) = &verification_input {
         let _ = write!(
@@ -1380,7 +1411,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
     }
 
-    let prompt_text = match previous_attempt_feedback(&p).await {
+    let prompt_text = match previous_attempt_feedback(p).await {
         Some(feedback) => feedback + &prompt_text,
         None => prompt_text,
     };
@@ -1715,7 +1746,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     && resolved_profile.as_ref().is_some_and(|profile| profile.profile.outcomes.iter().any(|declaration| declaration.id == outcome && declaration.produced_artifacts.iter().any(|artifact| artifact.contract.kind == ArtifactKind::VerificationReport))) {
                     None // Historical file audit: the existing profile contract still validates it.
                 } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified {
-                    match super::verification::seal(&p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
+                    match super::verification::seal(p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
                         Ok(report) => Some(report),
                         Err(reason) => {
                             record_outcome_rejection(RejectionRecordParams { writer: p.writer, bridge: p.bridge, node: p.node, session_id, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts).await?;
@@ -1724,7 +1755,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                         }
                     }
                 } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::FailedVerification {
-                    verification_report.map(|report| super::verification::seal_failure(&p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
+                    verification_report.map(|report| super::verification::seal_failure(p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
                 } else { None };
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
@@ -1956,7 +1987,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 ..
             } => {
                 handle_permission_request(
-                    &p,
+                    p,
                     &effective_approval_cfg,
                     &prompt_finished,
                     session_id,
@@ -2347,14 +2378,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             "stage endpoint cleanup: {error}; stage: {stage_result:?}"
         ))
     })?;
-    if matches!(stage_result, Err(StageError::RateLimited { .. }))
-        && let (Some(quota), Some(owner)) = (task_quota_cycle.as_ref(), p.quota_owner.as_ref())
-        && let crate::engine::quota_recovery::AfterExhaustion::Retry(next) =
-            owner.after_exhaustion(quota, p.worktree_path, p.agent_registry.as_deref())?
-    {
-        p.quota_cycle = Some(next.cycle);
-        p.quota_opening = Some(next.opening);
-        return Box::pin(execute_agent_stage(p)).await;
+    if matches!(stage_result, Err(StageError::RateLimited { .. })) {
+        *exhausted = task_quota_cycle;
     }
     stage_result
 }
