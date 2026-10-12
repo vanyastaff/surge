@@ -2333,6 +2333,25 @@ fn terminal_run_outcome(terminal: TerminalOutcome) -> RunOutcome {
     }
 }
 
+/// Whether suppressing `error` into `suppressed` would hand back an outcome
+/// the stage's validation rejected during this visit (#94). Such a
+/// suppression is refused like one into an undeclared outcome.
+fn launders_rejected_outcome(
+    error: &StageError,
+    suppressed: &OutcomeKey,
+    node: &surge_core::keys::NodeKey,
+) -> bool {
+    let StageError::OutcomeBudgetExhausted { rejected, .. } = error else {
+        return false;
+    };
+    let launders = rejected.contains(suppressed);
+    if launders {
+        tracing::warn!(target: "engine::stage::error", %node, outcome = %suppressed,
+            "on_error suppression into an outcome rejected this visit is refused");
+    }
+    launders
+}
+
 async fn resolve_stage_error(
     params: &RunTaskParams,
     state: &RunExecutionState,
@@ -2380,22 +2399,10 @@ async fn resolve_stage_error(
     // into an outcome the stage's validation rejected during this visit:
     // that would launder the rejected result. Refuse it like a suppression
     // into an undeclared outcome — the failure stands.
-    let suppressed = on_error_resolution.outcome.filter(|suppressed| {
-        let StageError::OutcomeBudgetExhausted { rejected, .. } = &error else {
-            return true;
-        };
-        if rejected.contains(suppressed) {
-            tracing::warn!(
-                target: "engine::stage::error",
-                node = %state.cursor.node,
-                outcome = %suppressed,
-                "on_error suppression into an outcome rejected this visit is refused"
-            );
-            return false;
-        }
-        true
-    });
-    if let Some(suppressed) = suppressed {
+    if let Some(suppressed) = on_error_resolution
+        .outcome
+        .filter(|suppressed| !launders_rejected_outcome(&error, suppressed, &state.cursor.node))
+    {
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 

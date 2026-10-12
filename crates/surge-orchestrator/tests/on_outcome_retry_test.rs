@@ -577,7 +577,10 @@ mod exhaustion {
             },
             start: agent.clone(),
             nodes,
-            edges: vec![edge("done_to_end", "done"), edge("later_to_end", "retry_later")],
+            edges: vec![
+                edge("done_to_end", "done"),
+                edge("later_to_end", "retry_later"),
+            ],
             subgraphs: BTreeMap::new(),
         }
     }
@@ -675,18 +678,27 @@ mod exhaustion {
             run.outcome
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::StageFailed { .. }
+            )),
             1,
             "one StageFailed per failed stage visit: {:#?}",
             run.events
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::SessionClosed { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::SessionClosed { .. }
+            )),
             1
         );
         assert_eq!(run.bridge_closes, 1, "the provider session is closed once");
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::OutcomeRejectedByHook { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::OutcomeRejectedByHook { .. }
+            )),
             2
         );
         let reason = run
@@ -712,13 +724,19 @@ mod exhaustion {
             run.outcome
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::StageFailed { .. }
+            )),
             0,
             "a suppressed failure never follows a written StageFailed: {:#?}",
             run.events
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::OutcomeReported { outcome, .. } if outcome.as_str() == "retry_later")),
+            count(
+                &run.events,
+                |e| matches!(e, EventPayload::OutcomeReported { outcome, .. } if outcome.as_str() == "retry_later")
+            ),
             1
         );
         assert_eq!(run.bridge_closes, 1);
@@ -733,11 +751,17 @@ mod exhaustion {
             run.outcome
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::StageFailed { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::StageFailed { .. }
+            )),
             1
         );
         assert_eq!(
-            count(&run.events, |e| matches!(e, EventPayload::OutcomeReported { .. })),
+            count(&run.events, |e| matches!(
+                e,
+                EventPayload::OutcomeReported { .. }
+            )),
             0,
             "{:#?}",
             run.events
