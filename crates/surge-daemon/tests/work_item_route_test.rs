@@ -687,16 +687,16 @@ async fn write_owned_startup(
         .unwrap()
         .clone();
     let context = WorkItemContext::new(attempt.binding.clone(), requirements).unwrap();
+    let writer = storage
+        .create_run(attempt.run, &workspace.path, None)
+        .await
+        .unwrap();
     let artifact = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
         .put(
             attempt.run,
             "accepted_requirements",
             &serde_json::to_vec(context.requirements().unwrap()).unwrap(),
         )
-        .await
-        .unwrap();
-    let writer = storage
-        .create_run(attempt.run, &workspace.path, None)
         .await
         .unwrap();
     let mut events = vec![
@@ -2630,22 +2630,29 @@ async fn cold_committed_fixture_in_home(
     )
     .unwrap();
     let barrier = home.path().join("close-barrier");
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-    .args([
-        "--exact",
-        "child_committed_outcome_host_probe",
-        "--nocapture",
-    ])
-    .env("SURGE_TEST_COMMIT_HOME", home.path())
-    .env("SURGE_TEST_COMMIT_PROJECT", project.path())
-    .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
-    .stdout(std::process::Stdio::null())
-    // Inherited so nextest shows a child panic; the probe emits no tracing output.
-    .stderr(std::process::Stdio::inherit())
-    .spawn()
-    .unwrap();
+    let child_log = home.path().join("committed-child.log");
+    let child_output = std::fs::File::create(&child_log).unwrap();
+    let mut child = ContinueFixtureChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "child_committed_outcome_host_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_TEST_COMMIT_HOME", home.path())
+            .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+            .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
+            .stdout(child_output.try_clone().unwrap())
+            .stderr(child_output)
+            .spawn()
+            .unwrap(),
+    );
+    let mut observed_events = Vec::new();
     let ready = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("committed child exited {status}; events={observed_events:?}; child={}; provider={}", bounded_child_log(&child_log), bounded_child_log(&home.path().join("commit-provider-wire.jsonl")));
+            }
             if !barrier.with_extension("ready").exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
@@ -2657,7 +2664,10 @@ async fn cold_committed_fixture_in_home(
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             };
-            if events
+            observed_events = events.iter().rev().take(64).map(|event| {
+                format!("{:?}", event.payload.payload()).split([' ', '{', '(']).next().unwrap().to_owned()
+            }).collect();
+            if barrier.with_extension("ready").exists() && events
                 .iter()
                 .filter(|event| {
                     matches!(
@@ -2674,6 +2684,40 @@ async fn cold_committed_fixture_in_home(
         }
     })
     .await;
+    if ready.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let journal =
+            tokio::time::timeout(Duration::from_secs(1), storage.inspect_run(attempt.run)).await;
+        let journal_diagnostic = match journal {
+            Ok(Ok(inspected)) => match inspected.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                    format!(
+                        "{:?}",
+                        events
+                            .iter()
+                            .rev()
+                            .take(64)
+                            .map(|event| format!("{:?}", event.payload.payload())
+                                .split([' ', '{', '('])
+                                .next()
+                                .unwrap()
+                                .to_owned())
+                            .collect::<Vec<_>>()
+                    )
+                },
+                other => format!("{other:?}"),
+            },
+            Ok(Err(error)) => format!("inspection failed: {error}"),
+            Err(error) => format!("inspection timed out: {error}"),
+        };
+        panic!(
+            "real ACP turn did not reach its durable post-commit/pre-route close barrier; marker={}; events={observed_events:?}; journal={journal_diagnostic}; child={}; provider={}",
+            barrier.with_extension("ready").exists(),
+            bounded_child_log(&child_log),
+            bounded_child_log(&home.path().join("commit-provider-wire.jsonl"))
+        );
+    }
     let registry_barrier = if after_route && ready.is_ok() {
         // Fixture-only SQLite writer lock prevents the registry settlement while
         // allowing the independent per-run accepted route transaction to commit.
