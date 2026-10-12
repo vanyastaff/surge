@@ -299,10 +299,8 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
         // catch it. No `OutcomeReported` is scripted either: a wall-clock trip
         // now ends the stage itself (ticket 17), so the run reaches a terminal
         // failure without the agent ever reporting anything.
-        let mock_for_pump = mock.clone();
-        let pump = tokio::spawn(async move {
-            mock_for_pump.wait_for_subscribe_count(1).await;
-        });
+        // No events are pumped: completion is the readiness boundary for this
+        // already-expired deadline, which may stop the stage before subscription.
 
         let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
@@ -328,8 +326,6 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
             )
             .await
             .expect("start_run");
-        pump.await.unwrap();
-
         // A node already past its wall-clock budget must fail the run outright —
         // not merely leave a mark while the turn keeps burning tokens (the bug
         // ticket 17 fixes: "raising EscalationRequested rather than burning

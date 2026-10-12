@@ -90,7 +90,7 @@ mod tests {
             key.fingerprint(
                 b"identity",
                 &BTreeMap::new(),
-                &[source.clone()],
+                std::slice::from_ref(&source),
                 temp.path(),
             )
         };

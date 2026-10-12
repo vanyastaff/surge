@@ -907,6 +907,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
         .unwrap();
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
