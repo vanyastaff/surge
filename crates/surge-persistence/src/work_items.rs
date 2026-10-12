@@ -22,9 +22,27 @@ use std::fs::File;
 use std::path::PathBuf;
 use surge_core::{
     ContentHash, Graph, RunId,
+    execution_recovery::WorkItemExecutionControl,
     id::{WorkItemId, WorkItemProjectId},
     work_item::*,
 };
+
+#[derive(Clone, Copy)]
+struct ReconciliationObservation<'a> {
+    attempt: &'a WorkItemAttempt,
+    control: Option<&'a WorkItemExecutionControl>,
+}
+
+impl ReconciliationObservation<'_> {
+    fn matches(&self, conn: &Connection, current: &WorkItemAttempt) -> Result<bool> {
+        let control = control::read_control(conn, current.run, None)?;
+        Ok(
+            serde_json::to_value(current)? == serde_json::to_value(self.attempt)?
+                && control.as_ref() == self.control
+                && control::reconciliation_state_eligible(current.state, control.as_ref()),
+        )
+    }
+}
 
 /// Task mutation or durable storage failure.
 #[derive(Debug, thiserror::Error)]
@@ -773,8 +791,33 @@ impl WorkItemStore {
             detail(tx, id)?,
         ))))
     }
+    /// Claim only the unchanged eligible attempt and latest control observed by reconciliation.
+    /// A superseded or ineligible observation returns `None` without changing its claimant token.
+    pub fn claim_reconciliation(
+        &self,
+        observed: &WorkItemAttempt,
+        observed_control: Option<&WorkItemExecutionControl>,
+    ) -> Result<Option<WorkItemLaunchClaim>> {
+        self.claim_matching(
+            observed.run,
+            Some(ReconciliationObservation {
+                attempt: observed,
+                control: observed_control,
+            }),
+        )
+    }
+
     /// Obtain a stable OS lock and a SQL claimant token for exactly this generation.
     pub fn claim(&self, run: RunId) -> Result<WorkItemLaunchClaim> {
+        self.claim_matching(run, None)?
+            .ok_or_else(|| WorkItemError::Conflict("launch observation changed".into()))
+    }
+
+    fn claim_matching(
+        &self,
+        run: RunId,
+        observation: Option<ReconciliationObservation<'_>>,
+    ) -> Result<Option<WorkItemLaunchClaim>> {
         {
             let conn = self.pool.get()?;
             let value = attempt(&conn, run)?;
@@ -784,9 +827,43 @@ impl WorkItemStore {
                 .is_some()
             {
                 drop(conn);
-                return self.claim_owned_flow(run);
+                return self.claim_owned_flow_matching(run, observation);
             }
         }
+        let lock = self.legacy_launch_lock(run)?;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = attempt(&tx, run)?;
+        if let Some(observation) = observation
+            && !observation.matches(&tx, &value)?
+        {
+            return Ok(None);
+        }
+        let item = record(&tx, value.item)?;
+        if !value.state.is_active()
+            || item.active_run != Some(run)
+            || item.generation != value.binding.generation
+        {
+            return Err(WorkItemError::Conflict(
+                "reservation ownership changed".into(),
+            ));
+        }
+        let token = RunId::new().to_string();
+        tx.execute(
+            "UPDATE work_item_attempts SET claim_token=? WHERE run=? AND generation=?",
+            params![token, run.to_string(), item.generation],
+        )?;
+        tx.commit()?;
+        let claim = WorkItemLaunchClaim {
+            lock,
+            run,
+            token,
+            binding: value.binding,
+        };
+        claim.verify_lock()?;
+        Ok(Some(claim))
+    }
+    fn legacy_launch_lock(&self, run: RunId) -> Result<LaunchLock> {
         #[cfg(windows)]
         let lock = {
             let owner =
@@ -829,32 +906,7 @@ impl WorkItemStore {
                 path,
             }
         };
-        let mut conn = self.pool.get()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let value = attempt(&tx, run)?;
-        let item = record(&tx, value.item)?;
-        if !value.state.is_active()
-            || item.active_run != Some(run)
-            || item.generation != value.binding.generation
-        {
-            return Err(WorkItemError::Conflict(
-                "reservation ownership changed".into(),
-            ));
-        }
-        let token = RunId::new().to_string();
-        tx.execute(
-            "UPDATE work_item_attempts SET claim_token=? WHERE run=? AND generation=?",
-            params![token, run.to_string(), item.generation],
-        )?;
-        tx.commit()?;
-        let claim = WorkItemLaunchClaim {
-            lock,
-            run,
-            token,
-            binding: value.binding,
-        };
-        claim.verify_lock()?;
-        Ok(claim)
+        Ok(lock)
     }
     /// Validate host ownership at every engine boundary, never caller configuration.
     pub fn validate_claim(&self, claim: &WorkItemLaunchClaim) -> Result<WorkItemAttempt> {

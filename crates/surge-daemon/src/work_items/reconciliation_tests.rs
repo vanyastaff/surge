@@ -116,16 +116,16 @@ async fn write_startup(
         .unwrap()
         .clone();
     let context = WorkItemContext::new(attempt.binding.clone(), requirements).unwrap();
+    let writer = storage
+        .create_run(attempt.run, &workspace.path, None)
+        .await
+        .unwrap();
     let artifact = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
         .put(
             attempt.run,
             "accepted_requirements",
             &serde_json::to_vec(context.requirements().unwrap()).unwrap(),
         )
-        .await
-        .unwrap();
-    let writer = storage
-        .create_run(attempt.run, &workspace.path, None)
         .await
         .unwrap();
     let mut events = vec![
@@ -260,6 +260,7 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     engine.validate_work_item_startup(&claim).await.unwrap();
     drop(claim);
     let journal_before = journal(&storage, attempt.run).await;
+    let claim_before = registry_claim_token(&storage, attempt.run);
     let tracking = TrackingContext::new(engine.clone(), storage.clone());
     reconcile_candidate(
         captured,
@@ -269,6 +270,11 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        registry_claim_token(&storage, attempt.run),
+        claim_before,
+        "confirmed manual suspension must not receive a generic launch claim"
+    );
     let after = store.for_run(attempt.run).unwrap().unwrap();
     assert_eq!(
         after.state,
@@ -292,6 +298,18 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     drop(store);
     drop(storage);
     home.close().unwrap();
+}
+
+fn registry_claim_token(storage: &Storage, run: RunId) -> String {
+    storage
+        .acquire_registry_conn()
+        .unwrap()
+        .query_row(
+            "SELECT claim_token FROM work_item_attempts WHERE run=?",
+            [run.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
 }
 
 async fn journal(storage: &Arc<Storage>, run: RunId) -> Vec<(u64, serde_json::Value)> {

@@ -107,7 +107,7 @@ fn request_suspend(
     *control
 }
 
-fn snapshot(store: &WorkItemStore) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+pub(super) fn snapshot(store: &WorkItemStore) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
     let conn = store.pool.get().unwrap();
     [
         "work_items",
@@ -551,4 +551,44 @@ async fn reconciliation_current_continue_settles_failure_and_projection() {
         drop(store);
         home.close().unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciliation_claim_rejects_manual_generation_without_mutating_authority() {
+    let (home, store, claim) = fixture().await;
+    let mut pending = request_suspend(&store, &claim);
+    pending.state = ExecutionControlState::ContinueReserved;
+    control::write_control(&store.pool.get().unwrap(), &pending).unwrap();
+    let observed = store.for_run(claim.run()).unwrap().unwrap();
+    let manual = request_suspend(&store, &claim);
+    drop(claim);
+    let before = snapshot(&store);
+    assert!(
+        store
+            .claim_reconciliation(&observed, Some(&pending))
+            .unwrap()
+            .is_none(),
+        "manual generation won before claimant-token publication"
+    );
+    assert_eq!(
+        snapshot(&store),
+        before,
+        "refused claim must not mutate authority or wakes"
+    );
+    // The unchanged current continuation must still claim successfully. A
+    // permanently refusing implementation cannot satisfy this oracle.
+    let mut current = manual;
+    current.state = ExecutionControlState::ContinueReserved;
+    control::write_control(&store.pool.get().unwrap(), &current).unwrap();
+    let accepted = store
+        .claim_reconciliation(&observed, Some(&current))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.validate_claim(&accepted).unwrap().binding,
+        observed.binding
+    );
+    drop(accepted);
+    drop(store);
+    home.close().unwrap();
 }

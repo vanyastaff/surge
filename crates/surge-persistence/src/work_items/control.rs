@@ -418,7 +418,10 @@ impl WorkItemStore {
     }
 }
 
-fn reconciliation_state_eligible(state: WorkItemAttemptState, control: Option<&Control>) -> bool {
+pub(super) fn reconciliation_state_eligible(
+    state: WorkItemAttemptState,
+    control: Option<&Control>,
+) -> bool {
     if matches!(
         state,
         WorkItemAttemptState::Suspended | WorkItemAttemptState::Attention

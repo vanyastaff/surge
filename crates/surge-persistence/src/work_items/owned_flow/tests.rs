@@ -419,3 +419,48 @@ async fn canceled_caller_leaves_the_real_blocking_worker_as_preparation_owner() 
     }
     home.close().expect("close runtime home");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owned_flow_reconciliation_claim_preserves_new_manual_control() {
+    let home = FixtureHome::new().unwrap();
+    let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+    let store = storage.work_items();
+    let (receipt, claim) = accepted(&store, home.path(), WorkItemOperationId::new());
+    let manifest = store.owned_flow_manifest(receipt.run).unwrap().unwrap();
+    // SQL authority oracle only; host integration verifies actual startup.
+    store
+        .acknowledge_owned_flow_startup(&claim, &manifest)
+        .unwrap();
+    let observed = store.for_run(receipt.run).unwrap().unwrap();
+    let command = WorkItemCommand::Suspend {
+        operation_id: WorkItemOperationId::new(),
+        item: receipt.item,
+        expected_version: store.show(receipt.item).unwrap().item.version,
+    };
+    store.mutate(&command, None, None, "operator", 3).unwrap();
+    drop(claim);
+    let before = crate::work_items::reconciliation_tests::snapshot(&store);
+    assert!(
+        store
+            .claim_reconciliation(&observed, None)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        crate::work_items::reconciliation_tests::snapshot(&store),
+        before
+    );
+    let current = store.execution_control(receipt.run).unwrap().unwrap();
+    let accepted = store
+        .claim_reconciliation(&observed, Some(&current))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.validate_claim(&accepted).unwrap().binding,
+        observed.binding
+    );
+    drop(accepted);
+    drop(store);
+    drop(storage);
+    home.close().unwrap();
+}

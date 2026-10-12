@@ -1055,23 +1055,20 @@ async fn reconcile_candidate(
         return Ok(());
     };
     let store = storage.work_items();
-    // Read-only early filtering handles candidates that became terminal and no longer
-    // have an active assignment. This is not authority: validate again under the claim.
-    let current = store
-        .for_run(captured.run)?
-        .ok_or(WorkItemError::NotFound)?;
-    if !matches!(
-        current.state,
-        WorkItemAttemptState::Reserved
-            | WorkItemAttemptState::Launched
-            | WorkItemAttemptState::Suspended
-            | WorkItemAttemptState::Attention
-    ) {
+    // Avoid claims for already paused or terminal attempts. Publication checks
+    // this observation atomically, and effects still revalidate under the claim.
+    let observed = ReconciliationAuthority {
+        attempt: store
+            .for_run(captured.run)?
+            .ok_or(WorkItemError::NotFound)?,
+        control: store.execution_control(captured.run)?,
+    };
+    if !reconciliation_eligible(&observed) {
         return Ok(());
     }
-    let claim = match store.claim(captured.run) {
-        Ok(claim) => claim,
-        Err(WorkItemError::Busy) => return Ok(()),
+    let claim = match store.claim_reconciliation(&observed.attempt, observed.control.as_ref()) {
+        Ok(Some(claim)) => claim,
+        Ok(None) | Err(WorkItemError::Busy) => return Ok(()),
         Err(error) => {
             if store.for_run(captured.run)?.is_some_and(|current| {
                 !matches!(
