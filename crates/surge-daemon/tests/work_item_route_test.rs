@@ -3961,6 +3961,15 @@ async fn gate_answer_crash_fixture(after_effects: bool) {
     home.close().unwrap();
 }
 
+/// Outer bound for each durable-state wait in the gate crash fixture. Each wait
+/// polls the exact durable condition (the gate request row, the committed
+/// effects, the recovered attempt reaching `Completed`), so this bound only
+/// separates a real hang from scheduling delay. An isolated run takes well
+/// under a second, but under full parallel load with spawned owner and cold
+/// host processes a single phase has taken over 8 s; a hang still fails, with
+/// the diagnostics attached to each wait.
+const GATE_CRASH_FIXTURE_WAIT: Duration = Duration::from_secs(30);
+
 async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bool) {
     use rusqlite::OptionalExtension;
     let project = tempfile::tempdir().unwrap();
@@ -3991,7 +4000,7 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         .join("runs")
         .join(attempt.run.to_string())
         .join("events.sqlite");
-    let original = tokio::time::timeout(Duration::from_secs(8), async {
+    let original = tokio::time::timeout(GATE_CRASH_FIXTURE_WAIT, async {
         loop {
             assert!(
                 owner.try_wait().unwrap().is_none(),
@@ -4068,7 +4077,7 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         1
     );
     if after_effects {
-        tokio::time::timeout(Duration::from_secs(8), async {
+        tokio::time::timeout(GATE_CRASH_FIXTURE_WAIT, async {
             while conn
                 .query_row(
                     "SELECT COUNT(*) FROM events WHERE kind='OutcomeReported'",
@@ -4141,7 +4150,7 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     });
     let (engine, cancel, server, socket) =
         cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    tokio::time::timeout(Duration::from_secs(8), async {
+    tokio::time::timeout(GATE_CRASH_FIXTURE_WAIT, async {
         while storage
             .work_items()
             .for_run(attempt.run)
@@ -4154,7 +4163,25 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|error| {
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM events ORDER BY seq")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()
+            })
+            .unwrap_or_default();
+        panic!(
+            "cold recovery completion: {error}; attempt={:?}; events={kinds:?}; provider={}; host={}",
+            storage
+                .work_items()
+                .for_run(attempt.run)
+                .map(|attempt| attempt.map(|attempt| (attempt.state, attempt.diagnostic))),
+            bounded_child_log(&home.path().join("commit-provider-wire.jsonl")),
+            bounded_child_log(&socket.with_extension("trace.log"))
+        )
+    });
     assert_eq!(
         request_frame(&socket, serde_json::to_value(&command).unwrap()).await["method"],
         "resolve_human_input_ok"
