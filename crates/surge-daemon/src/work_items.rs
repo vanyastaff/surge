@@ -1054,6 +1054,7 @@ async fn reconcile_candidate(
     let Some((_, storage)) = tracking.task_sources() else {
         return Ok(());
     };
+    tracing::debug!(run_id=%captured.run, "task reconciliation candidate began");
     let store = storage.work_items();
     // Avoid claims for already paused or terminal attempts. Publication checks
     // this observation atomically, and effects still revalidate under the claim.
@@ -1064,6 +1065,7 @@ async fn reconcile_candidate(
         control: store.execution_control(captured.run)?,
     };
     if !reconciliation_eligible(&observed) {
+        tracing::debug!(run_id=%captured.run, "task reconciliation candidate is ineligible");
         return Ok(());
     }
     // An ordinary unstarted reservation belongs to explicit Start. Do not
@@ -1076,11 +1078,20 @@ async fn reconcile_candidate(
             Ok(false)
         )
     {
+        tracing::debug!(run_id=%captured.run, "task reconciliation startup is absent");
         return Ok(());
     }
+    tracing::debug!(run_id=%captured.run, "task reconciliation claim began");
     let claim = match store.claim_reconciliation(&observed.attempt, observed.control.as_ref()) {
         Ok(Some(claim)) => claim,
-        Ok(None) | Err(WorkItemError::Busy) => return Ok(()),
+        Ok(None) => {
+            tracing::debug!(run_id=%captured.run, "task reconciliation claim was superseded");
+            return Ok(());
+        },
+        Err(WorkItemError::Busy) => {
+            tracing::debug!(run_id=%captured.run, "task reconciliation claim is busy");
+            return Ok(());
+        },
         Err(error) => {
             if store.for_run(captured.run)?.is_some_and(|current| {
                 !matches!(
@@ -1096,6 +1107,7 @@ async fn reconcile_candidate(
             return Err(error);
         },
     };
+    tracing::debug!(run_id=%captured.run, "task reconciliation claim acquired");
     let authority = ReconciliationAuthority {
         attempt: store.validate_claim(&claim)?,
         control: store.execution_control(captured.run)?,
@@ -1116,6 +1128,7 @@ async fn reconcile_candidate(
         },
         Ok(true) => (),
     }
+    tracing::debug!(run_id=%captured.run, "task reconciliation launch began");
     if let Err(error) = launch_claimed_attempt(
         &authority.attempt,
         claim,

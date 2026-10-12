@@ -14,6 +14,7 @@ use surge_orchestrator::engine::{Engine, EngineConfig};
 use surge_persistence::runs::Storage;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
+use tracing::instrument::WithSubscriber;
 
 async fn request(socket: &Path, command: Value) -> Value {
     request_frame(
@@ -632,18 +633,27 @@ async fn cold_host_with_config(
     } else {
         format!("cold-{endpoint}.sock")
     });
-    let mut server = tokio::spawn(surge_daemon::run_runs_only(
-        surge_daemon::ServerConfig {
-            socket_path: socket.clone(),
-            max_active: 8,
-            max_queue: 2,
-        },
-        Arc::new(LocalEngineFacade::new(engine.clone())),
-        surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage),
-        Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
-        Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
-        cancel.clone(),
-    ));
+    let trace = std::fs::File::create(socket.with_extension("trace.log")).unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::sync::Mutex::new(trace))
+        .finish();
+    let mut server = tokio::spawn(
+        surge_daemon::run_runs_only(
+            surge_daemon::ServerConfig {
+                socket_path: socket.clone(),
+                max_active: 8,
+                max_queue: 2,
+            },
+            Arc::new(LocalEngineFacade::new(engine.clone())),
+            surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage),
+            Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
+            Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
+            cancel.clone(),
+        )
+        .with_subscriber(subscriber),
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if server.is_finished() {
@@ -838,7 +848,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
         reserve_fixture(home.path(), project.path(), true).await;
     write_owned_startup(&storage, &attempt, &workspace, true, true).await;
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (engine, cancel, server, _socket) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     let observed = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -851,9 +861,31 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
     .await;
     assert!(
         observed.is_ok(),
-        "cold resume diagnostic: {:?}; journal: {:?}",
-        storage.work_items().for_run(attempt.run).unwrap(),
-        storage.inspect_run(attempt.run).await.unwrap()
+        "cold resume diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        storage
+            .work_items()
+            .for_run(attempt.run)
+            .map(|value| value.map(|attempt| (attempt.state, attempt.diagnostic))),
+        storage
+            .inspect_run(attempt.run)
+            .await
+            .map(|inspection| match inspection.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =>
+                    events
+                        .into_iter()
+                        .rev()
+                        .take(32)
+                        .map(|event| (event.seq, event.kind))
+                        .collect::<Vec<_>>(),
+                surge_persistence::runs::inspection::RunDatabaseInspection::Absent => Vec::new(),
+            }),
+        storage
+            .work_items()
+            .execution_control(attempt.run)
+            .map(|value| value.map(|control| (control.state, control.generation))),
+        tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await,
+        server.is_finished(),
+        bounded_child_log(&socket.with_extension("trace.log"))
     );
 
     let prompt = tokio::time::timeout(Duration::from_secs(3), async {
@@ -3168,15 +3200,29 @@ async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_ho
     assert!(ready.is_ok(), "child failed to reach first ACP turn");
     assert!(held, "live execution did not retain launch ownership");
     let bridge = Arc::new(mock_bridge::MockBridge::new());
-    let (engine, cancel, server, _) =
+    let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let resumed = tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
-    .await
-    .unwrap();
+    .await;
+    assert!(
+        resumed.is_ok(),
+        "killed owner resume: attempt={:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        storage
+            .work_items()
+            .for_run(attempt.run)
+            .map(|value| value.map(|attempt| (attempt.state, attempt.diagnostic))),
+        storage
+            .work_items()
+            .execution_control(attempt.run)
+            .map(|value| value.map(|control| (control.state, control.generation))),
+        tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await,
+        server.is_finished(),
+        bounded_child_log(&socket.with_extension("trace.log"))
+    );
     assert_eq!(
         storage
             .work_items()
@@ -3926,18 +3972,20 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     )
     .unwrap();
     let diagnostic = std::fs::File::create(home.path().join("gate-child.log")).unwrap();
-    let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "child_committed_outcome_host_probe",
-            "--nocapture",
-        ])
-        .env("SURGE_TEST_COMMIT_HOME", home.path())
-        .env("SURGE_TEST_COMMIT_PROJECT", project.path())
-        .stdout(diagnostic.try_clone().unwrap())
-        .stderr(diagnostic)
-        .spawn()
-        .unwrap();
+    let mut owner = ContinueFixtureChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "child_committed_outcome_host_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_TEST_COMMIT_HOME", home.path())
+            .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+            .stdout(diagnostic.try_clone().unwrap())
+            .stderr(diagnostic)
+            .spawn()
+            .unwrap(),
+    );
     let path = home
         .path()
         .join("runs")
@@ -4091,8 +4139,8 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
         flags: commit_wire_flags(home.path()),
         session_commit_check: None,
     });
-    let (_engine, cancel, server, socket) =
-        cold_wire_host(home.path(), project.path(), storage.clone(), bridge).await;
+    let (engine, cancel, server, socket) =
+        cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     tokio::time::timeout(Duration::from_secs(8), async {
         while storage
             .work_items()
@@ -4153,6 +4201,8 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     )));
     cancel.cancel();
     server.await.unwrap().unwrap();
+    drop(unwrap_settled_fixture_owner(engine).await);
+    settle_fixture_wire(bridge).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
