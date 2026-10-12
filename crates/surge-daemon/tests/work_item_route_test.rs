@@ -3204,7 +3204,7 @@ async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_ho
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     let resumed = tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
