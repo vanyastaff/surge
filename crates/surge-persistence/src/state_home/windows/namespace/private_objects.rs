@@ -808,7 +808,6 @@ mod tests {
 
     #[test]
     fn private_size_bounds_delete_pending_and_retained_parent_replacement_fail_closed() {
-        use windows::Win32::Storage::FileSystem::FILE_FLAG_DELETE_ON_CLOSE;
         let home = FixtureHome::new().unwrap();
         let files = PrivateFiles::open(home.path(), true).unwrap();
         let parent = home.path().join("work-items/private-flow-inputs");
@@ -828,12 +827,14 @@ mod tests {
         drop(oversized);
         assert!(files.read("too-large-to-read").is_err());
         files.publish("delete-pending", b"original").unwrap();
-        let deleting = OpenOptions::new()
-            .write(true)
-            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
-            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE.0)
-            .open(parent.join("delete-pending"))
-            .unwrap();
+        let deleting = private_open(
+            files.parent().unwrap(),
+            OsStr::new("delete-pending"),
+            None,
+            true,
+        )
+        .unwrap();
+        mark_delete_pending(&deleting);
         assert!(files.read("delete-pending").is_err());
         assert!(
             files
@@ -841,9 +842,47 @@ mod tests {
                 .is_err()
         );
         drop(deleting);
+        assert!(!parent.join("delete-pending").exists());
         drop(files);
         home.close().unwrap();
     }
+    fn mark_delete_pending(file: &File) {
+        use windows::Win32::Storage::FileSystem::{
+            FILE_STANDARD_INFO, FileStandardInfo, GetFileInformationByHandleEx,
+        };
+        // DELETE_ON_CLOSE is only a future cleanup intent. Explicit non-POSIX
+        // disposition creates the actual DeletePending state required by this oracle.
+        let disposition = FILE_DISPOSITION_INFO_EX {
+            Flags: FILE_DISPOSITION_FLAG_DELETE,
+        };
+        // SAFETY: a retained DELETE-capable original and initialized SDK input.
+        unsafe {
+            SetFileInformationByHandle(
+                HANDLE(file.as_raw_handle()),
+                FileDispositionInfoEx,
+                (&raw const disposition).cast(),
+                size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+            )
+        }
+        .unwrap();
+        let mut standard = FILE_STANDARD_INFO::default();
+        // SAFETY: initialized, correctly sized SDK output and a live original handle.
+        unsafe {
+            GetFileInformationByHandleEx(
+                HANDLE(file.as_raw_handle()),
+                FileStandardInfo,
+                (&raw mut standard).cast(),
+                size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        }
+        .unwrap();
+        assert_ne!(
+            standard.DeletePending.0, 0,
+            "SDK DeletePending must be TRUE, observed {}",
+            standard.DeletePending.0
+        );
+    }
+
     #[test]
     fn moved_staging_cleanup_disposes_only_original_before_barrier() {
         use std::{cell::RefCell, rc::Rc};
