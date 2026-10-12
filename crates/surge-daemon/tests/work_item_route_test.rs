@@ -368,7 +368,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements_
             if let Some(prompt) = bridge.last_prompt().await {
                 break prompt;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1266,7 +1266,7 @@ async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run_i
             if bridge.last_prompt().await.is_some() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1582,7 +1582,7 @@ async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn_in_
     request(&first_socket, serde_json::to_value(start).unwrap()).await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while first_bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1885,7 +1885,7 @@ async fn live_tracking_error_with_conflicting_terminals_retains_task_ownership_i
     request(&socket, serde_json::to_value(start).unwrap()).await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1978,7 +1978,7 @@ async fn child_execution_host_probe() {
     assert_eq!(response["method"], "work_item_ok", "{response}");
     tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.last_prompt().await.is_none() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
