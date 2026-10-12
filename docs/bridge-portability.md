@@ -75,9 +75,48 @@ The ordinary shutdown scenario uses a separate 60-second outer safety timeout.
 JUnit test duration includes setup and cleanup, so it is not substituted for any
 of these trigger-to-observation assertions.
 
-## Native evidence ledger
+## Current workspace verification
 
-Selected source revision: `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4`.
+Tested source revision: `ec0341a787a8f57a730184a9bcb4a98e135f23d6`.
+[CI run 38230456119](https://github.com/vanyastaff/surge/actions/runs/38230456119)
+completed successfully with **all 11 jobs green**. Native results below all belong
+to this same SHA; the subsequent evidence-only commit preserves that identity.
+
+| Native platform | Workspace passed | Workspace skipped | Bridge passed | Bridge inventory ignored |
+|---|---:|---:|---:|---:|
+| Linux x86_64 | 4169 | 36 | 383 | 4 |
+| macOS arm64 | 3941 | 37 | 383 | 4 |
+| Windows x86_64 | 3940 | 55 | 388 | 5 |
+
+There were zero failures. All seven mandatory bridge scenarios passed on every
+host. The [retained evidence](bridge-evidence/ec0341a787a8f57a730184a9bcb4a98e135f23d6/README.md) includes native
+manifests, JUnit, inventories, all job logs, final workflow status and file hashes.
+All 63 bridge artifact digests were independently checked after copying.
+
+Windows additionally passed **48/48** native probes under an ordinary user on
+NTFS: 33 persistence, eight process, one MCP and six orchestrator. The
+[standard-user manifest](bridge-evidence/ec0341a787a8f57a730184a9bcb4a98e135f23d6/windows-standard-user/manifest.json)
+and separate logs retain actual named test results, SID, elevation-zero and NTFS
+receipts. Recorded executable hashes agree across results; binary bytes are not
+retained for independent rehashing.
+
+All configured doctest steps and strict default/all-features workspace Clippy
+passed. The existing CI includes UI tests/doctests on Linux; macOS and Windows
+test/doctest commands exclude surge-ui. Clippy includes all crates on all three
+platforms. Ignored integration smoke commands execute on Linux only. Formatting,
+MSRV 1.96, packaging, stage-transition benchmark and dependency checks also passed.
+
+The Windows implementation now covers private Start preparation, native process
+containment and recovery, retained filesystem/SQLite ownership and normal sidefile
+retirement. Recovery fixtures wait for actual ownership, gate registration and
+completion boundaries. The locked mio dependency is 1.2.1, which fixes the upstream
+Windows named-pipe completion ownership race; daemon readiness requires an actual
+Ping response. Earlier failures and cancellations remain in the
+[intermediate ledger](bridge-evidence/intermediate/README.md).
+
+## Original bridge evidence ledger
+
+Initial source revision: `7f937140f84be2df7133c55aeeb2dd01f5b1d5f4`.
 The macOS receipt was produced locally on Darwin 27.0.0 arm64 with Rust/Cargo
 1.98.1 and cargo-nextest 0.9.145, starting at 2026-10-12 01:25:56 UTC. It is local
 native evidence, not a CI run (`job_url` is null). HEAD was identical and the working
@@ -139,6 +178,6 @@ Investigation found recovery/continuation and gate-identity fixture failures on
 Unix. Windows also exposed unsupported private Start preparation in quota fixtures,
 artifact setup before run creation, temporary runtime-home/handle settlement,
 duplicate exclusive reservation and unresolved MCP readiness failures. These are
-broader suite failures; this ledger does not claim Windows workspace repairs are
-complete. Follow-up implementation revisions require their own three-platform
-receipts before replacing the selected source revision above.
+broader suite failures at the initial revision. The current workspace verification
+above records the subsequent repairs and successful three-platform evidence at
+one later source revision.

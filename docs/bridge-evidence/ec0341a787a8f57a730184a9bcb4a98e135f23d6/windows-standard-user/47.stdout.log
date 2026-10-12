@@ -1,0 +1,12 @@
+
+running 1 test
+test engine::configured_route_pin::windows_key::tests::native_existing_reparse_key_is_refused_without_target_mutation ... Junction created for C:\Users\surgeprobe46837744\surge-runtime-fixture-YvNCSF\state\configured-route-pin.key <<===>> C:\Users\Public\surge-native-5b809f2f96d14873905bb2b60e11e670\temp\.tmpjvrOAb\target
+ok
+
+successes:
+
+successes:
+    engine::configured_route_pin::windows_key::tests::native_existing_reparse_key_is_refused_without_target_mutation
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 458 filtered out; finished in 0.16s
+

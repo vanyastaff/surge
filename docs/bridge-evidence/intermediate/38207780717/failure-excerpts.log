@@ -1,0 +1,147 @@
+Sourced intermediate failure receipts; source line numbers retained.
+Only anchored nextest FAIL/Summary and actual compiler/process diagnostics are selected.
+No Windows counts or probe outcomes inferred from absent receipts.
+
+SOURCE /tmp/surge-ci-38207780717-linux-plain.log
+...
+3811: 2026-10-12T05:35:45.0224904Z         PASS [   0.517s] (1800/4167) surge-daemon::owned_flow_mcp_recovery cold_host::tests::regular_marker_swapped_to_fifo_errors_without_blocking_and_reaps_child
+3812: 2026-10-12T05:35:45.2620642Z         FAIL [   5.259s] (1801/4167) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+3813: 2026-10-12T05:35:45.2643191Z   stdout ───
+...
+3945: 2026-10-12T05:35:45.3313863Z 
+3946: 2026-10-12T05:35:45.3328976Z         FAIL [   5.196s] (1802/4167) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+3947: 2026-10-12T05:35:45.3331198Z   stdout ───
+...
+4079: 2026-10-12T05:35:45.3572940Z 
+4080: 2026-10-12T05:35:45.3574238Z         FAIL [   5.187s] (1803/4167) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+4081: 2026-10-12T05:35:45.3575578Z   stdout ───
+...
+6506: 2026-10-12T05:37:21.2947094Z ────────────
+6507: 2026-10-12T05:37:21.2948864Z      Summary [ 153.919s] 4167 tests run: 4164 passed, 3 failed, 36 skipped
+6508: 2026-10-12T05:37:21.2950774Z         FAIL [   5.259s] (1801/4167) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+6509: 2026-10-12T05:37:21.2952411Z         FAIL [   5.196s] (1802/4167) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+6510: 2026-10-12T05:37:21.2953533Z         FAIL [   5.187s] (1803/4167) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+6511: 2026-10-12T05:37:21.3008217Z error: test run failed
+6512: 2026-10-12T05:37:21.3059534Z ##[error]Process completed with exit code 100.
+6513: 2026-10-12T05:37:21.3334152Z Post job cleanup.
+6514: 2026-10-12T05:37:21.5444174Z [command]/usr/bin/git version
+6515: 2026-10-12T05:37:21.5492128Z git version 2.55.0
+6516: 2026-10-12T05:37:21.5535608Z Temporarily overriding HOME='/home/runner/work/_temp/b01aae7f-5e34-4061-ba7e-6859da92e321' before making global git config changes
+6517: 2026-10-12T05:37:21.5543977Z Adding repository directory to the temporary git global config as a safe directory
+6518: 2026-10-12T05:37:21.5547374Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/surge/surge
+6519: 2026-10-12T05:37:21.5587220Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+6520: 2026-10-12T05:37:21.5629753Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+
+SOURCE /tmp/surge-ci-38207780717-macos-plain.log
+...
+2482: 2026-10-12T05:34:49.2256820Z         PASS [   0.185s] (1768/3939) surge-daemon::idle_shutdown idle_connection_does_not_force_full_shutdown_grace
+2483: 2026-10-12T05:34:54.4236840Z         FAIL [   5.190s] (1769/3939) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+2484: 2026-10-12T05:34:54.4272810Z   stdout ───
+...
+2544: 2026-10-12T05:34:54.4321380Z 
+2545: 2026-10-12T05:34:54.4432900Z         FAIL [   5.270s] (1770/3939) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+2546: 2026-10-12T05:34:54.4435410Z   stdout ───
+...
+2678: 2026-10-12T05:34:54.4667160Z 
+2679: 2026-10-12T05:34:54.4667770Z         FAIL [   5.368s] (1771/3939) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+2680: 2026-10-12T05:34:54.4668460Z   stdout ───
+...
+4981: 2026-10-12T05:36:22.6724820Z ────────────
+4982: 2026-10-12T05:36:22.6725730Z      Summary [ 162.107s] 3939 tests run: 3936 passed, 3 failed, 37 skipped
+4983: 2026-10-12T05:36:22.6727010Z         FAIL [   5.190s] (1769/3939) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+4984: 2026-10-12T05:36:22.6729640Z         FAIL [   5.270s] (1770/3939) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+4985: 2026-10-12T05:36:22.6731070Z         FAIL [   5.368s] (1771/3939) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+4986: 2026-10-12T05:36:22.6967020Z error: test run failed
+4987: 2026-10-12T05:36:22.7133660Z ##[error]Process completed with exit code 100.
+4988: 2026-10-12T05:36:22.7457570Z Post job cleanup.
+4989: 2026-10-12T05:36:23.1089450Z [command]/opt/homebrew/bin/git version
+4990: 2026-10-12T05:36:23.1174980Z git version 2.55.0
+4991: 2026-10-12T05:36:23.1192300Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/0e9cb6ee-d3f8-41f9-ae67-0520da33da0d/.gitconfig'
+4992: 2026-10-12T05:36:23.1198960Z Temporarily overriding HOME='/Users/runner/work/_temp/0e9cb6ee-d3f8-41f9-ae67-0520da33da0d' before making global git config changes
+4993: 2026-10-12T05:36:23.1199740Z Adding repository directory to the temporary git global config as a safe directory
+4994: 2026-10-12T05:36:23.1203080Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/surge/surge
+4995: 2026-10-12T05:36:23.1276270Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+
+SOURCE /tmp/surge-ci-38207780717-windows-clippy-plain.log
+...
+423: 2026-10-12T05:27:54.8618719Z     Checking surge-orchestrator v0.1.0 (D:\a\surge\surge\crates\surge-orchestrator)
+424: 2026-10-12T05:27:55.3257508Z error: adding items after statements is confusing, since items exist from the start of the scope
+425: 2026-10-12T05:27:55.3284474Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:87:5
+426: 2026-10-12T05:27:55.3406062Z    |
+427: 2026-10-12T05:27:55.3417466Z 87 |     use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+428: 2026-10-12T05:27:55.3600601Z    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+429: 2026-10-12T05:27:55.3620831Z    |
+430: 2026-10-12T05:27:55.3723707Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+431: 2026-10-12T05:27:55.3736437Z    = note: `-D clippy::items-after-statements` implied by `-D warnings`
+432: 2026-10-12T05:27:55.3939084Z    = help: to override `-D warnings` add `#[allow(clippy::items_after_statements)]`
+433: 2026-10-12T05:27:55.4053860Z 
+434: 2026-10-12T05:27:55.4073603Z error: adding items after statements is confusing, since items exist from the start of the scope
+435: 2026-10-12T05:27:55.4255983Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:87:38
+436: 2026-10-12T05:27:55.4275046Z    |
+437: 2026-10-12T05:27:55.4374447Z 87 |     use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+438: 2026-10-12T05:27:55.4388506Z    |                                      ^^^^^^^^^^^
+439: 2026-10-12T05:27:55.4391908Z    |
+440: 2026-10-12T05:27:55.4427955Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+441: 2026-10-12T05:27:55.4529769Z 
+442: 2026-10-12T05:27:55.4545166Z error: adding items after statements is confusing, since items exist from the start of the scope
+443: 2026-10-12T05:27:55.4546895Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:87:51
+444: 2026-10-12T05:27:55.4548853Z    |
+445: 2026-10-12T05:27:55.4556895Z 87 |     use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+446: 2026-10-12T05:27:55.4560758Z    |                                                   ^^^^^^^^^^^^^
+447: 2026-10-12T05:27:55.4561819Z    |
+448: 2026-10-12T05:27:55.4563294Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+449: 2026-10-12T05:27:55.4565870Z 
+450: 2026-10-12T05:27:55.4566878Z error: adding items after statements is confusing, since items exist from the start of the scope
+451: 2026-10-12T05:27:55.4568413Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:87:66
+452: 2026-10-12T05:27:55.4569341Z    |
+453: 2026-10-12T05:27:55.4570566Z 87 |     use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+454: 2026-10-12T05:27:55.4572389Z    |                                                                  ^^^^^^^^^^^^
+455: 2026-10-12T05:27:55.4573385Z    |
+456: 2026-10-12T05:27:55.4574762Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+457: 2026-10-12T05:27:55.4575976Z 
+458: 2026-10-12T05:27:55.4576952Z error: adding items after statements is confusing, since items exist from the start of the scope
+459: 2026-10-12T05:27:55.4578491Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:88:5
+460: 2026-10-12T05:27:55.4579507Z    |
+461: 2026-10-12T05:27:55.4580554Z 88 | /     use windows::Win32::System::Threading::{
+462: 2026-10-12T05:27:55.4581980Z 89 | |         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+463: 2026-10-12T05:27:55.4583232Z 90 | |     };
+464: 2026-10-12T05:27:55.4584109Z    | |______^
+465: 2026-10-12T05:27:55.4584879Z    |
+466: 2026-10-12T05:27:55.4586203Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+467: 2026-10-12T05:27:55.4587418Z 
+468: 2026-10-12T05:27:55.4588424Z error: adding items after statements is confusing, since items exist from the start of the scope
+469: 2026-10-12T05:27:55.4589962Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:89:9
+470: 2026-10-12T05:27:55.4591304Z    |
+471: 2026-10-12T05:27:55.4592336Z 89 |         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+472: 2026-10-12T05:27:55.4593917Z    |         ^^^^^^^^^^^
+473: 2026-10-12T05:27:55.4594728Z    |
+474: 2026-10-12T05:27:55.4596524Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+475: 2026-10-12T05:27:55.4598011Z 
+476: 2026-10-12T05:27:55.4599016Z error: adding items after statements is confusing, since items exist from the start of the scope
+477: 2026-10-12T05:27:55.4600667Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:89:22
+478: 2026-10-12T05:27:55.4601731Z    |
+479: 2026-10-12T05:27:55.4602599Z 89 |         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+480: 2026-10-12T05:27:55.4603689Z    |                      ^^^^^^^^^^^^^^^^^^^
+481: 2026-10-12T05:27:55.4604443Z    |
+482: 2026-10-12T05:27:55.4606870Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+483: 2026-10-12T05:27:55.4608116Z 
+484: 2026-10-12T05:27:55.4609061Z error: adding items after statements is confusing, since items exist from the start of the scope
+485: 2026-10-12T05:27:55.4610492Z   --> crates\surge-mcp\src\child_settlement\windows_tests.rs:89:43
+486: 2026-10-12T05:27:55.4611769Z    |
+487: 2026-10-12T05:27:55.4612653Z 89 |         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+488: 2026-10-12T05:27:55.4613844Z    |                                           ^^^^^^^^^^^^^^^^^^^
+489: 2026-10-12T05:27:55.4615023Z    |
+490: 2026-10-12T05:27:55.4616589Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_statements
+491: 2026-10-12T05:27:55.4617733Z 
+492: 2026-10-12T05:27:55.4618416Z error: could not compile `surge-mcp` (lib test) due to 8 previous errors
+493: 2026-10-12T05:27:55.4619591Z warning: build failed, waiting for other jobs to finish...
+494: 2026-10-12T05:28:06.8970220Z ##[error]Process completed with exit code 1.
+495: 2026-10-12T05:28:06.9226711Z Post job cleanup.
+496: 2026-10-12T05:28:07.1213814Z [command]"C:\Program Files\Git\bin\git.exe" version
+497: 2026-10-12T05:28:07.1531443Z git version 2.55.0.windows.5
+498: 2026-10-12T05:28:07.1610018Z Temporarily overriding HOME='D:\a\_temp\c7ea86c6-f9e4-45f5-8363-7a0ec651c4c6' before making global git config changes
+499: 2026-10-12T05:28:07.1611798Z Adding repository directory to the temporary git global config as a safe directory
+500: 2026-10-12T05:28:07.1622935Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\surge\surge
+501: 2026-10-12T05:28:07.1982893Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+502: 2026-10-12T05:28:07.2378771Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+

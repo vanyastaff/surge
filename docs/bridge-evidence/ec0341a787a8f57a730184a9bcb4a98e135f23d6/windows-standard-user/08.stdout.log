@@ -1,0 +1,7 @@
+
+running 1 test
+test runs::connection::windows_tests::failed_real_initializer_closes_before_releasing_namespace ... stage1 checked SQLite initializer failure settlement=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.15s
+

@@ -1,0 +1,96 @@
+### Windows native nextest diagnostic excerpt
+2026-10-12T06:26:46.6339238Z         PASS [   2.185s] (1851/3938) surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice
+2026-10-12T06:26:47.0965511Z         FAIL [   3.122s] (1852/3938) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+2026-10-12T06:26:47.1346742Z   stdout ───
+2026-10-12T06:26:47.1347176Z 
+2026-10-12T06:26:47.1347291Z     running 1 test
+2026-10-12T06:26:47.1347694Z     test accepted_gate_answer_survives_owner_death_before_outcome_delivery ... FAILED
+2026-10-12T06:26:47.1348034Z 
+2026-10-12T06:26:47.1348109Z     failures:
+2026-10-12T06:26:47.1348224Z 
+2026-10-12T06:26:47.1348345Z     failures:
+2026-10-12T06:26:47.1348632Z         accepted_gate_answer_survives_owner_death_before_outcome_delivery
+2026-10-12T06:26:47.1348906Z 
+2026-10-12T06:26:47.1349158Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 3.10s
+2026-10-12T06:26:47.1349795Z     
+2026-10-12T06:26:47.1350116Z   stderr ───
+2026-10-12T06:26:47.1350301Z 
+2026-10-12T06:26:47.1350891Z     thread 'accepted_gate_answer_survives_owner_death_before_outcome_delivery' (7112) panicked at crates\surge-daemon\tests\work_item_route_test.rs:3915:18:
+2026-10-12T06:26:47.1352756Z     called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: "C:\\Users\\runneradmin\\surge-runtime-fixture-gci6Tx", err: Os { code: 32, kind: Uncategorized, message: "The process cannot access the file because it is being used by another process." } } }
+2026-10-12T06:26:47.1353844Z     stack backtrace:
+2026-10-12T06:26:47.1354289Z        0: std::panicking::panic_handler
+2026-10-12T06:26:47.1354728Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T06:26:47.1355178Z        1: core::panicking::panic_fmt
+2026-10-12T06:26:47.1355597Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T06:26:49.2786398Z         PASS [   2.645s] (1856/3938) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+2026-10-12T06:26:52.7209534Z         FAIL [   5.022s] (1857/3938) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+2026-10-12T06:26:52.7210315Z   stdout ───
+2026-10-12T06:26:52.7210548Z 
+2026-10-12T06:26:52.7210637Z     running 1 test
+2026-10-12T06:26:52.7210997Z     test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context ... FAILED
+2026-10-12T06:26:52.7211554Z 
+2026-10-12T06:26:52.7211622Z     failures:
+2026-10-12T06:26:52.7211725Z 
+2026-10-12T06:26:52.7211796Z     failures:
+2026-10-12T06:26:52.7212090Z         cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+2026-10-12T06:26:52.7212372Z 
+2026-10-12T06:26:52.7212612Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 4.99s
+2026-10-12T06:26:52.7213042Z     
+2026-10-12T06:26:52.7213268Z   stderr ───
+2026-10-12T06:26:52.7213444Z 
+2026-10-12T06:26:52.7214024Z     thread 'cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context' (4364) panicked at crates\surge-daemon\tests\work_item_route_test.rs:852:5:
+2026-10-12T06:26:52.7237842Z     cold resume diagnostic: Some(WorkItemAttempt { item: WorkItemId(Ulid(2166136852719065266001294489918702478)), run: RunId(Ulid(2166136852788247156385795980260925524)), ordinal: 1, binding: WorkItemBinding { item: WorkItemId(Ulid(2166136852719065266001294489918702478)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, accepted_revision_relation: MatchesCurrent, graph: Graph { schema_version: 1, metadata: GraphMetadata { name: "flow_minimal_agent", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey("impl_1"), nodes: {NodeKey("end"): Node { id: NodeKey("end"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey("impl_1"): Node { id: NodeKey("impl_1"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey("done"), description: "Implementation complete", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey("implementer@1.0"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar("spec"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey("e_impl_to_end"), from: PortRef { node: NodeKey("impl_1"), outcome: OutcomeKey("done") }, to: NodeKey("end"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, config: "{\"quota_recovery\":{\"stages\":[]},\"human_input_timeout\":\"5m\",\"stage_timeout_override\":null,\"mcp_servers\":[],\"initial_prompt\":\"\",\"bootstrap_parent\":null,\"project_context\":null,\"project_memory\":null,\"memory_claim_candidates\":null,\"context_pack\":null,\"seed_artifacts\":[],\"bootstrap\":{\"edit_loop_cap\":3},\"budget\":{\"limits\":{\"usd\":null,\"tokens\":null,\"warn_threshold_pct\":0},\"policy\":\"abort\"},\"tool_call_loop_guard\":null,\"output_spill\":null,\"memory_store_path\":null}", state: Reserved, diagnostic: None, usage_seq: 5, input_tokens: 0, output_tokens: 0, known_cost_usd: 0.0, usage_unknown: false }); journal: RunInspection { registry: Some(RunSummary { id: RunId(Ulid(2166136852788247156385795980260925524)), project_path: "\\\\?\\C:\\Users\\runneradmin\\surge-runtime-fixture-pWcvZW\\state\\work-items\\workspaces\\run-01M4QCNPQWZKH3DE0ZAW9T3Y6W", pipeline_template: None, status: Bootstrapping, started_at_ms: 1791786409179, ended_at_ms: None, daemon_pid: Some(864), wake_at_ms: None }), run_directory_present: true, database: Present { events: [ReadEvent { seq: EventSeq(1), timestamp_ms: 1791786409273, kind: "RunStarted", payload: VersionedEventPayload { schema_version: 21, payload: RunStarted { pipeline_template: None, project_path: "\\\\?\\C:\\Users\\runneradmin\\surge-runtime-fixture-pWcvZW\\state\\work-items\\workspaces\\run-01M4QCNPQWZKH3DE0ZAW9T3Y6W", initial_prompt: "Accepted task requirements (revision 1, hash sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1)\nCold accepted context\nAcceptance criteria:\n1. Same reserved run", config: RunConfig { bootstrap_edit_loop_cap: Some(3), sandbox_default: WorkspaceWrite, approval_default: OnRequest, auto_pr: false, mcp_servers: [], budget: BudgetGuard { limits: BudgetLimits { usd: None, tokens: None, warn_threshold_pct: 0 }, policy: Abort } } } } }, ReadEvent { seq: EventSeq(2), timestamp_ms: 1791786409273, kind: "PipelineMaterialized", payload: VersionedEventPayload { schema_version: 21, payload: PipelineMaterialized { graph: Graph { schema_version: 1, metadata: GraphMetadata { name: "flow_minimal_agent", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey("impl_1"), nodes: {NodeKey("end"): Node { id: NodeKey("end"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey("impl_1"): Node { id: NodeKey("impl_1"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey("done"), description: "Implementation complete", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey("implementer@1.0"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar("spec"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey("e_impl_to_end"), from: PortRef { node: NodeKey("impl_1"), outcome: OutcomeKey("done") }, to: NodeKey("end"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, graph_hash: sha256:e3f3bf7baf064a44e625413d934d8672e6e5cc5b220b849fbcac1f3e6047cf42 } } }, ReadEvent { seq: EventSeq(3), timestamp_ms: 1791786409273, kind: "ArtifactProduced", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey("task_requirements"), artifact: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, path: "C:\\Users\\runneradmin\\surge-runtime-fixture-pWcvZW\\state\\runs\\run-01M4QCNPSV27FQRW6ZZZM8KR2M\\artifacts\\f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1", name: "accepted_requirements", source_path: None } } }, ReadEvent { seq: EventSeq(4), timestamp_ms: 1791786409273, kind: "ArtifactProduced", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey("initial_prompt_seed"), artifact: sha256:d4d6115b3e044c33372d2fb3fd6e5ecafde15aed204c1fffe01353337f779d70, path: ".surge/user_prompt.txt", name: "user_prompt", source_path: None } } }, ReadEvent { seq: EventSeq(5), timestamp_ms: 1791786409273, kind: "WorkItemAttemptBound", payload: VersionedEventPayload { schema_version: 21, payload: WorkItemAttemptBound { context: WorkItemContext { binding: WorkItemBinding { item: WorkItemId(Ulid(2166136852719065266001294489918702478)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, origin: Requirements(WorkItemRequirements { text: "Cold accepted context", criteria: ["Same reserved run"] }) } } } }] } }
+2026-10-12T06:26:52.7257760Z     stack backtrace:
+2026-10-12T06:26:52.7257995Z        0: std::panicking::panic_handler
+2026-10-12T06:26:52.7258396Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T06:26:52.7258810Z        1: core::panicking::panic_fmt
+2026-10-12T06:26:52.7259190Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T06:27:01.4460225Z         PASS [   3.179s] (1872/3938) surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator
+2026-10-12T06:27:06.9835094Z         FAIL [   6.651s] (1873/3938) surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+2026-10-12T06:27:06.9835937Z   stdout ───
+2026-10-12T06:27:06.9836131Z 
+2026-10-12T06:27:06.9836218Z     running 1 test
+2026-10-12T06:27:06.9836544Z     test killed_execution_owner_releases_os_lock_and_same_attempt_recovers ... FAILED
+2026-10-12T06:27:06.9836852Z 
+2026-10-12T06:27:06.9836938Z     failures:
+2026-10-12T06:27:06.9837046Z 
+2026-10-12T06:27:06.9837114Z     failures:
+2026-10-12T06:27:06.9837397Z         killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+2026-10-12T06:27:06.9837652Z 
+2026-10-12T06:27:06.9837890Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 6.62s
+2026-10-12T06:27:06.9839567Z     
+2026-10-12T06:27:06.9839815Z   stderr ───
+2026-10-12T06:27:06.9840019Z 
+2026-10-12T06:27:06.9840614Z     thread 'killed_execution_owner_releases_os_lock_and_same_attempt_recovers' (4472) panicked at crates\surge-daemon\tests\work_item_route_test.rs:3179:6:
+2026-10-12T06:27:06.9841440Z     called `Result::unwrap()` on an `Err` value: Elapsed(())
+2026-10-12T06:27:06.9841739Z     stack backtrace:
+2026-10-12T06:27:06.9841937Z        0: std::panicking::panic_handler
+2026-10-12T06:27:06.9842322Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T06:27:06.9842722Z        1: core::panicking::panic_fmt
+2026-10-12T06:27:06.9843073Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T06:31:29.8375287Z ────────────
+2026-10-12T06:31:29.8375863Z      Summary [ 461.576s] 3938 tests run: 3935 passed, 3 failed, 55 skipped
+2026-10-12T06:31:29.8376870Z         FAIL [   3.122s] (1852/3938) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+2026-10-12T06:31:29.8380497Z         FAIL [   5.022s] (1857/3938) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+2026-10-12T06:31:29.9651278Z         FAIL [   6.651s] (1873/3938) surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+2026-10-12T06:31:29.9651787Z error: test run failed
+2026-10-12T06:31:30.5363468Z ##[error]Process completed with exit code 1.
+2026-10-12T06:31:30.6300479Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T06:31:30.6300780Z ./scripts/windows-native-probe.ps1
+2026-10-12T06:31:30.6362892Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T06:31:30.6363108Z env:
+2026-10-12T06:31:30.6363230Z   CARGO_TERM_COLOR: always
+2026-10-12T06:31:30.6363367Z   RUST_BACKTRACE: 1
+2026-10-12T06:31:30.6363538Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:31:30.6363818Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T06:31:30.6364091Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:31:30.6364328Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:31:30.6364729Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:31:30.6364928Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T06:31:30.6365087Z   CARGO_INCREMENTAL: 0
+2026-10-12T06:31:30.6365245Z ##[endgroup]
+2026-10-12T06:31:39.5021382Z    Compiling serde_core v1.0.228
+2026-10-12T06:31:39.5052357Z    Compiling windows-sys v0.61.2
+2026-10-12T06:31:39.5087250Z    Compiling num-traits v0.2.19
+2026-10-12T06:31:39.5088460Z    Compiling parking_lot_core v0.9.12
+2026-10-12T06:31:40.4855856Z    Compiling parking_lot v0.12.5

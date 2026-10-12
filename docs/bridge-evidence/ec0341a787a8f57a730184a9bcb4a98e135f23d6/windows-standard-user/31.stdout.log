@@ -1,0 +1,11 @@
+
+running 1 test
+test state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier ... ok
+
+successes:
+
+successes:
+    state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.35s
+

@@ -1,0 +1,7 @@
+
+running 1 test
+test state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target ... stage1 native pathname alias and ADS unchanged refusal=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.13s
+

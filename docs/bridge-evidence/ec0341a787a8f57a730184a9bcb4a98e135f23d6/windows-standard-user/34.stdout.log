@@ -1,0 +1,23 @@
+
+running 1 test
+test state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final ... 
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+ok
+
+successes:
+
+successes:
+    state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.79s
+

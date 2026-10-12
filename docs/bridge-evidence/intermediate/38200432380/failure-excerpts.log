@@ -1,0 +1,240 @@
+Sourced intermediate failure receipts; source line numbers retained.
+Only anchored nextest FAIL/Summary and actual compiler/process diagnostics are selected.
+No Windows counts or probe outcomes inferred from absent receipts.
+
+SOURCE /tmp/surge-ci-38200432380-linux-plain.log
+...
+5887: 2026-10-12T03:46:17.5855322Z ────────────
+5888: 2026-10-12T03:46:17.5855821Z      Summary [ 111.037s] 4104 tests run: 4104 passed, 36 skipped
+5889: 2026-10-12T03:46:17.6595906Z ##[group]Run cargo test --locked --workspace --doc
+5890: 2026-10-12T03:46:17.6596326Z cargo test --locked --workspace --doc
+5891: 2026-10-12T03:46:17.7396850Z shell: /usr/bin/bash -e {0}
+5892: 2026-10-12T03:46:17.7397043Z env:
+
+SOURCE /tmp/surge-ci-38200432380-macos-plain.log
+...
+2933: 2026-10-12T03:53:13.4473980Z         PASS [   0.032s] (1877/3876) surge-daemon::work_item_route_test fixture_cleanup_waits_for_actual_retained_owner
+2934: 2026-10-12T03:53:13.8210270Z         FAIL [   8.866s] (1878/3876) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+2935: 2026-10-12T03:53:13.8229730Z   stdout ───
+...
+2997: 2026-10-12T03:53:13.8267370Z 
+2998: 2026-10-12T03:53:13.8268090Z         FAIL [   8.949s] (1879/3876) surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart
+2999: 2026-10-12T03:53:13.8268820Z   stdout ───
+...
+3304: 2026-10-12T03:53:25.6052530Z         PASS [   0.032s] (2124/3876) surge-mcp::mcp_stdio_e2e rejected_ownership_intent_prevents_actual_mcp_child_spawn
+3305: 2026-10-12T03:53:26.6192450Z         FAIL [   8.302s] (2125/3876) surge-daemon::work_item_route_test task_continue_without_provider_restore_capability_preserves_attention
+3306: 2026-10-12T03:53:26.6301910Z   stdout ───
+...
+5120: 2026-10-12T03:54:47.9893990Z ────────────
+5121: 2026-10-12T03:54:47.9917820Z      Summary [ 200.518s] 3876 tests run: 3873 passed, 3 failed, 37 skipped
+5122: 2026-10-12T03:54:47.9919300Z         FAIL [   8.866s] (1878/3876) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+5123: 2026-10-12T03:54:47.9920760Z         FAIL [   8.949s] (1879/3876) surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart
+5124: 2026-10-12T03:54:47.9922010Z         FAIL [   8.302s] (2125/3876) surge-daemon::work_item_route_test task_continue_without_provider_restore_capability_preserves_attention
+5125: 2026-10-12T03:54:47.9968600Z error: test run failed
+5126: 2026-10-12T03:54:48.0072580Z ##[error]Process completed with exit code 100.
+5127: 2026-10-12T03:54:48.0488480Z Post job cleanup.
+5128: 2026-10-12T03:54:48.5029970Z [command]/opt/homebrew/bin/git version
+5129: 2026-10-12T03:54:48.5355840Z git version 2.55.0
+5130: 2026-10-12T03:54:48.5389210Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/867c8c13-add1-416e-9a52-85ac77c471a0/.gitconfig'
+5131: 2026-10-12T03:54:48.5400510Z Temporarily overriding HOME='/Users/runner/work/_temp/867c8c13-add1-416e-9a52-85ac77c471a0' before making global git config changes
+5132: 2026-10-12T03:54:48.5408220Z Adding repository directory to the temporary git global config as a safe directory
+5133: 2026-10-12T03:54:48.5412080Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/surge/surge
+5134: 2026-10-12T03:54:48.5598080Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+
+SOURCE /tmp/surge-ci-38200432380-windows-plain.log
+...
+2917: 2026-10-12T03:57:26.6479552Z         PASS [  42.863s] (1821/3861) surge-daemon::owned_flow_mcp_recovery missing_and_corrupt_private_inputs_refuse_real_cold_writers
+2918: 2026-10-12T03:57:29.0484446Z         FAIL [  11.462s] (1822/3861) surge-daemon::quota_recovery_route_test normal_task_all_fresh_exhausted_parks_without_opening_any_provider
+2919: 2026-10-12T03:57:29.0632623Z   stdout ───
+...
+2983: 2026-10-12T03:57:29.0724946Z 
+2984: 2026-10-12T03:57:29.6565785Z         FAIL [  11.510s] (1823/3861) surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary
+2985: 2026-10-12T03:57:29.6567337Z   stdout ───
+...
+3048: 2026-10-12T03:57:31.8449786Z         PASS [   5.193s] (1824/3861) surge-daemon::quota_recovery_route_test pinned_exhaustion_from_other_project_cannot_skip_primary
+3049: 2026-10-12T03:57:32.2844549Z         FAIL [  11.487s] (1825/3861) surge-daemon::quota_recovery_route_test normal_task_start_skips_fresh_exhausted_primary_before_any_provider_effect
+3050: 2026-10-12T03:57:32.2850238Z   stdout ───
+...
+3115: 2026-10-12T03:57:38.7940912Z         PASS [   6.482s] (1826/3861) surge-daemon::quota_recovery_route_test relative_post_429_source_change_remains_audit_only
+3116: 2026-10-12T03:57:39.0053811Z         FAIL [   9.945s] (1827/3861) surge-daemon::quota_recovery_route_test planned_host_budget_positive_cap_completes_without_repeating_warmup
+3117: 2026-10-12T03:57:39.0055277Z   stdout ───
+...
+3177: 2026-10-12T03:57:39.0381682Z 
+3178: 2026-10-12T03:57:39.3141672Z         FAIL [   9.663s] (1828/3861) surge-daemon::quota_recovery_route_test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap
+3179: 2026-10-12T03:57:39.3143674Z   stdout ───
+...
+3242: 2026-10-12T03:57:41.0374466Z         PASS [   1.712s] (1831/3861) surge-daemon::quota_recovery_route_test relative_preparation_preserves_dirty_staged_index_and_head_on_refusal
+3243: 2026-10-12T03:57:42.8470655Z         FAIL [  11.006s] (1832/3861) surge-daemon::quota_recovery_route_test planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process
+3244: 2026-10-12T03:57:42.8472546Z   stdout ───
+...
+3307: 2026-10-12T03:57:42.8560729Z 
+3308: 2026-10-12T03:57:50.4616870Z         FAIL [  10.251s] (1833/3861) surge-daemon::quota_recovery_route_test relative_selected_source_change_blocks_provider_effect
+3309: 2026-10-12T03:57:50.4618937Z   stdout ───
+...
+3367: 2026-10-12T03:57:50.4678826Z 
+3368: 2026-10-12T03:57:50.8948533Z         FAIL [  10.536s] (1834/3861) surge-daemon::quota_recovery_route_test relative_skipped_source_change_blocks_provider_effect
+3369: 2026-10-12T03:57:50.8949348Z   stdout ───
+...
+3427: 2026-10-12T03:57:50.8994725Z 
+3428: 2026-10-12T03:57:51.8923094Z         FAIL [  10.859s] (1835/3861) surge-daemon::quota_recovery_route_test relative_sources_are_frozen_from_actual_launch_worktree_on_normal_start
+3429: 2026-10-12T03:57:51.8924441Z   stdout ───
+...
+3487: 2026-10-12T03:57:51.8965883Z 
+3488: 2026-10-12T03:57:53.9336757Z         FAIL [  11.082s] (1836/3861) surge-daemon::quota_recovery_route_test selected_route_source_change_after_freeze_prevents_any_provider_effect
+3489: 2026-10-12T03:57:53.9349707Z   stdout ───
+...
+3554: 2026-10-12T03:57:59.0106520Z         PASS [   0.043s] (1843/3861) surge-daemon::work_item_route_test child_execution_host_probe
+3555: 2026-10-12T03:57:59.7729538Z         FAIL [   9.311s] (1844/3861) surge-daemon::quota_recovery_route_test skipped_route_source_change_after_freeze_prevents_fallback_effect
+3556: 2026-10-12T03:57:59.7730961Z   stdout ───
+...
+3614: 2026-10-12T03:57:59.7822967Z 
+3615: 2026-10-12T03:58:00.8485888Z         FAIL [   9.953s] (1845/3861) surge-daemon::quota_recovery_route_test skipped_route_source_change_prevents_stale_all_exhausted_park
+3616: 2026-10-12T03:58:00.8487254Z   stdout ───
+...
+3675: 2026-10-12T03:58:02.0929733Z         PASS [   3.781s] (1846/3861) surge-daemon::work_item_route_test ambiguous_owned_terminal_history_never_releases_task_ownership
+3676: 2026-10-12T03:58:02.2947711Z         FAIL [   3.305s] (1847/3861) surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn
+3677: 2026-10-12T03:58:02.2949008Z   stdout ───
+...
+3741: 2026-10-12T03:58:02.3002740Z 
+3742: 2026-10-12T03:58:02.4212017Z         FAIL [   2.647s] (1848/3861) surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice
+3743: 2026-10-12T03:58:02.4213433Z   stdout ───
+...
+3807: 2026-10-12T03:58:02.4428571Z 
+3808: 2026-10-12T03:58:03.8335726Z         FAIL [   2.984s] (1849/3861) surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch
+3809: 2026-10-12T03:58:03.8337470Z   stdout ───
+...
+3874: 2026-10-12T03:58:04.4304115Z         PASS [   2.134s] (1850/3861) surge-daemon::work_item_route_test cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches
+3875: 2026-10-12T03:58:05.4238087Z         FAIL [   3.332s] (1851/3861) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+3876: 2026-10-12T03:58:05.4240732Z   stdout ───
+...
+3940: 2026-10-12T03:58:05.4325889Z 
+3941: 2026-10-12T03:58:05.4327176Z         FAIL [   3.003s] (1852/3861) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+3942: 2026-10-12T03:58:05.4328598Z   stdout ───
+...
+4008: 2026-10-12T03:58:11.4293611Z         PASS [   2.730s] (1860/3861) surge-daemon::work_item_route_test daemon_gate_answer_requires_durable_acceptance_before_success
+4009: 2026-10-12T03:58:12.8078216Z         FAIL [   2.510s] (1861/3861) surge-daemon::work_item_route_test disconnected_start_caller_does_not_drop_durable_attempt_or_active_run
+4010: 2026-10-12T03:58:12.8079690Z   stdout ───
+...
+4069: 2026-10-12T03:58:12.8287608Z         PASS [   0.021s] (1862/3861) surge-daemon::work_item_route_test fixture_cleanup_waits_for_actual_retained_owner
+4070: 2026-10-12T03:58:12.9159229Z         FAIL [   2.611s] (1863/3861) surge-daemon::work_item_route_test execution_owner_prevents_second_live_host_from_replaying_agent_turn
+4071: 2026-10-12T03:58:12.9193409Z   stdout ───
+...
+4132: 2026-10-12T03:58:15.3269137Z         PASS [   2.498s] (1866/3861) surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue
+4133: 2026-10-12T03:58:18.7142651Z         FAIL [   3.387s] (1867/3861) surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+4134: 2026-10-12T03:58:18.7144201Z   stdout ───
+...
+4194: 2026-10-12T03:58:21.8734857Z         PASS [   1.970s] (1869/3861) surge-daemon::work_item_route_test live_tracking_error_with_conflicting_terminals_retains_task_ownership
+4195: 2026-10-12T03:58:23.3081018Z         FAIL [   4.592s] (1870/3861) surge-daemon::work_item_route_test legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention
+4196: 2026-10-12T03:58:23.3082901Z   stdout ───
+...
+4254: 2026-10-12T03:58:23.3133305Z 
+4255: 2026-10-12T03:58:23.8462189Z         FAIL [  10.930s] (1871/3861) surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator
+4256: 2026-10-12T03:58:23.8465233Z   stdout ───
+...
+4321: 2026-10-12T03:58:24.5333813Z         PASS [   0.045s] (1876/3861) surge-daemon::work_item_route_test mock_bridge::tests::records_reply_to_tool
+4322: 2026-10-12T03:58:25.1302706Z         FAIL [  10.345s] (1877/3861) surge-daemon::work_item_route_test killed_continue_owner_after_journal_ack_before_registry_ack_routes_once
+4323: 2026-10-12T03:58:25.1350715Z   stdout ───
+...
+4388: 2026-10-12T03:58:28.4589220Z         PASS [   6.589s] (1882/3861) surge-daemon::work_item_route_test lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once
+4389: 2026-10-12T03:58:29.1440716Z         FAIL [   2.709s] (1883/3861) surge-daemon::work_item_route_test revisited_human_gate_requires_new_occurrence_and_new_decision
+4390: 2026-10-12T03:58:29.1442453Z   stdout ───
+...
+4449: 2026-10-12T03:58:30.1633250Z         PASS [   3.891s] (1884/3861) surge-daemon::work_item_route_test pure_human_gate_suspend_is_not_abort_and_reuses_original_decision
+4450: 2026-10-12T03:58:30.6280717Z         FAIL [   4.180s] (1885/3861) surge-daemon::work_item_route_test suspended_original_gate_answer_is_durable_before_continue
+4451: 2026-10-12T03:58:30.6282306Z   stdout ───
+...
+4514: 2026-10-12T03:58:31.2347670Z         PASS [   1.084s] (1886/3861) surge-daemon::work_item_route_test task_pr_cannot_attach_another_repository_or_unknown_remote
+4515: 2026-10-12T03:58:31.5355115Z         FAIL [   2.390s] (1887/3861) surge-daemon::work_item_route_test task_created_over_daemon_survives_restart_and_runs_pinned_requirements
+4516: 2026-10-12T03:58:31.5357435Z   stdout ───
+...
+4585: 2026-10-12T03:58:33.3807615Z         PASS [   0.023s] (1898/3861) surge-git audit::tests::test_read_empty_log
+4586: 2026-10-12T03:58:33.5827160Z         FAIL [   2.347s] (1899/3861) surge-daemon::work_item_route_test task_provider_identity_is_durable_before_first_real_acp_prompt
+4587: 2026-10-12T03:58:33.5835433Z   stdout ───
+...
+4650: 2026-10-12T03:58:34.9850229Z         PASS [   0.674s] (1904/3861) surge-git cleanup::tests::test_cleanup_merged_branches_with_audit
+4651: 2026-10-12T03:58:35.3960712Z         FAIL [   3.859s] (1905/3861) surge-daemon::work_item_route_test task_suspend_continue_uses_saved_provider_on_real_acp_wire
+4652: 2026-10-12T03:58:35.3962580Z   stdout ───
+...
+6296: 2026-10-12T04:01:36.4295581Z         PASS [   0.251s] (3489/3861) surge-persistence state_home::windows::namespace::private_objects::tests::collision_disposes_original_link_before_parent_barrier_with_reader_retained
+6297: 2026-10-12T04:01:36.6009997Z         FAIL [   0.267s] (3490/3861) surge-persistence state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target
+6298: 2026-10-12T04:01:36.6017116Z   stdout ───
+...
+6702: 2026-10-12T04:03:06.0012401Z ────────────
+6703: 2026-10-12T04:03:06.0014185Z      Summary [ 511.543s] 3861 tests run: 3832 passed (1 slow), 29 failed, 55 skipped
+6704: 2026-10-12T04:03:06.0015900Z         FAIL [  11.462s] (1822/3861) surge-daemon::quota_recovery_route_test normal_task_all_fresh_exhausted_parks_without_opening_any_provider
+6705: 2026-10-12T04:03:06.0017849Z         FAIL [  11.510s] (1823/3861) surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary
+6706: 2026-10-12T04:03:06.0019419Z         FAIL [  11.487s] (1825/3861) surge-daemon::quota_recovery_route_test normal_task_start_skips_fresh_exhausted_primary_before_any_provider_effect
+6707: 2026-10-12T04:03:06.0021020Z         FAIL [   9.945s] (1827/3861) surge-daemon::quota_recovery_route_test planned_host_budget_positive_cap_completes_without_repeating_warmup
+6708: 2026-10-12T04:03:06.0022820Z         FAIL [   9.663s] (1828/3861) surge-daemon::quota_recovery_route_test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap
+6709: 2026-10-12T04:03:06.0024624Z         FAIL [  11.006s] (1832/3861) surge-daemon::quota_recovery_route_test planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process
+6710: 2026-10-12T04:03:06.0026297Z         FAIL [  10.251s] (1833/3861) surge-daemon::quota_recovery_route_test relative_selected_source_change_blocks_provider_effect
+6711: 2026-10-12T04:03:06.0027619Z         FAIL [  10.536s] (1834/3861) surge-daemon::quota_recovery_route_test relative_skipped_source_change_blocks_provider_effect
+6712: 2026-10-12T04:03:06.0035858Z         FAIL [  10.859s] (1835/3861) surge-daemon::quota_recovery_route_test relative_sources_are_frozen_from_actual_launch_worktree_on_normal_start
+6713: 2026-10-12T04:03:06.0037190Z         FAIL [  11.082s] (1836/3861) surge-daemon::quota_recovery_route_test selected_route_source_change_after_freeze_prevents_any_provider_effect
+6714: 2026-10-12T04:03:06.0038382Z         FAIL [   9.311s] (1844/3861) surge-daemon::quota_recovery_route_test skipped_route_source_change_after_freeze_prevents_fallback_effect
+6715: 2026-10-12T04:03:06.0039555Z         FAIL [   9.953s] (1845/3861) surge-daemon::quota_recovery_route_test skipped_route_source_change_prevents_stale_all_exhausted_park
+6716: 2026-10-12T04:03:06.0040652Z         FAIL [   3.305s] (1847/3861) surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn
+6717: 2026-10-12T04:03:06.0041717Z         FAIL [   2.647s] (1848/3861) surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice
+6718: 2026-10-12T04:03:06.0043101Z         FAIL [   2.984s] (1849/3861) surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch
+6719: 2026-10-12T04:03:06.0044339Z         FAIL [   3.332s] (1851/3861) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+6720: 2026-10-12T04:03:06.0045981Z         FAIL [   3.003s] (1852/3861) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+6721: 2026-10-12T04:03:06.0047356Z         FAIL [   2.510s] (1861/3861) surge-daemon::work_item_route_test disconnected_start_caller_does_not_drop_durable_attempt_or_active_run
+6722: 2026-10-12T04:03:06.0048485Z         FAIL [   2.611s] (1863/3861) surge-daemon::work_item_route_test execution_owner_prevents_second_live_host_from_replaying_agent_turn
+6723: 2026-10-12T04:03:06.0049861Z         FAIL [   3.387s] (1867/3861) surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+6724: 2026-10-12T04:03:06.0051067Z         FAIL [   4.592s] (1870/3861) surge-daemon::work_item_route_test legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention
+6725: 2026-10-12T04:03:06.0052480Z         FAIL [  10.930s] (1871/3861) surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator
+6726: 2026-10-12T04:03:06.0053661Z         FAIL [  10.345s] (1877/3861) surge-daemon::work_item_route_test killed_continue_owner_after_journal_ack_before_registry_ack_routes_once
+6727: 2026-10-12T04:03:06.0054773Z         FAIL [   2.709s] (1883/3861) surge-daemon::work_item_route_test revisited_human_gate_requires_new_occurrence_and_new_decision
+6728: 2026-10-12T04:03:06.0055886Z         FAIL [   4.180s] (1885/3861) surge-daemon::work_item_route_test suspended_original_gate_answer_is_durable_before_continue
+6729: 2026-10-12T04:03:06.0057007Z         FAIL [   2.390s] (1887/3861) surge-daemon::work_item_route_test task_created_over_daemon_survives_restart_and_runs_pinned_requirements
+6730: 2026-10-12T04:03:06.0058128Z         FAIL [   2.347s] (1899/3861) surge-daemon::work_item_route_test task_provider_identity_is_durable_before_first_real_acp_prompt
+6731: 2026-10-12T04:03:06.0059199Z         FAIL [   3.859s] (1905/3861) surge-daemon::work_item_route_test task_suspend_continue_uses_saved_provider_on_real_acp_wire
+6732: 2026-10-12T04:03:06.0060548Z         FAIL [   0.267s] (3490/3861) surge-persistence state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target
+6733: 2026-10-12T04:03:06.0264081Z error: test run failed
+6734: 2026-10-12T04:03:06.7828587Z ##[error]Process completed with exit code 1.
+6735: 2026-10-12T04:03:06.9894649Z ##[group]Run ./scripts/windows-native-probe.ps1
+6736: 2026-10-12T04:03:06.9895371Z ./scripts/windows-native-probe.ps1
+6737: 2026-10-12T04:03:06.9984008Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+6738: 2026-10-12T04:03:06.9984428Z env:
+6739: 2026-10-12T04:03:06.9984642Z   CARGO_TERM_COLOR: always
+6740: 2026-10-12T04:03:06.9984868Z   RUST_BACKTRACE: 1
+6741: 2026-10-12T04:03:06.9985181Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+6742: 2026-10-12T04:03:06.9985662Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+...
+7143: 2026-10-12T04:05:51.6917464Z      | state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target
+7144: 2026-10-12T04:05:51.7206973Z ##[error]Process completed with exit code 1.
+7145: 2026-10-12T04:05:51.7751329Z ##[group]Run actions/upload-artifact@v4
+7146: 2026-10-12T04:05:51.7751862Z with:
+7147: 2026-10-12T04:05:51.7752474Z   name: windows-standard-user-0f7658b3269901c493aab1787a847ba4ff146ecf
+7148: 2026-10-12T04:05:51.7753193Z   path: D:\a\_temp/surge-standard-user-evidence-*/
+7149: 2026-10-12T04:05:51.7753637Z   if-no-files-found: error
+7150: 2026-10-12T04:05:51.7753943Z   compression-level: 6
+7151: 2026-10-12T04:05:51.7754259Z   overwrite: false
+7152: 2026-10-12T04:05:51.7755080Z   include-hidden-files: false
+
+SOURCE /tmp/surge-ci-38200432380-windows-clippy-plain.log
+...
+415: 2026-10-12T03:40:04.1864093Z     Checking surge-mcp v0.1.0 (D:\a\surge\surge\crates\surge-mcp)
+416: 2026-10-12T03:40:05.7616734Z error: this argument is passed by value, but not consumed in the function body
+417: 2026-10-12T03:40:05.7712892Z   --> crates\surge-mcp\src\child_settlement\mod.rs:74:18
+418: 2026-10-12T03:40:05.7751391Z    |
+419: 2026-10-12T03:40:05.7752474Z 74 |         command: LaunchCommand,
+420: 2026-10-12T03:40:05.7947221Z    |                  ^^^^^^^^^^^^^
+421: 2026-10-12T03:40:05.8051498Z    |
+422: 2026-10-12T03:40:05.8070771Z    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_pass_by_value
+423: 2026-10-12T03:40:05.8288532Z    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+424: 2026-10-12T03:40:05.8383485Z    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+...
+429: 2026-10-12T03:40:05.8576062Z 
+430: 2026-10-12T03:40:05.8583868Z error: could not compile `surge-mcp` (lib) due to 1 previous error
+431: 2026-10-12T03:40:05.8585294Z warning: build failed, waiting for other jobs to finish...
+432: 2026-10-12T03:40:09.8378161Z ##[error]Process completed with exit code 1.
+433: 2026-10-12T03:40:09.8647404Z Post job cleanup.
+434: 2026-10-12T03:40:10.0661073Z [command]"C:\Program Files\Git\bin\git.exe" version
+435: 2026-10-12T03:40:10.0978450Z git version 2.55.0.windows.5
+436: 2026-10-12T03:40:10.1050750Z Temporarily overriding HOME='D:\a\_temp\07627e76-a7ed-4702-8284-b9c9de2a6ca0' before making global git config changes
+437: 2026-10-12T03:40:10.1052041Z Adding repository directory to the temporary git global config as a safe directory
+438: 2026-10-12T03:40:10.1061737Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\surge\surge
+439: 2026-10-12T03:40:10.1378909Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+440: 2026-10-12T03:40:10.1706085Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+

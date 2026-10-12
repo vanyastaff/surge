@@ -1,0 +1,11 @@
+
+running 1 test
+test work_items::start_preparation::secure_lock::windows_tests::private_task_ownership_preserves_stable_identity_and_last_arc_exclusion ... ok
+
+successes:
+
+successes:
+    work_items::start_preparation::secure_lock::windows_tests::private_task_ownership_preserves_stable_identity_and_last_arc_exclusion
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.09s
+

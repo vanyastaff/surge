@@ -1,0 +1,66 @@
+2026-10-12T09:10:45.1947535Z         PASS [   0.954s] (1823/3939) surge-daemon::quota_recovery_route_test host_freeze_rejects_different_declared_families_before_provider_effects
+2026-10-12T09:10:45.6033295Z         PASS [   5.490s] (1824/3939) surge-daemon::quota_recovery_route_test exhausted_candidates_park_and_scheduler_wakes_the_same_task
+2026-10-12T09:10:51.0839211Z         FAIL [  45.890s] (1825/3939) surge-daemon::owned_flow_mcp_recovery optional_whitelists_and_server_override_survive_actual_start_and_resume
+2026-10-12T09:10:51.0935681Z   stdout ───
+2026-10-12T09:10:51.0936176Z 
+2026-10-12T09:10:51.0936335Z     running 1 test
+2026-10-12T09:10:51.0937067Z     test optional_whitelists_and_server_override_survive_actual_start_and_resume ... FAILED
+2026-10-12T09:10:51.0937707Z 
+2026-10-12T09:10:51.0937847Z     failures:
+2026-10-12T09:10:51.0938044Z 
+2026-10-12T09:10:51.0938169Z     failures:
+2026-10-12T09:10:51.0938736Z         optional_whitelists_and_server_override_survive_actual_start_and_resume
+2026-10-12T09:10:51.0939292Z 
+2026-10-12T09:10:51.0939791Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 45.73s
+2026-10-12T09:10:51.0940729Z     
+2026-10-12T09:10:51.0941206Z   stderr ───
+2026-10-12T09:10:51.0941565Z 
+2026-10-12T09:10:51.0942742Z     thread 'optional_whitelists_and_server_override_survive_actual_start_and_resume' (3536) panicked at crates\surge-daemon\tests\owned_flow_mcp_recovery.rs:886:9:
+2026-10-12T09:10:51.0944744Z     legacy-policy-tools-empty-start child readiness failed: cold host readiness timeout; stderr excerpt:
+2026-10-12T09:10:51.0946203Z         thread 'child_owned_flow_mcp_probe' (1340) panicked at crates\surge-daemon\tests\owned_flow_mcp_recovery.rs:287:5:
+2026-10-12T09:10:51.0947183Z         real daemon closed without a reply
+2026-10-12T09:10:51.0947687Z         stack backtrace:
+2026-10-12T09:10:51.0948501Z         2026-10-12T09:10:11.361149Z  WARN surge_daemon::server: accept failed err=The handle is invalid. (os error 6)
+2026-10-12T09:10:51.0949701Z         2026-10-12T09:10:11.377816Z  WARN surge_daemon::server: accept failed err=The handle is invalid. (os error 6)
+2026-10-12T09:10:51.0950936Z         2026-10-12T09:10:11.386801Z DEBUG surge_daemon::server: task reconciliation page began cursor=None
+2026-10-12T09:10:51.0953344Z         2026-10-12T09:10:11.433640Z DEBUG surge_daemon::server: task reconciliation page completed cursor=None next_cursor=None elapsed_ms=46; stdout C:\Users\RUNNER~1\AppData\Local\Temp\.tmpAsIGuh\cold-host-stdout-klQeLA; stderr C:\Users\RUNNER~1\AppData\Local\Temp\.tmpAsIGuh\cold-host-stderr-jhLdp7
+2026-10-12T09:10:51.0956116Z     stack backtrace:
+2026-10-12T09:10:51.0956568Z        0: std::panicking::panic_handler
+2026-10-12T09:10:51.0957378Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T09:10:51.0958231Z        1: core::panicking::panic_fmt
+2026-10-12T09:10:51.0959020Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T09:10:51.0959949Z        2: owned_flow_mcp_recovery::phase::async_fn$0
+2026-10-12T09:10:51.0960548Z                  at .\tests\owned_flow_mcp_recovery.rs:886
+2026-10-12T09:10:51.0961559Z        3: owned_flow_mcp_recovery::optional_whitelists_and_server_override_survive_actual_start_and_resume::async_block$0
+2026-10-12T09:10:51.0962621Z                  at .\tests\owned_flow_mcp_recovery.rs:1818
+2026-10-12T09:10:51.0963573Z        4: core::future::future::impl$1::poll<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > >
+2026-10-12T09:10:51.0964848Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\future\future.rs:133
+2026-10-12T09:10:51.0966303Z        5: tokio::runtime::park::impl$4::block_on::closure$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T09:10:51.0967865Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\park.rs:284
+2026-10-12T09:10:51.0969160Z        6: tokio::task::coop::with_budget
+2026-10-12T09:10:51.0970139Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\task\coop\mod.rs:167
+2026-10-12T09:16:10.7651715Z         PASS [  21.355s] (3939/3939) surge-telegram::production_callbacks bot_api_failure_does_not_roll_back_accepted_engine_decision
+2026-10-12T09:16:10.7676098Z ────────────
+2026-10-12T09:16:10.7677628Z      Summary [ 494.385s] 3939 tests run: 3938 passed (2 slow), 1 failed, 55 skipped
+2026-10-12T09:16:10.7679653Z         FAIL [  45.890s] (1825/3939) surge-daemon::owned_flow_mcp_recovery optional_whitelists_and_server_override_survive_actual_start_and_resume
+2026-10-12T09:16:10.8112111Z error: test run failed
+2026-10-12T09:16:11.2815927Z ##[error]Process completed with exit code 1.
+2026-10-12T09:16:11.3900321Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T09:16:11.3900951Z ./scripts/windows-native-probe.ps1
+2026-10-12T09:16:11.3991722Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T09:16:11.3992127Z env:
+2026-10-12T09:16:11.3992323Z   CARGO_TERM_COLOR: always
+2026-10-12T09:16:11.3992553Z   RUST_BACKTRACE: 1
+2026-10-12T09:16:11.3992864Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T09:16:11.3993552Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T09:16:11.3994032Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T09:16:11.3994450Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T09:16:11.3994866Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T09:16:11.3995220Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T09:16:11.3995491Z   CARGO_INCREMENTAL: 0
+2026-10-12T09:16:11.3995739Z ##[endgroup]
+2026-10-12T09:16:19.7361096Z    Compiling serde_core v1.0.228
+2026-10-12T09:16:19.7411764Z    Compiling windows-sys v0.61.2
+2026-10-12T09:16:19.7441208Z    Compiling num-traits v0.2.19
+2026-10-12T09:16:19.7446113Z    Compiling parking_lot_core v0.9.12
+2026-10-12T09:16:20.3323209Z    Compiling parking_lot v0.12.5

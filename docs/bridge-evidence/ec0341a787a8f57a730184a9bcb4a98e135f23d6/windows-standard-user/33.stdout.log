@@ -1,0 +1,11 @@
+
+running 1 test
+test state_home::windows::namespace::private_objects::tests::independent_final_reader_completes_own_barriers_before_publisher_parent_flush ... ok
+
+successes:
+
+successes:
+    state_home::windows::namespace::private_objects::tests::independent_final_reader_completes_own_barriers_before_publisher_parent_flush
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 1.05s
+
