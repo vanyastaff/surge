@@ -1,5 +1,6 @@
 //! One-component native routing through retained, validated directories.
 mod private_objects;
+mod sidefiles;
 use super::{
     native::{NativeError, NativeResult, flush_complete},
     security::{DirectoryPolicy, EffectiveOwner},
@@ -44,7 +45,7 @@ use windows::{
     },
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Identity {
     volume: u64,
     id: [u8; 16],
@@ -52,7 +53,14 @@ struct Identity {
 fn refusal(reason: &'static str) -> NativeError {
     NativeError::Security(reason)
 }
-fn inspect(file: &File, directory: bool) -> NativeResult<Identity> {
+struct ObjectSnapshot {
+    attributes: u32,
+    delete_pending: bool,
+    directory: bool,
+    links: u32,
+    identity: Identity,
+}
+fn object_snapshot(file: &File) -> NativeResult<ObjectSnapshot> {
     let handle = HANDLE(file.as_raw_handle());
     let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
     let mut standard = FILE_STANDARD_INFO::default();
@@ -85,18 +93,29 @@ fn inspect(file: &File, directory: bool) -> NativeResult<Identity> {
             return Err(refusal("non-disk object"));
         }
     }
-    if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-        || standard.DeletePending.as_bool()
-        || standard.Directory.as_bool() != directory
-        || (!directory && standard.NumberOfLinks != 1)
+    Ok(ObjectSnapshot {
+        attributes: attributes.FileAttributes,
+        delete_pending: standard.DeletePending.as_bool(),
+        directory: standard.Directory.as_bool(),
+        links: standard.NumberOfLinks,
+        identity: Identity {
+            volume: identity.VolumeSerialNumber,
+            id: identity.FileId.Identifier,
+        },
+    })
+}
+fn inspect(file: &File, directory: bool) -> NativeResult<Identity> {
+    let snapshot = object_snapshot(file)?;
+    if snapshot.attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+        || snapshot.delete_pending
+        || snapshot.directory != directory
+        || (!directory && snapshot.links != 1)
     {
         return Err(refusal("unsafe native object type or identity"));
     }
-    Ok(Identity {
-        volume: identity.VolumeSerialNumber,
-        id: identity.FileId.Identifier,
-    })
+    Ok(snapshot.identity)
 }
+
 fn component(name: &OsStr) -> NativeResult<Vec<u16>> {
     let text = name
         .to_str()
@@ -194,6 +213,42 @@ fn relative_access_with_sharing(
     shares: windows::Win32::Storage::FileSystem::FILE_SHARE_MODE,
     write_through: bool,
 ) -> NativeResult<File> {
+    let inspection = if write_through {
+        OpenInspection::Deferred
+    } else {
+        OpenInspection::Required
+    };
+    relative_with_policy(
+        parent,
+        name,
+        directory,
+        creation,
+        access,
+        NativeOpenPolicy {
+            shares,
+            write_through,
+            inspection,
+        },
+    )
+}
+#[derive(Clone, Copy)]
+enum OpenInspection {
+    Required,
+    Deferred,
+}
+struct NativeOpenPolicy {
+    shares: windows::Win32::Storage::FileSystem::FILE_SHARE_MODE,
+    write_through: bool,
+    inspection: OpenInspection,
+}
+fn relative_with_policy(
+    parent: &File,
+    name: &OsStr,
+    directory: bool,
+    creation: Option<&super::security::CreationSecurity>,
+    access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
+    policy: NativeOpenPolicy,
+) -> NativeResult<File> {
     #[cfg(test)]
     let observed_name = name;
     let mut name = component(name)?;
@@ -225,14 +280,14 @@ fn relative_access_with_sharing(
             &raw mut io,
             None,
             FILE_ATTRIBUTE_NORMAL,
-            shares,
+            policy.shares,
             if creation.is_some() {
                 FILE_CREATE
             } else {
                 FILE_OPEN
             },
             FILE_SYNCHRONOUS_IO_NONALERT
-                | if write_through {
+                | if policy.write_through {
                     windows::Wdk::Storage::FileSystem::FILE_WRITE_THROUGH
                 } else {
                     Default::default()
@@ -271,9 +326,9 @@ fn relative_access_with_sharing(
     if creation.is_some() {
         super::creation_observation::created(parent, observed_name, directory, &file);
     }
-    // Private write-through staging transfers the newly created descriptor before
-    // any fallible inspection so its caller can perform checked original cleanup.
-    if !write_through {
+    // Deferred callers own validation: private staging needs cleanup ownership first;
+    // SQLite sidefile observations classify retirement without granting live authority.
+    if matches!(policy.inspection, OpenInspection::Required) {
         inspect(&file, directory)?;
     }
     Ok(file)
@@ -614,9 +669,6 @@ fn require_local_ntfs(file: &File, root: &Path) -> NativeResult<()> {
 
 impl Namespace {
     pub(super) fn verify_sidefiles(&self, database: &OsStr) -> NativeResult<()> {
-        use windows::Win32::Foundation::{
-            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
-        };
         self.verify()?;
         let parent = self
             .files
@@ -625,37 +677,11 @@ impl Namespace {
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut name = database.to_owned();
             name.push(suffix);
-            // This is a transient metadata/security observation, not a retained
-            // database fence. Cooperate with SQLite's sidefile deletion access.
-            let observed = relative_access_with_sharing(
-                parent,
-                &name,
-                false,
-                None,
-                FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
-                FILE_SHARE_READ
-                    | FILE_SHARE_WRITE
-                    | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
-                false,
-            );
-            match observed {
-                Ok(file) => self
-                    .owner
-                    .validate_directory(&file, DirectoryPolicy::SqliteSidefile)
-                    .map_err(|source| NativeError::Sidefile {
-                        name: name.clone(),
-                        source: Box::new(source),
-                    })?,
-                Err(NativeError::Open(
-                    STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND,
-                )) => {},
-                Err(source) => {
-                    return Err(NativeError::Sidefile {
-                        name,
-                        source: Box::new(source),
-                    });
-                },
-            }
+            self.observe_sidefile(parent, &name)
+                .map_err(|source| NativeError::Sidefile {
+                    name,
+                    source: Box::new(source),
+                })?;
         }
         Ok(())
     }
@@ -1086,6 +1112,7 @@ mod tests {
         std::fs::remove_dir(root.join(name)).unwrap();
         drop(namespace);
         temporary.close().unwrap();
+        super::sidefiles::retirement_oracles();
     }
 
     #[test]
