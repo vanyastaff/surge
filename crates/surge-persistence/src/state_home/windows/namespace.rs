@@ -625,14 +625,36 @@ impl Namespace {
         for suffix in ["-wal", "-shm", "-journal"] {
             let mut name = database.to_owned();
             name.push(suffix);
-            match relative(parent, &name, false, None, false) {
+            // This is a transient metadata/security observation, not a retained
+            // database fence. Cooperate with SQLite's sidefile deletion access.
+            let observed = relative_access_with_sharing(
+                parent,
+                &name,
+                false,
+                None,
+                FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+                FILE_SHARE_READ
+                    | FILE_SHARE_WRITE
+                    | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+                false,
+            );
+            match observed {
                 Ok(file) => self
                     .owner
-                    .validate_directory(&file, DirectoryPolicy::SqliteSidefile)?,
+                    .validate_directory(&file, DirectoryPolicy::SqliteSidefile)
+                    .map_err(|source| NativeError::Sidefile {
+                        name: name.clone(),
+                        source: Box::new(source),
+                    })?,
                 Err(NativeError::Open(
                     STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND,
                 )) => {},
-                Err(error) => return Err(error),
+                Err(source) => {
+                    return Err(NativeError::Sidefile {
+                        name,
+                        source: Box::new(source),
+                    });
+                },
             }
         }
         Ok(())
@@ -974,6 +996,98 @@ pub(super) fn file_identity(file: &File, directory: bool) -> NativeResult<Vec<u8
 mod tests {
     use super::component;
     use std::ffi::OsStr;
+    #[test]
+    fn sidefile_observation_cooperates_with_delete_access_but_rejects_aliases() {
+        use super::{Namespace, relative, relative_access_with_sharing};
+        use crate::state_home::windows::native::NativeError;
+        use windows::Win32::{
+            Foundation::STATUS_SHARING_VIOLATION,
+            Storage::FileSystem::{
+                DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                READ_CONTROL, SYNCHRONIZE,
+            },
+        };
+
+        let temporary = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let root = temporary.path().join("sidefile-observation");
+        let namespace = Namespace::protected_parent(&root).unwrap();
+        let parent = namespace.files.last().unwrap();
+        let name = OsStr::new("events.sqlite-wal");
+        let creation = namespace.owner.creation(false).unwrap();
+        drop(relative(parent, name, false, Some(&creation), true).unwrap());
+        let deleting = relative_access_with_sharing(
+            parent,
+            name,
+            false,
+            None,
+            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            false,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                relative(parent, name, false, None, false),
+                Err(NativeError::Open(STATUS_SHARING_VIOLATION))
+            ),
+            "the former observer must conflict with actual DELETE access"
+        );
+        namespace
+            .verify_sidefiles(OsStr::new("events.sqlite"))
+            .unwrap();
+        drop(deleting);
+        let alias = root.join("wal-alias");
+        std::fs::hard_link(root.join(name), &alias).unwrap();
+        assert!(
+            matches!(
+                namespace.verify_sidefiles(OsStr::new("events.sqlite")),
+                Err(NativeError::Sidefile { name: observed, source })
+                    if observed == name && matches!(*source, NativeError::Security(_))
+            ),
+            "sharing cooperation must retain single-link identity validation"
+        );
+        std::fs::remove_file(alias).unwrap();
+        std::fs::remove_file(root.join(name)).unwrap();
+        let target = root.join("junction-target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"unchanged target").unwrap();
+        let junction = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(root.join(name))
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(junction.status.success(), "junction setup: {junction:?}");
+        use std::os::windows::fs::MetadataExt;
+        assert_ne!(
+            std::fs::symlink_metadata(root.join(name))
+                .unwrap()
+                .file_attributes()
+                & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT.0,
+            0,
+            "independent fixture must install a real reparse point"
+        );
+        let refused = namespace.verify_sidefiles(OsStr::new("events.sqlite"));
+        assert!(
+            matches!(
+                &refused,
+                Err(NativeError::Sidefile { name: observed, source })
+                    if observed == name && matches!(source.as_ref(),
+                        NativeError::Security(_)
+                        | NativeError::Open(windows::Win32::Foundation::STATUS_REPARSE_POINT_ENCOUNTERED
+                            | windows::Win32::Foundation::STATUS_FILE_IS_A_DIRECTORY))
+            ),
+            "actual reparse sidefile must fail identity/type validation: {refused:?}"
+        );
+        assert_eq!(
+            std::fs::read(target.join("sentinel")).unwrap(),
+            b"unchanged target"
+        );
+        std::fs::remove_dir(root.join(name)).unwrap();
+        drop(namespace);
+        temporary.close().unwrap();
+    }
+
     #[test]
     fn win32_aliases_are_rejected_before_native_open() {
         for name in [

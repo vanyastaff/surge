@@ -21,6 +21,7 @@ impl From<windows::native::NativeError> for crate::runs::error::OpenError {
             NativeError::Io(_) => "filesystem I/O",
             NativeError::Cleanup { .. } => "operation and cleanup failure",
             NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,
@@ -43,6 +44,7 @@ impl From<windows::native::NativeError> for crate::PersistenceError {
             NativeError::Io(_) => "filesystem I/O",
             NativeError::Cleanup { .. } => "operation and cleanup failure",
             NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,
@@ -63,6 +65,7 @@ impl From<windows::native::NativeError> for crate::work_items::WorkItemError {
             NativeError::Io(_) => "filesystem I/O",
             NativeError::Cleanup { .. } => "operation and cleanup failure",
             NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,

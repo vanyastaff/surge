@@ -104,6 +104,7 @@ try {
         'state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner',
         'state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair',
         'state_home::windows::namespace::private_objects::tests::optional_root_read_never_reclassifies_late_disappearance_as_missing',
+        'state_home::windows::namespace::tests::sidefile_observation_cooperates_with_delete_access_but_rejects_aliases',
         'state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error',
         'state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier',
         'state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target',
