@@ -72,9 +72,58 @@ fn connection_owners_outlive_manager_and_close_wal_normally() {
     );
     connection.close().unwrap();
     drop(manager);
+    pool_worker_settles_before_reopen(&path);
     drop(home);
     fixture.close().unwrap();
     println!("stage1 checked SQLite manager/connection lifetime and WAL close=PASS");
+}
+
+fn pool_worker_settles_before_reopen(path: &Path) {
+    let namespace = SqliteNamespaceOwner::standalone(path).unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let manager =
+        OwnedSqliteConnectionManager::file(path, namespace).with_init(move |connection| {
+            connection.execute_batch("PRAGMA journal_mode=WAL; INSERT INTO actual VALUES(11)")?;
+            entered_tx.send(()).unwrap();
+            release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            Ok(())
+        });
+    let settlement = manager.settlement();
+    let pool = crate::runs::pool::sqlite_pool_builder()
+        .max_size(1)
+        .min_idle(Some(1))
+        .build_unchecked(manager);
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(path.with_file_name("probe.sqlite-wal").is_file());
+    drop(pool);
+    assert!(
+        !settlement.is_settled(),
+        "running worker still owns actual SQLite connection"
+    );
+    release_tx.send(()).unwrap();
+    settlement.wait();
+    assert!(!path.with_file_name("probe.sqlite-wal").exists());
+    assert!(!path.with_file_name("probe.sqlite-shm").exists());
+    let namespace = SqliteNamespaceOwner::standalone(path).unwrap();
+    let manager = OwnedSqliteConnectionManager::file(path, namespace);
+    let reopened = manager.connect().unwrap();
+    assert_eq!(
+        reopened
+            .query_row("SELECT SUM(value) FROM actual", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        18
+    );
+    reopened.close().unwrap();
+    drop(manager);
 }
 
 #[test]
