@@ -1135,6 +1135,12 @@ async fn quota_dispatch_in_home(
         let WorkItemResult::Attempt(next) = result else {
             panic!("start attempt required")
         };
+        assert_ne!(
+            next.state,
+            surge_core::work_item::WorkItemAttemptState::Rejected,
+            "accepted ordinary Start was rejected before execution: {:?}",
+            next.diagnostic,
+        );
         let finished = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let journal = storage.inspect_run(next.run).await.unwrap();
@@ -1181,10 +1187,31 @@ async fn quota_dispatch_in_home(
             },
             _ => Vec::new(),
         };
+        let durable = storage.work_items().for_run(next.run).unwrap().unwrap();
+        let journal_tail = match &next_journal.database {
+            surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                events
+                    .iter()
+                    .rev()
+                    .take(32)
+                    .map(|event| (event.seq, event.payload.payload().discriminant_str()))
+                    .collect::<Vec<_>>()
+            },
+            _ => Vec::new(),
+        };
+        let launch_evidence = format!(
+            "accepted={:?}/{:?}; durable={:?}/{:?}; journal_tail={journal_tail:?}; wire_counts={}/{}",
+            next.state,
+            next.diagnostic,
+            durable.state,
+            durable.diagnostic,
+            a.len(),
+            b.len(),
+        );
         if change_after_warmup.is_some() {
             assert!(
                 finished.is_ok(),
-                "changed source must require reconciliation: {failures:?}"
+                "changed source must require reconciliation: {failures:?}; {launch_evidence}"
             );
             assert_eq!(
                 a.len(),
@@ -1230,7 +1257,7 @@ async fn quota_dispatch_in_home(
         }
         assert!(
             finished.is_ok(),
-            "normal start must finish or durably park according to exact capacity proof: {failures:?}"
+            "normal start must finish or durably park according to exact capacity proof: {failures:?}; {launch_evidence}"
         );
         if all_exhausted {
             use surge_persistence::runs::MockClock;
