@@ -1066,6 +1066,18 @@ async fn reconcile_candidate(
     if !reconciliation_eligible(&observed) {
         return Ok(());
     }
+    // An ordinary unstarted reservation belongs to explicit Start. Do not
+    // briefly take its launch lock while that caller can already be admitted.
+    // Accepted pending owned Flows remain eligible through the startup check.
+    if observed.attempt.state == WorkItemAttemptState::Reserved
+        && observed.control.is_none()
+        && matches!(
+            reconciliation_startup_present(&storage, &observed.attempt).await,
+            Ok(false)
+        )
+    {
+        return Ok(());
+    }
     let claim = match store.claim_reconciliation(&observed.attempt, observed.control.as_ref()) {
         Ok(Some(claim)) => claim,
         Ok(None) | Err(WorkItemError::Busy) => return Ok(()),

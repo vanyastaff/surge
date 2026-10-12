@@ -38,6 +38,22 @@ async fn reserve_graph(
     graph: surge_core::Graph,
     policy: Option<surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy>,
 ) -> (Arc<Storage>, WorkItemAttempt, WorkItemWorkspace) {
+    let (storage, attempt, workspace, _) =
+        reserve_graph_with_start(home, project, graph, policy).await;
+    (storage, attempt, workspace)
+}
+
+async fn reserve_graph_with_start(
+    home: &Path,
+    project: &Path,
+    graph: surge_core::Graph,
+    policy: Option<surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy>,
+) -> (
+    Arc<Storage>,
+    WorkItemAttempt,
+    WorkItemWorkspace,
+    WorkItemCommand,
+) {
     let repo = git2::Repository::init(project).unwrap();
     let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
     let tree_id = repo.index().unwrap().write_tree().unwrap();
@@ -85,7 +101,7 @@ async fn reserve_graph(
     else {
         panic!("attempt")
     };
-    (storage, *attempt, workspace)
+    (storage, *attempt, workspace, start)
 }
 
 async fn write_startup(
@@ -300,7 +316,84 @@ async fn stale_reconciliation_page_preserves_confirmed_suspension() {
     home.close().unwrap();
 }
 
-fn registry_claim_token(storage: &Storage, run: RunId) -> String {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciliation_does_not_claim_unstarted_reservation_before_explicit_start() {
+    for empty_journal in [false, true] {
+        let home = FixtureHome::new().unwrap();
+        unstarted_reservation_requires_explicit_start(home.path(), empty_journal).await;
+        home.close().unwrap();
+    }
+}
+
+async fn unstarted_reservation_requires_explicit_start(home: &Path, empty_journal: bool) {
+    let project = tempfile::tempdir().unwrap();
+    let graph =
+        toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+    let (storage, attempt, workspace, start) =
+        reserve_graph_with_start(home, project.path(), graph, None).await;
+    if empty_journal {
+        storage
+            .create_run(attempt.run, &workspace.path, None)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let engine = Arc::new(Engine::new(
+        bridge.clone(),
+        storage.clone(),
+        Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+        EngineConfig::default(),
+    ));
+    let tracking = TrackingContext::new(engine.clone(), storage.clone());
+    let admission = Arc::new(AdmissionController::new(1, 1));
+    let broadcasts = Arc::new(BroadcastRegistry::new());
+    let token_before = registry_claim_token(&storage, attempt.run);
+    reconcile_candidate(attempt.clone(), &tracking, &admission, &broadcasts)
+        .await
+        .unwrap();
+    assert_eq!(
+        registry_claim_token(&storage, attempt.run),
+        token_before,
+        "startup reconciliation must not claim a reservation requiring explicit Start; empty={empty_journal}"
+    );
+    assert_eq!(
+        serde_json::to_value(storage.work_items().for_run(attempt.run).unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&attempt).unwrap()
+    );
+    assert!(bridge.recorded_calls.lock().await.is_empty());
+    let result = execute(&start, &tracking, &admission, &broadcasts)
+        .await
+        .unwrap();
+    assert!(matches!(result, WorkItemResult::Attempt(ref actual) if actual.run == attempt.run));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while storage
+            .work_items()
+            .for_run(attempt.run)
+            .unwrap()
+            .unwrap()
+            .state
+            != WorkItemAttemptState::Completed
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("explicit Start must complete the same terminal-only run");
+    drop(tracking);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while Arc::strong_count(&engine) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("actual supervisor must release engine before fixture cleanup");
+    drop(engine);
+}
+
+fn registry_claim_token(storage: &Storage, run: RunId) -> Option<String> {
     storage
         .acquire_registry_conn()
         .unwrap()
