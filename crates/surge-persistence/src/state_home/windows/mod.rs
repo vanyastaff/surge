@@ -9,6 +9,7 @@ pub(super) mod creation_observation;
 
 pub(crate) use namespace::NativeJournalLock;
 pub(super) use namespace::{Namespace, NativeAppendFile, NativeControlFile};
+pub(crate) use namespace::{PrivateFiles, PrivatePreparation};
 
 use native::{NativeError, NativeResult};
 use std::{

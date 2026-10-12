@@ -1,8 +1,10 @@
 //! One-component native routing through retained, validated directories.
+mod private_objects;
 use super::{
     native::{NativeError, NativeResult, flush_complete},
     security::{DirectoryPolicy, EffectiveOwner},
 };
+pub(crate) use private_objects::{PrivateFiles, PrivatePreparation};
 use std::{
     ffi::{OsStr, OsString},
     fs::{File, OpenOptions},
@@ -174,6 +176,22 @@ fn relative_access_shared(
     access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
     control: bool,
 ) -> NativeResult<File> {
+    let shares = if control {
+        FILE_SHARE_READ
+    } else {
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+    };
+    relative_access_with_sharing(parent, name, directory, creation, access, shares, false)
+}
+fn relative_access_with_sharing(
+    parent: &File,
+    name: &OsStr,
+    directory: bool,
+    creation: Option<&super::security::CreationSecurity>,
+    access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
+    shares: windows::Win32::Storage::FileSystem::FILE_SHARE_MODE,
+    write_through: bool,
+) -> NativeResult<File> {
     #[cfg(test)]
     let observed_name = name;
     let mut name = component(name)?;
@@ -205,17 +223,18 @@ fn relative_access_shared(
             &raw mut io,
             None,
             FILE_ATTRIBUTE_NORMAL,
-            if control {
-                FILE_SHARE_READ
-            } else {
-                FILE_SHARE_READ | FILE_SHARE_WRITE
-            },
+            shares,
             if creation.is_some() {
                 FILE_CREATE
             } else {
                 FILE_OPEN
             },
             FILE_SYNCHRONOUS_IO_NONALERT
+                | if write_through {
+                    windows::Wdk::Storage::FileSystem::FILE_WRITE_THROUGH
+                } else {
+                    Default::default()
+                }
                 | FILE_OPEN_REPARSE_POINT
                 | if directory {
                     FILE_DIRECTORY_FILE
@@ -250,7 +269,11 @@ fn relative_access_shared(
     if creation.is_some() {
         super::creation_observation::created(parent, observed_name, directory, &file);
     }
-    inspect(&file, directory)?;
+    // Private write-through staging transfers the newly created descriptor before
+    // any fallible inspection so its caller can perform checked original cleanup.
+    if !write_through {
+        inspect(&file, directory)?;
+    }
     Ok(file)
 }
 fn parsed_root(path: &Path) -> NativeResult<(PathBuf, Vec<OsString>)> {

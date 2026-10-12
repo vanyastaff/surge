@@ -1508,6 +1508,78 @@ mod tests {
             Err(WorkItemError::Conflict(_))
         ));
     }
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windows_public_start_freezes_once_replays_and_preserves_original_identity() {
+        let (home, (storage, detail)) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let original = {
+            let preparation = store.begin_start_preparation(&command).unwrap();
+            assert_eq!(preparation.workspace(), &detail.item.workspace);
+            assert!(!preparation.workspace_prepared());
+            assert!(matches!(
+                store.begin_start_preparation(&command),
+                Err(WorkItemError::Busy)
+            ));
+            store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT lock_identity FROM work_item_start_preparations WHERE item=?",
+                    [detail.item.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let preparation = store.begin_start_preparation(&command).unwrap();
+        let retained: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT lock_identity FROM work_item_start_preparations WHERE item=?",
+                [detail.item.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, original);
+        let result = preparation
+            .finalize(&command, "native frozen configuration")
+            .unwrap();
+        let WorkItemResult::Attempt(attempt) = &result else {
+            panic!("attempt");
+        };
+        assert_eq!(attempt.ordinal, 1);
+        assert_eq!(attempt.config, "native frozen configuration");
+        let replay = store
+            .mutate(&command, None, Some("must never replace"), "host", 3)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+        let count: u64 = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_attempts WHERE item=?",
+                [detail.item.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(matches!(
+            store.begin_start_preparation(&command),
+            Err(WorkItemError::Conflict(_))
+        ));
+        drop(store);
+        drop(storage);
+        home.close().unwrap();
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_lifecycle_busy_discussion_drift_and_drop_release() {

@@ -1,9 +1,10 @@
-//! Retained native state-home primitives; private capability integration remains closed.
+//! Retained native state-home primitives and host-private preparation/input capabilities.
 #[path = "state_home/windows/mod.rs"]
 mod windows;
 
 pub(crate) use windows::NativeJournalLock;
 pub(crate) use windows::native::NativeError;
+pub(crate) use windows::{PrivateFiles as WindowsPrivateFiles, PrivatePreparation};
 pub(crate) use windows::{RunRoot, RunRoute};
 pub(crate) use windows::{SqliteNamespaceOwner, StateHomeOwner};
 
@@ -16,6 +17,8 @@ impl From<windows::native::NativeError> for crate::runs::error::OpenError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
         };
         Self::StateHome {
             category,
@@ -36,6 +39,8 @@ impl From<windows::native::NativeError> for crate::PersistenceError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
         };
         Self::StateHome {
             category,
@@ -54,6 +59,8 @@ impl From<windows::native::NativeError> for crate::work_items::WorkItemError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
         };
         Self::StateHome {
             category,

@@ -22,6 +22,13 @@ pub(crate) enum NativeError {
     Open(NTSTATUS),
     #[error("native filesystem I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("native private handle close failed; consumed handle ownership is uncertain: {0}")]
+    CloseUncertain(windows::core::Error),
+    #[error("native operation failed: {primary}; cleanup also failed: {cleanup}")]
+    Cleanup {
+        primary: Box<Self>,
+        cleanup: Box<Self>,
+    },
 }
 pub(super) type NativeResult<T> = Result<T, NativeError>;
 

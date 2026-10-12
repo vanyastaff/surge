@@ -332,7 +332,7 @@ mod tests {
             },
         )
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     fn server(name: &str) -> McpServerRef {
         use surge_core::{mcp_config::McpTransportConfig, sandbox::SandboxMode};
         McpServerRef::new(
@@ -365,10 +365,10 @@ mod tests {
         }
         assert!(!home.path().join("work-items").exists());
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let identity =
             request_identity(home.path(), b"explicit private request", true, true).unwrap();
         verify_request(home.path(), b"explicit private request", &identity).unwrap();
@@ -425,11 +425,12 @@ mod tests {
         assert!(hydrate(home.path(), &manifest).is_err());
         assert!(request_identity(home.path(), b"new body", true, true).is_err());
         assert!(!key_path.exists());
+        home.close().unwrap();
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn partial_list_and_object_transplants_fail_whole_envelope_authentication() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let identity =
             request_identity(home.path(), b"public host defaults", false, false).unwrap();
         let context = binding(identity);
@@ -453,5 +454,6 @@ mod tests {
         let second = parent.join(object_name(entries[1].object_ref()));
         std::fs::write(&second, std::fs::read(first).unwrap()).unwrap();
         assert!(hydrate(home.path(), &manifest).is_err());
+        home.close().unwrap();
     }
 }

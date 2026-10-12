@@ -268,52 +268,86 @@ mod platform {
     }
 }
 
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    pub(super) struct Namespace(crate::state_home::WindowsPrivateFiles);
+    fn error(error: crate::state_home::NativeError) -> WorkItemError {
+        use windows::Win32::Foundation::{
+            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+        };
+        match error {
+            crate::state_home::NativeError::Open(
+                STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND,
+            ) => WorkItemError::PrivateInputsRecoveryRequired,
+            crate::state_home::NativeError::Security(_) => WorkItemError::PrivateInputsUnsafe,
+            error => error.into(),
+        }
+    }
+    impl Namespace {
+        pub(super) fn open(home: &Path, create: bool) -> Result<Self> {
+            crate::state_home::WindowsPrivateFiles::open(home, create)
+                .map(Self)
+                .map_err(error)
+        }
+        pub(super) fn read(&self, name: &str) -> Result<Vec<u8>> {
+            self.0.read(name).map_err(error)
+        }
+        pub(super) fn publish(&self, name: &str, bytes: &[u8]) -> Result<bool> {
+            self.0.publish(name, bytes).map_err(error)
+        }
+        pub(super) fn is_empty(&self) -> Result<bool> {
+            self.0.is_empty().map_err(error)
+        }
+    }
+}
+
 pub(super) struct PrivateFiles {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     inner: platform::Namespace,
 }
 impl PrivateFiles {
     pub(super) fn open(home: &Path, create: bool) -> Result<Self> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             Ok(Self {
                 inner: platform::Namespace::open(home, create)?,
             })
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = (home, create);
             Err(WorkItemError::PrivateInputsUnsupported)
         }
     }
     pub(super) fn read(&self, name: &str) -> Result<Vec<u8>> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             self.inner.read(name)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = name;
             Err(WorkItemError::PrivateInputsUnsupported)
         }
     }
     pub(super) fn publish(&self, name: &str, bytes: &[u8]) -> Result<bool> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             self.inner.publish(name, bytes)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = (name, bytes);
             Err(WorkItemError::PrivateInputsUnsupported)
         }
     }
     pub(super) fn is_empty(&self) -> Result<bool> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             self.inner.is_empty()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             Err(WorkItemError::PrivateInputsUnsupported)
         }

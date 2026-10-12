@@ -11,25 +11,29 @@ use std::{
     },
     path::{Component, Path, PathBuf, Prefix},
 };
+#[cfg(test)]
+use windows::{
+    Wdk::Storage::FileSystem::FILE_CREATE,
+    Win32::{
+        Foundation::{STATUS_OBJECT_NAME_COLLISION, STATUS_SHARING_VIOLATION},
+        Storage::FileSystem::FILE_GENERIC_WRITE,
+    },
+};
 use windows::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NTCREATEFILE_CREATE_DISPOSITION,
-            NtCreateFile,
+            FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+            FILE_SYNCHRONOUS_IO_NONALERT, NTCREATEFILE_CREATE_DISPOSITION, NtCreateFile,
         },
     },
     Win32::{
-        Foundation::{
-            HANDLE, NTSTATUS, STATUS_OBJECT_NAME_COLLISION, STATUS_PENDING,
-            STATUS_SHARING_VIOLATION, STATUS_SUCCESS, UNICODE_STRING,
-        },
+        Foundation::{HANDLE, NTSTATUS, STATUS_PENDING, STATUS_SUCCESS, UNICODE_STRING},
         Storage::FileSystem::{
             FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-            FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK,
+            FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK,
             FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
             GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW, SYNCHRONIZE,
             VOLUME_NAME_DOS,
@@ -49,6 +53,7 @@ fn handle(file: &File) -> HANDLE {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Directory,
+    #[cfg(test)]
     Lock,
     Source,
 }
@@ -135,8 +140,11 @@ fn check(file: &File, kind: Kind) -> Result<Identity> {
         || tags.ReparseTag != 0
         || standard.DeletePending.0 != 0
         || (standard.Directory.0 != 0) != (kind == Kind::Directory)
-        || (kind == Kind::Lock && standard.NumberOfLinks != 1)
     {
+        return Err(invalid());
+    }
+    #[cfg(test)]
+    if kind == Kind::Lock && standard.NumberOfLinks != 1 {
         return Err(invalid());
     }
     file_identity(file)
@@ -187,6 +195,7 @@ fn native_open(
         // Metadata-only opens do not enforce delete sharing; traversal makes the
         // retained directory handle's omission of FILE_SHARE_DELETE fence renames.
         Kind::Directory => FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
+        #[cfg(test)]
         Kind::Lock => FILE_GENERIC_READ | FILE_GENERIC_WRITE,
         Kind::Source => FILE_GENERIC_READ,
     };
@@ -242,6 +251,7 @@ fn native_open(
 fn opened(parent: &File, name: &OsStr, kind: Kind) -> Result<File> {
     native_open(parent, name, kind, FILE_OPEN).map_err(|_| invalid())
 }
+#[cfg(test)]
 fn create_or_open(parent: &File, name: &OsStr, kind: Kind) -> Result<File> {
     match native_open(parent, name, kind, FILE_CREATE) {
         Ok(file) => Ok(file),
@@ -349,6 +359,7 @@ impl Chain {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn identity(&self) -> Vec<(Vec<u16>, Identity)> {
         self.identities
             .iter()
@@ -368,13 +379,34 @@ impl Chain {
             .collect()
     }
 }
-pub(super) struct Held {
+/// Work-item adapter; native ownership and privacy live in one foundational owner.
+pub(super) struct Held(crate::state_home::PrivatePreparation);
+impl Held {
+    pub(super) fn identity(&self) -> Result<String> {
+        self.0.legacy_identity().map_err(Into::into)
+    }
+    pub(super) fn verify(&self) -> Result<()> {
+        self.0.verify().map_err(Into::into)
+    }
+    pub(super) fn require_private(&self) -> Result<()> {
+        self.0.require_private().map_err(Into::into)
+    }
+}
+pub(super) fn acquire_private(home: &Path, name: &str) -> Result<Held> {
+    crate::state_home::PrivatePreparation::acquire(home, name)
+        .map(Held)
+        .map_err(Into::into)
+}
+
+#[cfg(test)]
+pub(super) struct LegacyHeld {
     chain: Chain,
     lock: File,
     name: OsString,
     lock_identity: Identity,
 }
-impl Held {
+#[cfg(test)]
+impl LegacyHeld {
     pub(super) fn identity(&self) -> Result<String> {
         Ok(serde_json::to_string(&(
             self.chain.identity(),
@@ -397,7 +429,8 @@ impl Held {
         Ok(())
     }
 }
-pub(super) fn acquire(home: &Path, name: &str) -> Result<Held> {
+#[cfg(test)]
+pub(super) fn acquire(home: &Path, name: &str) -> Result<LegacyHeld> {
     let mut chain = Chain::open(home)?;
     for name in ["work-items", "preparation-locks"] {
         let name = OsStr::new(name);
@@ -411,7 +444,7 @@ pub(super) fn acquire(home: &Path, name: &str) -> Result<Held> {
     let name = OsString::from(format!("{name}.lock"));
     let lock = create_or_open(chain.files.last().ok_or_else(invalid)?, &name, Kind::Lock)?;
     let lock_identity = check(&lock, Kind::Lock)?;
-    let held = Held {
+    let held = LegacyHeld {
         chain,
         lock,
         name,
@@ -499,6 +532,77 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn protected_owner_identity_matches_independent_legacy_sdk_observation() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        for name in ["task-original", "flow-operation-v1-original"] {
+            let owner = acquire_private(home.path(), name).unwrap();
+            let mut chain = Chain::open(home.path()).unwrap();
+            chain.push_existing(OsStr::new("work-items")).unwrap();
+            chain
+                .push_existing(OsStr::new("preparation-locks"))
+                .unwrap();
+            let name = OsString::from(format!("{name}.lock"));
+            let lock = opened(chain.files.last().unwrap(), &name, Kind::Lock).unwrap();
+            let independently_observed = LegacyHeld {
+                lock_identity: check(&lock, Kind::Lock).unwrap(),
+                chain,
+                lock,
+                name,
+            };
+            assert_eq!(
+                owner.identity().unwrap(),
+                independently_observed.identity().unwrap()
+            );
+            owner.require_private().unwrap();
+            assert_eq!(
+                owner.identity().unwrap(),
+                independently_observed.identity().unwrap()
+            );
+            drop(independently_observed);
+            drop(owner);
+        }
+        home.close().unwrap();
+    }
+    #[test]
+    fn task_and_flow_outer_identity_bytes_match_the_original_sdk_tuple_contract() {
+        use super::super::{PreparationLock, PreparationLockKey};
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let operation = surge_core::id::WorkItemOperationId::new();
+        for key in [
+            PreparationLockKey::Task(surge_core::id::WorkItemId::new()),
+            PreparationLockKey::FlowOperation(operation),
+            PreparationLockKey::FlowLaunch {
+                operation,
+                run: surge_core::RunId::new(),
+            },
+        ] {
+            let owner = PreparationLock::acquire_stable(home.path(), key).unwrap();
+            let mut chain = Chain::open(home.path()).unwrap();
+            chain.push_existing(OsStr::new("work-items")).unwrap();
+            chain
+                .push_existing(OsStr::new("preparation-locks"))
+                .unwrap();
+            let name = OsString::from(format!("{}.lock", key.name()));
+            let lock = opened(chain.files.last().unwrap(), &name, Kind::Lock).unwrap();
+            let observed = LegacyHeld {
+                lock_identity: check(&lock, Kind::Lock).unwrap(),
+                chain,
+                lock,
+                name,
+            };
+            let raw = observed.identity().unwrap();
+            let expected = match key {
+                PreparationLockKey::Task(_) => raw,
+                _ => serde_json::to_string(&("stable-owned-flow-v1", key.name(), raw)).unwrap(),
+            };
+            assert_eq!(owner.identity().unwrap(), expected);
+            owner.require_private().unwrap();
+            drop(observed);
+            drop(owner);
+        }
+        home.close().unwrap();
+    }
     #[test]
     fn stable_lock_is_real_exclusion_and_does_not_block_ordinary_children() {
         let home = tempfile::tempdir().unwrap();
