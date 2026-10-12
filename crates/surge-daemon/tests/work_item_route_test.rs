@@ -4519,6 +4519,15 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
             error.contains("waiting human gate contradicts its original decision"),
             "{error}"
         );
+        // Hold the real owner fence across admission: Continue acknowledges
+        // intent before either explicit launch or reconciliation can execute it.
+        let held_claim = storage.work_items().claim(attempt.run).unwrap();
+        let prior_control = storage
+            .work_items()
+            .execution_control(attempt.run)
+            .unwrap()
+            .unwrap();
+        let operation = surge_core::id::WorkItemOperationId::new();
         let (engine, cancel, server, socket) = cold_host(
             home.path(),
             project.path(),
@@ -4527,7 +4536,7 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         )
         .await;
         let command = surge_core::work_item::WorkItemCommand::Continue {
-            operation_id: surge_core::id::WorkItemOperationId::new(),
+            operation_id: operation,
             item: attempt.item,
             expected_version: storage
                 .work_items()
@@ -4540,9 +4549,33 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         let response = request(&socket, serde_json::to_value(command).unwrap()).await;
         assert_eq!(response["method"], "work_item_ok", "{response}");
         assert_eq!(
-            response["result"]["value"]["state"], "attention",
+            response["result"]["value"]["state"], "continue_reserved",
             "{response}"
         );
+        assert_eq!(
+            response["result"]["value"]["generation"],
+            prior_control.generation + 1,
+            "{response}"
+        );
+        assert_eq!(
+            response["result"]["value"]["operation"],
+            serde_json::to_value(operation).unwrap(),
+            "{response}"
+        );
+        assert_eq!(
+            response["result"]["value"]["diagnostic"], "task launch already claimed",
+            "{response}"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='RunContinued'",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        drop(held_claim);
         tokio::time::timeout(Duration::from_secs(8), async {
             while storage
                 .work_items()
@@ -4557,6 +4590,51 @@ async fn pure_gate_suspension_fixture_deadline_in_home(
         })
         .await
         .unwrap();
+        let refused = storage
+            .work_items()
+            .execution_control(attempt.run)
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.generation, prior_control.generation + 1);
+        assert_eq!(refused.operation, operation);
+        assert_eq!(
+            refused.state,
+            surge_core::execution_recovery::ExecutionControlState::Attention
+        );
+        assert!(
+            refused
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic
+                    .contains("waiting human gate contradicts its original decision")),
+            "{refused:?}"
+        );
+        for kind in [
+            "HumanInputResolved",
+            "SessionOpened",
+            "GateStageOutcomeCommitted",
+            "GateStageRouteCommitted",
+            "StageCompleted",
+            "EdgeTraversed",
+        ] {
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM events WHERE kind=?1", [kind], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .unwrap(),
+                0,
+                "corruption must not authorize {kind}"
+            );
+        }
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
         assert_eq!(
             conn.query_row(
                 "SELECT COUNT(*) FROM events WHERE kind='RunContinued'",
