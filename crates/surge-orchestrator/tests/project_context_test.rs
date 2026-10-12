@@ -14,16 +14,6 @@ use surge_orchestrator::project_context::{
     describe_project_with_bridge, scan_project,
 };
 
-async fn send_message_recorded(mock: &fixtures::mock_bridge::MockBridge) -> bool {
-    let calls = mock.recorded_calls.lock().await;
-    calls.iter().any(|call| {
-        matches!(
-            call,
-            fixtures::mock_bridge::RecordedCall::SendMessage { .. }
-        )
-    })
-}
-
 fn write_project_files(root: &std::path::Path) {
     std::fs::write(
         root.join("Cargo.toml"),
@@ -157,25 +147,18 @@ async fn describe_project_with_bridge_invokes_project_context_author() {
     })
     .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        for _ in 0..50 {
-            if send_message_recorded(&mock_for_pump).await {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        mock_for_pump.pump_scripted_events().await;
-    });
-
+    // Pump only once the author has installed its receiver; polled in the
+    // same task so a readiness panic fails the test instead of leaving the
+    // author waiting on an event sent to zero receivers.
     let output = temp.path().join("project.md");
-    let outcome = describe_project_with_bridge(
-        ProjectContextOptions::new(temp.path().to_path_buf(), output.clone()),
-        bridge,
-    )
-    .await
-    .unwrap();
-    pump.await.unwrap();
+    let (outcome, ()) = tokio::join!(
+        describe_project_with_bridge(
+            ProjectContextOptions::new(temp.path().to_path_buf(), output.clone()),
+            bridge,
+        ),
+        mock.pump_after_subscribe(1),
+    );
+    let outcome = outcome.unwrap();
 
     assert_eq!(outcome.status, ProjectContextStatus::Drafted);
     let output = std::fs::read_to_string(output).unwrap();
@@ -222,24 +205,14 @@ async fn describe_project_with_bridge_rejects_artifacts_outside_project_root() {
     })
     .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        for _ in 0..50 {
-            if send_message_recorded(&mock_for_pump).await {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        mock_for_pump.pump_scripted_events().await;
-    });
-
-    let err = describe_project_with_bridge(
-        ProjectContextOptions::new(temp.path().to_path_buf(), temp.path().join("project.md")),
-        bridge,
-    )
-    .await
-    .unwrap_err();
-    pump.await.unwrap();
+    let (result, ()) = tokio::join!(
+        describe_project_with_bridge(
+            ProjectContextOptions::new(temp.path().to_path_buf(), temp.path().join("project.md")),
+            bridge,
+        ),
+        mock.pump_after_subscribe(1),
+    );
+    let err = result.unwrap_err();
 
     assert!(err.to_string().contains("escapes project root"));
 }
