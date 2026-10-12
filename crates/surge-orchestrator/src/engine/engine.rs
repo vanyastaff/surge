@@ -212,9 +212,14 @@ impl Engine {
             Ok(feed) => feed,
             Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
         };
-        let settled =
-            super::run_execution::settle_terminal(writer, self.event_tap.clone(), outcome, feed)
-                .await;
+        let settled = super::run_execution::settle_terminal(
+            writer,
+            &self.storage,
+            self.event_tap.clone(),
+            outcome,
+            feed,
+        )
+        .await;
         Ok(terminal_resume_handle(run_id, settled))
     }
 
@@ -248,7 +253,6 @@ impl Engine {
                         active_runs.remove(&run_id);
                     }
                 }
-                record_terminal_status(&storage, run_id, &outcome).await;
                 // Best-effort registry mirror follows actual writer/forwarder settlement.
                 mirror_task_ledger(&storage, run_id, &project_path).await;
                 outcome
@@ -2154,41 +2158,6 @@ fn terminal_conflict(
     let seqs = verdict.conflicting_seqs();
     tracing::warn!(%run_id, ?seqs, "resume refused: conflicting terminal history");
     Some(EngineError::TerminalHistoryConflict { run_id, seqs })
-}
-
-/// Write a finished run's terminal status into the cross-run registry.
-///
-/// The per-run event log is the source of truth, but `surge engine ls`,
-/// liveness probes and every registry reader otherwise kept seeing
-/// `running`/`bootstrapping` until the next daemon restart ran recovery.
-/// Parked runs are written by `set_run_parked`; a stream error is not a
-/// terminal fact, so neither is recorded here. A settlement failure is
-/// recorded as `Crashed` so registry readers cannot mistake an unconfirmed
-/// run for a successful historical completion. Best-effort, like the ledger
-/// mirror: a failed write is logged and never changes the outcome.
-async fn record_terminal_status(
-    storage: &Arc<surge_persistence::runs::Storage>,
-    run_id: RunId,
-    outcome: &crate::engine::handle::RunOutcome,
-) {
-    use crate::engine::handle::RunOutcome;
-    use surge_core::RunStatus;
-    let status = match outcome {
-        RunOutcome::Completed { .. } => RunStatus::Completed,
-        RunOutcome::Failed { .. } => RunStatus::Failed,
-        RunOutcome::Aborted { .. } => RunStatus::Aborted,
-        RunOutcome::SettlementFailed { .. } => RunStatus::Crashed,
-        RunOutcome::RecoveryRequired { .. }
-        | RunOutcome::Suspended { .. }
-        | RunOutcome::Parked { .. } => return,
-    };
-    let ended_at_ms = chrono::Utc::now().timestamp_millis();
-    if let Err(error) = storage
-        .set_run_status(&run_id, status, Some(ended_at_ms))
-        .await
-    {
-        tracing::warn!(%run_id, ?status, %error, "could not record terminal run status in registry");
-    }
 }
 
 /// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
