@@ -194,6 +194,33 @@ impl StageSpan {
                 }
                 self.events.push(span_event("tool.call", at, attrs));
             },
+            EventPayload::ProviderUsageObserved { usage, .. } => {
+                let attrs = match usage {
+                    crate::usage::TokenUsageObservation::Reported { delta, .. } => vec![
+                        attr("gen_ai.usage.input_tokens", delta.input_tokens),
+                        attr("gen_ai.usage.output_tokens", delta.output_tokens),
+                        attr("surge.usage.priced", false),
+                    ],
+                    crate::usage::TokenUsageObservation::Unavailable { reason, .. } => vec![attr(
+                        "surge.usage.unavailable",
+                        format!("{reason:?}").as_str(),
+                    )],
+                };
+                self.events
+                    .push(span_event("surge.provider_usage", at, attrs));
+            },
+            EventPayload::ContextUsageObserved { usage, .. } => {
+                let mut attrs = vec![
+                    attr("surge.context.used", usage.used),
+                    attr("surge.context.size", usage.size),
+                ];
+                if let Some(cost) = &usage.cost {
+                    attrs.push(attr("surge.session_cost.amount", cost.amount));
+                    attrs.push(attr("surge.session_cost.currency", cost.currency.as_str()));
+                }
+                self.events
+                    .push(span_event("surge.context_usage", at, attrs));
+            },
             EventPayload::TokensConsumed {
                 prompt_tokens,
                 output_tokens,
@@ -315,6 +342,15 @@ impl From<&str> for AttrValue {
 impl From<i64> for AttrValue {
     fn from(value: i64) -> Self {
         Self::Int(value)
+    }
+}
+impl From<u64> for AttrValue {
+    fn from(value: u64) -> Self {
+        // OTLP integers are signed: preserve larger counters as decimal text.
+        match i64::try_from(value) {
+            Ok(value) => Self::Int(value),
+            Err(_) => Self::Str(value.to_string()),
+        }
     }
 }
 impl From<bool> for AttrValue {

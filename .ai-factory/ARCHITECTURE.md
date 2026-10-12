@@ -226,7 +226,8 @@ pub enum BridgeEvent {
     ToolResult { session: SessionId, result: ToolResult },
     PermissionRequest { session: SessionId, request: PermissionRequest },
     AgentMessageChunk { session: SessionId, chunk: MessageChunk },
-    TokensConsumed { session: SessionId, usage: TokenUsage },
+    ProviderUsageObserved { session: SessionId, usage: TokenUsageObservation },
+    ContextUsageObserved { session: SessionId, usage: ContextUsage },
     SessionEnded { session: SessionId, reason: EndReason },
 }
 

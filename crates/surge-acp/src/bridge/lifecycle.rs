@@ -155,19 +155,24 @@ pub(super) async fn run(
                                     entry.prompt_running = true;
                                     entry.inner.borrow_mut().live_ingress = true;
                                     entry.prompt_done = CancellationToken::new();
-                                    Ok((entry.connection.clone(), entry.inner.borrow().acp_session_id.clone(), entry.cancel.clone(), entry.prompt_done.clone(), entry.secrets.clone(), entry.effect_fence.clone()))
+                                    Ok((entry.connection.clone(), entry.inner.borrow().acp_session_id.clone(), entry.cancel.clone(), entry.prompt_done.clone(), entry.secrets.clone(), entry.effect_fence.clone(), (entry.events.clone(), entry.inner.clone())))
                                 },
                             }
                         };
                         match ready {
                             Err(error) => { let _ = reply.send(Err(error)); },
-                            Ok((connection, acp_id, cancel, finished, secrets, effect_fence)) => {
+                            Ok((connection, acp_id, cancel, finished, secrets, effect_fence, observation)) => {
                                 prompts.push(tokio::task::spawn_local(async move {
                                     let _finished = finished.drop_guard();
+                                    let cancelled_observation = observation.clone();
                                     let result = tokio::select! {
                                         biased;
-                                        () = cancel.cancelled() => Err(SendMessageError::SessionEnded { session, reason: SessionEndReason::ForcedClose }),
-                                        result = worker::send_message_impl(connection, acp_id, session, content, secrets, effect_fence) => result,
+                                        () = cancel.cancelled() => {
+                                            let usage = cancelled_observation.1.borrow_mut().usage.observe(None);
+                                            let _ = cancelled_observation.0.send(BridgeEvent::ProviderUsageObserved { session, usage });
+                                            Err(SendMessageError::SessionEnded { session, reason: SessionEndReason::ForcedClose })
+                                        },
+                                        result = worker::send_message_impl(connection, acp_id, session, content, secrets, effect_fence, observation) => result,
                                     };
                                     PromptDone { session, result, reply }
                                 }));
@@ -269,6 +274,12 @@ async fn close(mut entry: AcpSession, force: bool, reply: Option<CloseReply>) ->
         }
     }
     entry.cancel.cancel();
+    if entry.prompt_running {
+        // The cancellation branch is synchronous and owns its final usage
+        // observation. Join its drop guard before publishing terminal state;
+        // process/IO cleanup being ready must not overtake that observation.
+        entry.prompt_done.cancelled().await;
+    }
     if let Some(connection) = entry.connection.as_ref() {
         connection.stop();
     }
@@ -339,7 +350,6 @@ async fn close(mut entry: AcpSession, force: bool, reply: Option<CloseReply>) ->
             }
         },
     };
-    worker::flush_pending_token_usage(&entry.events, &entry.inner, &id);
     entry.inner.borrow_mut().end_emitted = Some(reason.clone());
     CloseDone {
         session: id,

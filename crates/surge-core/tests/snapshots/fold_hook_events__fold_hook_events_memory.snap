@@ -40,6 +40,8 @@ RunMemory {
         tokens_out: 0,
         cache_hits: 0,
         cost_usd: 0.0,
+        usage_unknown: false,
+        cost_unknown: false,
     },
     budget_warning_raised: false,
     budget_exceeded_noted: false,

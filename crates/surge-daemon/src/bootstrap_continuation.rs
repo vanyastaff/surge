@@ -253,27 +253,32 @@ fn remaining_budget(
     };
     let mut sessions = HashSet::new();
     let mut observed = HashSet::new();
+    let mut unavailable = HashSet::new();
     let mut used = 0_u64;
     for event in events {
         match &event.payload.payload {
             EventPayload::SessionOpened { session, .. } => {
                 sessions.insert(*session);
             },
-            EventPayload::TokensConsumed {
+            payload if payload.token_delta().is_some() => {
+                if let Some((session, input, output, _)) = payload.token_delta() {
+                    observed.insert(session);
+                    used = used
+                        .checked_add(input)
+                        .and_then(|used| used.checked_add(output))
+                        .ok_or(ContinuationError::BudgetUnconfirmed)?;
+                }
+            },
+            EventPayload::ProviderUsageObserved {
                 session,
-                prompt_tokens,
-                output_tokens,
-                ..
+                usage: surge_core::TokenUsageObservation::Unavailable { .. },
             } => {
-                observed.insert(*session);
-                used = used
-                    .checked_add(u64::from(*prompt_tokens) + u64::from(*output_tokens))
-                    .ok_or(ContinuationError::BudgetUnconfirmed)?;
+                unavailable.insert(*session);
             },
             _ => {},
         }
     }
-    if !sessions.is_subset(&observed) {
+    if !sessions.is_subset(&observed) || !unavailable.is_empty() {
         return Err(ContinuationError::BudgetUnconfirmed);
     }
     let remaining = limit
@@ -387,6 +392,59 @@ mod tests {
         assert!(matches!(
             apply_edits_from_events(&bad, &runtime, &mut child),
             Err(ContinuationError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn provider_budget_ignores_context_and_rejects_unknown_spend() {
+        use surge_core::{
+            ContextUsage, TokenUsageCounters, TokenUsageObservation, UsageUnavailableReason,
+        };
+        let session = SessionId::new();
+        let mut budget = BudgetGuard::default();
+        budget.limits.tokens = Some(100);
+        let counters = TokenUsageCounters {
+            total_tokens: 20,
+            input_tokens: 15,
+            output_tokens: 5,
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        let mut events = vec![
+            event(EventPayload::ContextUsageObserved {
+                session,
+                usage: ContextUsage {
+                    used: 10_000,
+                    size: 20_000,
+                    cost: None,
+                },
+            }),
+            event(EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters.clone(),
+                    delta: counters,
+                },
+            }),
+        ];
+        assert_eq!(
+            remaining_budget(budget, &events).unwrap().limits.tokens,
+            Some(80)
+        );
+        events.insert(
+            0,
+            event(EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Unavailable {
+                    reason: UsageUnavailableReason::Missing,
+                    reported: None,
+                },
+            }),
+        );
+        assert!(matches!(
+            remaining_budget(budget, &events),
+            Err(ContinuationError::BudgetUnconfirmed)
         ));
     }
 

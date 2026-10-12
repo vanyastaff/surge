@@ -152,6 +152,25 @@ the worker: Tokio may round up the requested retention capacity, and subscribers
 that fall behind lose oldest events and receive `RecvError::Lagged`. Durable
 consumers must provide their own persistence and backpressure.
 
+Usage evidence has two separate contracts. `ProviderUsageObserved` preserves
+the ACP prompt response's cumulative `u64` token counters and an accepted delta
+since the last comparable report. Repeated reports add zero; missing reports
+and regressed counters remain explicitly unavailable. Optional reasoning and
+cache read/write counters stay optional, and the bridge does not invent a model
+name or interpret cache tokens as cache hits. Durable projections sum accepted
+deltas and expose incomplete usage and unknown pricing.
+
+`ContextUsageObserved` preserves current context occupancy, window capacity and
+optional cumulative session cost in the provider's original currency. Context
+growth or compaction never creates token expenditure. Neither context cost nor
+token counts alone establish a USD price. Usage is published before the prompt
+settles and before the session's terminal event.
+
+The pre-release bridge API replaces the ambiguous `TokenUsage` variant with
+these two typed observations; Rust callers must migrate their event matches.
+Historical durable `TokensConsumed` events remain readable as incremental
+host-authored evidence.
+
 Commands: `OpenSession`, `SendMessage`, `CloseSession`. Events: `SessionEstablished`, `ToolCall`, `ToolResult`, `PermissionRequest`, `AgentMessageChunk`, `TokensConsumed`, `SessionEnded`.
 
 ### Injected tools

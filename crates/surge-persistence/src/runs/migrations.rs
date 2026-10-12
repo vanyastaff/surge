@@ -185,6 +185,10 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
         "per-run-0009-task-ledger-human-overrides",
         include_str!("migrations/per_run/0009_task_ledger_human_overrides.sql"),
     ),
+    (
+        "per-run-0010-stage-tokens-unknown",
+        include_str!("migrations/per_run/0010_stage_tokens_unknown.sql"),
+    ),
 ];
 
 /// Errors from the migration runner.

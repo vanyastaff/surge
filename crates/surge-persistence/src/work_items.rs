@@ -1162,7 +1162,35 @@ impl WorkItemStore {
         let conn = self.pool.get()?;
         match observed {
             Ok((seq, input, output, cost, unpriced, unknown)) => {
-                conn.execute("UPDATE work_item_attempts SET usage_seq=?,input_tokens=input_tokens+?,output_tokens=output_tokens+?,known_cost_usd=known_cost_usd+?,usage_unpriced=?,usage_unknown=? WHERE run=? AND usage_seq=?",params![seq,input,output,cost,unpriced,unknown,run.to_string(),value.usage_seq])?;
+                let totals = value
+                    .input_tokens
+                    .checked_add(input)
+                    .zip(value.output_tokens.checked_add(output))
+                    .and_then(|(input, output)| {
+                        Some((i64::try_from(input).ok()?, i64::try_from(output).ok()?))
+                    });
+                let (input_total, output_total, unpriced, unknown) = if let Some((input, output)) =
+                    totals
+                {
+                    (input, output, unpriced, unknown)
+                } else {
+                    tracing::warn!(%run, "token projection exceeds SQLite integer range; raw evidence retained");
+                    (
+                        i64::try_from(value.input_tokens).map_err(|_| {
+                            WorkItemError::Invalid(
+                                "stored input token subtotal exceeds SQLite integer range".into(),
+                            )
+                        })?,
+                        i64::try_from(value.output_tokens).map_err(|_| {
+                            WorkItemError::Invalid(
+                                "stored output token subtotal exceeds SQLite integer range".into(),
+                            )
+                        })?,
+                        true,
+                        true,
+                    )
+                };
+                conn.execute("UPDATE work_item_attempts SET usage_seq=?,input_tokens=?,output_tokens=?,known_cost_usd=known_cost_usd+?,usage_unpriced=?,usage_unknown=? WHERE run=? AND usage_seq=?",params![seq,input_total,output_total,cost,unpriced,unknown,run.to_string(),value.usage_seq])?;
                 Ok(())
             },
             Err(error) => {
@@ -1212,8 +1240,8 @@ impl WorkItemStore {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut seq = value.usage_seq;
-        let mut input = 0;
-        let mut output = 0;
+        let mut input = 0u64;
+        let mut output = 0u64;
         let mut cost = 0.0;
         let mut unpriced: bool = self.pool.get()?.query_row(
             "SELECT usage_unpriced FROM work_item_attempts WHERE run=?",
@@ -1234,21 +1262,28 @@ impl WorkItemStore {
                     "usage history has no trusted origin".into(),
                 ));
             }
-            if let surge_core::EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
-                cost_usd,
-                ..
-            } = payload
-            {
-                input += u64::from(prompt_tokens);
-                output += u64::from(output_tokens);
+            if let Some((_, prompt_tokens, output_tokens, cost_usd)) = payload.token_delta() {
+                input = input
+                    .checked_add(prompt_tokens)
+                    .ok_or_else(|| WorkItemError::Invalid("input token total overflow".into()))?;
+                output = output
+                    .checked_add(output_tokens)
+                    .ok_or_else(|| WorkItemError::Invalid("output token total overflow".into()))?;
                 if let Some(amount) = cost_usd.filter(|amount| amount.is_finite() && *amount >= 0.0)
                 {
                     cost += amount;
                 } else {
                     unpriced = true;
                 }
+            }
+            if matches!(
+                payload,
+                surge_core::EventPayload::ProviderUsageObserved {
+                    usage: surge_core::usage::TokenUsageObservation::Unavailable { .. },
+                    ..
+                }
+            ) {
+                unpriced = true;
             }
             seq = *next;
         }
@@ -2340,6 +2375,111 @@ mod usage_tests {
         assert_eq!(usage.input_tokens, 607);
         assert_eq!(usage.known_cost_usd, 150.0);
         assert_eq!(usage.unknown_runs, 1);
+        use surge_core::usage::{
+            ContextUsage, SessionCost, TokenUsageCounters, TokenUsageObservation,
+            UsageUnavailableReason,
+        };
+        let counters = |input, output| TokenUsageCounters {
+            total_tokens: input + output,
+            input_tokens: input,
+            output_tokens: output,
+            thought_tokens: Some(1),
+            cached_read_tokens: Some(4),
+            cached_write_tokens: None,
+        };
+        let evidence = vec![
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(20, 10),
+                    delta: counters(20, 10),
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Reported {
+                    cumulative: counters(20, 10),
+                    delta: counters(0, 0),
+                },
+            },
+            EventPayload::ContextUsageObserved {
+                session,
+                usage: ContextUsage {
+                    used: 900,
+                    size: 1000,
+                    cost: Some(SessionCost {
+                        amount: 2.0,
+                        currency: "EUR".into(),
+                    }),
+                },
+            },
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: TokenUsageObservation::Unavailable {
+                    reason: UsageUnavailableReason::CounterRegression,
+                    reported: Some(counters(1, 1)),
+                },
+            },
+        ];
+        writer
+            .append_events(
+                evidence
+                    .iter()
+                    .cloned()
+                    .map(VersionedEventPayload::new)
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        let usage = store.show(detail.item.id).unwrap().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (627, 921));
+        assert_eq!(usage.known_cost_usd, 150.0);
+        assert_eq!(usage.unknown_runs, 1);
+        let persisted = writer
+            .reader()
+            .read_events(crate::runs::EventSeq(304)..crate::runs::EventSeq(u64::MAX))
+            .await
+            .unwrap();
+        let raw: Vec<_> = persisted
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        assert_eq!(raw, evidence);
+        let summary = writer.reader().cost_summary().await.unwrap();
+        assert_eq!((summary.tokens_in, summary.tokens_out), (627, 921));
+        assert!(summary.usage_unknown && summary.cost_unknown);
+        assert_eq!(summary.cost_usd, 150.0);
+        let wide = EventPayload::ProviderUsageObserved {
+            session,
+            usage: TokenUsageObservation::Reported {
+                cumulative: counters(1u64 << 63, 1),
+                delta: counters(1u64 << 63, 1),
+            },
+        };
+        writer
+            .append_event(VersionedEventPayload::new(wide.clone()))
+            .await
+            .unwrap();
+        store.sync_usage(attempt.run).unwrap();
+        let usage = store.show(detail.item.id).unwrap().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (627, 921));
+        assert_eq!(usage.unknown_runs, 1);
+        let summary = writer.reader().cost_summary().await.unwrap();
+        assert_eq!(summary.tokens_in, (1u64 << 63) + 627);
+        assert_eq!(summary.tokens_out, 922);
+        assert_eq!(
+            writer
+                .reader()
+                .read_event(crate::runs::EventSeq(308))
+                .await
+                .unwrap()
+                .unwrap()
+                .payload
+                .payload,
+            wide
+        );
         writer.close().await.unwrap();
         drop(store);
         drop(storage);

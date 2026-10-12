@@ -2710,18 +2710,40 @@ async fn wait_for_terminal_journal(storage: &Arc<Storage>, run: surge_core::RunI
 fn assert_retained_budget_result(events: &[surge_persistence::runs::ReadEvent], cap: u64) {
     let total: u64 = events
         .iter()
-        .filter_map(|row| match row.payload.payload {
-            surge_core::EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
+        .filter_map(|row| match &row.payload.payload {
+            surge_core::EventPayload::ProviderUsageObserved {
+                usage: surge_core::TokenUsageObservation::Reported { delta, .. },
                 ..
-            } => Some(u64::from(prompt_tokens) + u64::from(output_tokens)),
+            } => Some(
+                delta
+                    .input_tokens
+                    .checked_add(delta.output_tokens)
+                    .expect("host oracle token charge must fit u64"),
+            ),
             _ => None,
         })
         .sum();
+    let host_charges = events
+        .iter()
+        .filter(|row| {
+            matches!(
+                &row.payload.payload,
+                surge_core::EventPayload::ProviderUsageObserved {
+                    usage: surge_core::TokenUsageObservation::Reported { delta, .. }, ..
+                } if delta.input_tokens == 600 && delta.output_tokens == 0
+            )
+        })
+        .count();
     assert_eq!(
-        total, 1200,
+        host_charges, 2,
         "explicit host oracle detects prior charge loss across wake"
+    );
+    // Enforcement occurs at the stage boundary: in either cap case the
+    // restored provider completes its prompt and --usage supplies
+    // Usage::new(100, 80, 20), in addition to the two host600 charges.
+    assert_eq!(
+        total, 1300,
+        "retain both host charges and actual provider spend"
     );
     assert!(events.iter().any(|row|matches!(&row.payload.payload,surge_core::EventPayload::RunStarted {config,..} if config.budget.limits.tokens==Some(cap))));
     if cap == 1000 {
@@ -2733,7 +2755,7 @@ fn assert_retained_budget_result(events: &[surge_persistence::runs::ReadEvent], 
         assert!(events.iter().any(|row| matches!(
             row.payload.payload,
             surge_core::EventPayload::BudgetExceeded {
-                total_tokens: 1200,
+                total_tokens: 1300,
                 ..
             }
         )));

@@ -1083,12 +1083,26 @@ async fn resuming_a_parked_run_re_arms_its_frozen_token_budget() {
         // over the 1_000-token budget) before its outcome.
         let second_session = SessionId::new();
         mock.pin_next_session_id(second_session).await;
-        mock.enqueue_event(BridgeEvent::TokenUsage {
+        mock.enqueue_event(BridgeEvent::ProviderUsageObserved {
             session: second_session,
-            prompt_tokens: 10_000,
-            output_tokens: 5_000,
-            cache_hits: 0,
-            model: "mock-model".into(),
+            usage: surge_core::TokenUsageObservation::Reported {
+                cumulative: surge_core::TokenUsageCounters {
+                    total_tokens: 10_000_u64 + 5_000_u64,
+                    input_tokens: 10_000_u64,
+                    output_tokens: 5_000_u64,
+                    thought_tokens: None,
+                    cached_read_tokens: None,
+                    cached_write_tokens: None,
+                },
+                delta: surge_core::TokenUsageCounters {
+                    total_tokens: 10_000_u64 + 5_000_u64,
+                    input_tokens: 10_000_u64,
+                    output_tokens: 5_000_u64,
+                    thought_tokens: None,
+                    cached_read_tokens: None,
+                    cached_write_tokens: None,
+                },
+            },
         })
         .await;
         mock.enqueue_event(BridgeEvent::OutcomeReported {

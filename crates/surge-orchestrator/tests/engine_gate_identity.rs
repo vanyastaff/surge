@@ -234,6 +234,7 @@ async fn reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_ident
             drop(storage);
             let storage = Storage::open(temp.path()).await.unwrap();
             let engine = build(storage);
+            let mut tap = engine.subscribe_tap();
             let resumed = engine
                 .resume_run(id, temp.path().to_path_buf())
                 .await

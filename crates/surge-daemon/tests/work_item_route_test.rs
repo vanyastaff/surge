@@ -3576,7 +3576,27 @@ async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(ho
         .join("runs")
         .join(attempt.run.to_string())
         .join("events.sqlite");
-    let conn = rusqlite::Connection::open(path).unwrap();
+    // Start acceptance precedes asynchronous journal creation and migration.
+    let conn = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if let Ok(conn) = rusqlite::Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            ) {
+                let ready = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                );
+                if matches!(ready, Ok(true)) {
+                    break conn;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("accepted run must publish its migrated journal before gate inspection");
     let original = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let rows: Vec<Vec<u8>> = conn

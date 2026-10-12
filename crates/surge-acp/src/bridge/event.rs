@@ -52,19 +52,19 @@ pub enum BridgeEvent {
         meta: Option<AgentMessageMeta>,
     },
 
-    /// Cumulative token usage. Bridge guarantees all `TokenUsage` for a given
-    /// session precede `SessionEnded` for that session (spec §5.7).
-    TokenUsage {
-        /// Session this usage snapshot belongs to.
+    /// Provider cumulative counters and accepted spend delta, before SessionEnded.
+    ProviderUsageObserved {
+        /// Owning session.
         session: SessionId,
-        /// Cumulative input tokens consumed since session start.
-        prompt_tokens: u32,
-        /// Cumulative output tokens produced since session start.
-        output_tokens: u32,
-        /// Cumulative cache hits.
-        cache_hits: u32,
-        /// Model name as reported by the agent (e.g. `"claude-opus-4-7"`).
-        model: String,
+        /// Exact provider evidence; missing or regressed counters remain unknown.
+        usage: surge_core::usage::TokenUsageObservation,
+    },
+    /// Context-window occupancy and original-currency cost, independent of spend.
+    ContextUsageObserved {
+        /// Owning session.
+        session: SessionId,
+        /// Provider context notification.
+        usage: surge_core::usage::ContextUsage,
     },
 
     /// Legacy in-process adapter control only; never emitted from ACP notifications.

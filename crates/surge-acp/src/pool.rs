@@ -73,6 +73,7 @@ enum PoolOp {
 /// Shared mutable state inside the LocalSet worker.
 struct WorkerState {
     connections: HashMap<String, AgentConnection>,
+    usage: HashMap<(String, String), crate::bridge::tokens::UsageTracker>,
     spawning: HashSet<String>,
     #[allow(dead_code)] // Used in try_reconnect_with_backoff, which is not yet integrated
     reconnecting: HashSet<String>,
@@ -534,6 +535,7 @@ fn run_worker(
 
         let state = Rc::new(RefCell::new(WorkerState {
             connections: HashMap::new(),
+            usage: HashMap::new(),
             spawning: HashSet::new(),
             reconnecting: HashSet::new(),
             configs,
@@ -588,6 +590,7 @@ fn run_worker(
                     tokio::task::spawn_local(async move {
                         // First remove the stale connection if it exists
                         st.borrow_mut().connections.remove(&name);
+                        st.borrow_mut().usage.retain(|(agent, _), _| agent != &name);
 
                         // Attempt reconnection with exponential backoff
                         let result = try_reconnect_with_backoff(&st, &name).await;
@@ -954,6 +957,10 @@ async fn create_session(
 
     // Track session on success, then restore the connection regardless of outcome.
     if let Ok(ref session_id) = session_id_result {
+        state
+            .borrow_mut()
+            .usage
+            .remove(&(agent_name.to_string(), session_id.clone()));
         conn.add_session(
             session_id.clone(),
             working_dir.to_path_buf(),
@@ -1072,19 +1079,34 @@ async fn prompt(
                         .await
                         .record_success(agent_name, start.elapsed());
 
-                    // Emit token usage if the agent reported it.
-                    if let Some(usage) = &response.usage {
+                    let observed = state
+                        .borrow_mut()
+                        .usage
+                        .entry((agent_name.clone(), session.session_id.clone()))
+                        .or_default()
+                        .observe(response.usage.as_ref());
+                    let _ = state
+                        .borrow()
+                        .event_tx
+                        .send(SurgeEvent::ProviderUsageObserved {
+                            session_id: session.session_id.clone(),
+                            agent_name: agent_name.clone(),
+                            usage: observed.clone(),
+                        });
+                    if let surge_core::usage::TokenUsageObservation::Reported { delta, .. } =
+                        observed
+                    {
                         let event_tx = state.borrow().event_tx.clone();
                         let _ = event_tx.send(SurgeEvent::TokensConsumed {
                             session_id: session.session_id.clone(),
                             agent_name: agent_name.clone(),
                             spec_id: None,
                             subtask_id: None,
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            thought_tokens: usage.thought_tokens,
-                            cached_read_tokens: usage.cached_read_tokens,
-                            cached_write_tokens: usage.cached_write_tokens,
+                            input_tokens: delta.input_tokens,
+                            output_tokens: delta.output_tokens,
+                            thought_tokens: delta.thought_tokens,
+                            cached_read_tokens: delta.cached_read_tokens,
+                            cached_write_tokens: delta.cached_write_tokens,
                             estimated_cost_usd: None,
                         });
                     }
@@ -1141,6 +1163,10 @@ async fn prompt(
 
                         // Remove stale connection and attempt reconnection
                         state.borrow_mut().connections.remove(agent_name);
+                        state
+                            .borrow_mut()
+                            .usage
+                            .retain(|(agent, _), _| agent != agent_name);
                         if let Err(reconnect_err) =
                             try_reconnect_with_backoff(state, agent_name).await
                         {
@@ -1179,6 +1205,10 @@ async fn prompt(
 
                         // Remove potentially stale connection and attempt reconnection
                         state.borrow_mut().connections.remove(agent_name);
+                        state
+                            .borrow_mut()
+                            .usage
+                            .retain(|(agent, _), _| agent != agent_name);
                         if let Err(reconnect_err) =
                             try_reconnect_with_backoff(state, agent_name).await
                         {

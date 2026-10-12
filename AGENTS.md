@@ -119,6 +119,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-process/src/owner_panic.rs` | Shared once-installed panic hook and fatal protected ownership scope. |
 | `scripts/test-support/runtime_home.rs` | Shared test-only retained runtime homes; callers settle actual writers, tasks and pools before explicit cleanup. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
+| `crates/surge-core/src/usage.rs` | Exact provider token reports, accepted deltas, unavailable evidence and separate context occupancy/currency contracts. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-ui/src/project_init.rs` | Empty-folder desktop project initialization: Git base commit and ignored local runtime configuration. |
 | `crates/surge-ui/src/work_items.rs` | Desktop task cache, project-scoped daemon queries and immutable operation retries. |
