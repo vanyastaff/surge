@@ -1,4 +1,4 @@
-# Isolated native durability design probe. Never grants access to the checkout.
+# Isolated native durability and full Windows support probes. Never grants access to the checkout.
 $ErrorActionPreference = 'Stop'
 $account = 'surgeprobe' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $root = Join-Path $env:PUBLIC ('surge-native-' + [Guid]::NewGuid().ToString('N'))
@@ -8,19 +8,35 @@ $process = $null
 $stdout = $null
 $stderr = $null
 $printed = $false
+$evidenceBase = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$evidence = Join-Path $evidenceBase ('surge-standard-user-evidence-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $evidence | Out-Null
+$revision = (& git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot identify native probe source revision' }
+$results = [System.Collections.Generic.List[object]]::new()
+$binaryHashes = @{}
+$complete = $false
+$cases = @()
 $previousRoot = $env:SURGE_NATIVE_PROBE_ROOT
 $previousSid = $env:SURGE_NATIVE_PROBE_SID
+$previousTemp = $env:TEMP
+$previousTmp = $env:TMP
 try {
-    # Build the actual persistence unit-test binary; JSON selects it unambiguously.
-    $messages = & cargo test --locked -p surge-persistence --lib --no-run --message-format=json
-    if ($LASTEXITCODE -ne 0) { throw 'Native probe test binary build failed' }
-    $executables = @($messages | ForEach-Object {
-        $message = $_ | ConvertFrom-Json
-        if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.target.name -eq 'surge_persistence' -and $message.executable) {
-            $message.executable
-        }
-    })
-    if ($executables.Count -ne 1) { throw 'Expected exactly one persistence unit-test executable' }
+    # Use actual libtest executables, not rebuilt substitutes in the other account.
+    $executables = @{}
+    foreach ($crate in @('surge-persistence', 'surge-process')) {
+        $messages = & cargo test --locked -p $crate --lib --all-features --no-run --message-format=json
+        if ($LASTEXITCODE -ne 0) { throw "Native probe $crate test binary build failed" }
+        $target = $crate.Replace('-', '_')
+        $artifacts = @($messages | ForEach-Object {
+            $message = $_ | ConvertFrom-Json
+            if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.target.name -eq $target -and $message.executable) {
+                $message.executable
+            }
+        })
+        if ($artifacts.Count -ne 1) { throw "Expected exactly one $crate unit-test executable" }
+        $executables[$crate] = $artifacts[0]
+    }
     $password = ConvertTo-SecureString ([Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N') + 'aA1!') -AsPlainText -Force
     $user = New-LocalUser -Name $account -Password $password -AccountNeverExpires -Description 'Ephemeral Surge native CI probe'
     $created = $true
@@ -31,11 +47,22 @@ try {
     $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     & icacls $root /inheritance:r /grant:r "*$($user.SID.Value):(OI)(CI)F" "*${current}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Isolated probe directory ACL setup failed' }
-    $binary = Join-Path $root 'surge-persistence-probe.exe'
-    Copy-Item -LiteralPath $executables[0] -Destination $binary
+    $binaries = @{}
+    foreach ($crate in $executables.Keys) {
+        $binary = Join-Path $root ($crate + '-probe.exe')
+        Copy-Item -LiteralPath $executables[$crate] -Destination $binary
+        $binaries[$crate] = $binary
+        $binaryHashes[$crate] = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
     $stdout = Join-Path $root 'stdout.log'
     $stderr = Join-Path $root 'stderr.log'
     $credential = [PSCredential]::new("$env:COMPUTERNAME\$account", $password)
+    # Start-Process may inherit the administrator runner's TEMP. All new process
+    # fixtures need a writable temp directory inside their isolated account root.
+    $temp = Join-Path $root 'temp'
+    New-Item -ItemType Directory -Path $temp | Out-Null
+    $env:TEMP = $temp
+    $env:TMP = $temp
     $env:SURGE_NATIVE_PROBE_ROOT = $root
     $env:SURGE_NATIVE_PROBE_SID = $userSid
     # Exact parent tests only. The busy-close parent owns its fatal subprocess.
@@ -55,9 +82,43 @@ try {
         @{ Filter = 'state_home::creation_security_tests::first_observable_creation_has_private_security'; Receipts = @('stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS') },
         @{ Filter = 'state_home::control_lock_tests::standard_user_control_lock_and_payload_compatibility'; Receipts = @('stage1 non-elevated control readable payload exclusive writer and legacy lock compatibility=PASS') }
     )
+    # These nonignored parents own their native children; helpers are never selected.
+    $processCases = @(
+        'native_launch_contains_immediate_descendants_and_observes_empty_job',
+        'native_leader_exit_settles_its_remaining_descendant',
+        'native_owner_death_kills_job_without_inherited_job_handles',
+        'native_job_refuses_collision_malformed_nonce_and_wrong_creation_identity',
+        'native_job_reopening_rejects_broad_acl_and_denied_access_without_claiming_absence',
+        'native_child_cannot_break_away_from_job'
+    )
+    foreach ($name in $processCases) {
+        $receipts = if ($name -eq $processCases[0]) { @('SURGE_NATIVE_STANDARD_USER_PASS') } else { @() }
+        $cases += @{ Binary = 'surge-process'; Filter = "windows_job::tests::$name"; Native = $true; Receipts = $receipts }
+    }
+    $privateCases = @(
+        'work_items::tests::windows_public_start_freezes_once_replays_and_preserves_original_identity',
+        'work_items::start_preparation::secure_lock::windows_tests::private_task_ownership_preserves_stable_identity_and_last_arc_exclusion',
+        'work_items::start_preparation::secure_lock::windows_tests::existing_private_lock_read_grants_are_refused_without_acl_or_byte_repair',
+        'state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner',
+        'state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair',
+        'state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error',
+        'work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority',
+        'work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque',
+        'work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication'
+    )
+    foreach ($filter in $privateCases) {
+        $cases += @{ Binary = 'surge-persistence'; Filter = $filter; Native = $true; Receipts = @() }
+    }
+    $caseIndex = 0
     foreach ($case in $cases) {
         $printed = $false
-        $process = Start-Process -FilePath $binary -ArgumentList @('--ignored', '--exact', $case.Filter, '--nocapture', '--test-threads=1') -Credential $credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        $crate = if ($case.Binary) { $case.Binary } else { 'surge-persistence' }
+        $arguments = if ($case.Native) {
+            @('--exact', $case.Filter, '--show-output', '--test-threads=1')
+        } else {
+            @('--ignored', '--exact', $case.Filter, '--nocapture', '--test-threads=1')
+        }
+        $process = Start-Process -FilePath $binaries[$crate] -ArgumentList $arguments -Credential $credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
         if (-not $process.WaitForExit(120000)) {
             $process.Kill()
             if (-not $process.WaitForExit(10000)) { throw 'Owned native probe did not terminate after kill' }
@@ -67,31 +128,74 @@ try {
         Get-Content -LiteralPath $stdout
         Get-Content -LiteralPath $stderr
         $printed = $true
+        $caseIndex++
+        $stem = $caseIndex.ToString('D2')
+        Copy-Item -LiteralPath $stdout -Destination (Join-Path $evidence "$stem.stdout.log")
+        Copy-Item -LiteralPath $stderr -Destination (Join-Path $evidence "$stem.stderr.log")
+        $output = Get-Content -LiteralPath $stdout -Raw
+        $result = [ordered]@{
+            filter = $case.Filter; binary = $crate; binary_sha256 = $binaryHashes[$crate]
+            exit_code = $process.ExitCode; status = 'incomplete'
+            stdout = "$stem.stdout.log"; stderr = "$stem.stderr.log"
+        }
+        $results.Add($result)
+        # An exact filter exiting zero may mean it selected zero tests. Require one.
+        if ($output -notmatch '(?m)^running 1 test\s*$' -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored;') {
+            throw "Native probe did not report exactly one passed test: $($case.Filter)"
+        }
+        if ($case.Native -and $output -notmatch ('(?m)^test ' + [regex]::Escape($case.Filter) + ' \.\.\. ok\s*$')) {
+            throw "Native probe exact named success absent: $($case.Filter)"
+        }
         if ($process.ExitCode -ne 0) { throw "Native probe failed with exit code $($process.ExitCode)" }
         foreach ($receipt in $case.Receipts) {
             if (-not (Select-String -LiteralPath $stdout -SimpleMatch $receipt -Quiet)) {
                 throw 'Native probe success receipt absent (test filter may not have run)'
             }
         }
+        $result.status = 'passed'
+        Write-Output "standard-user case=$($case.Filter) binary=$crate sha256=$($binaryHashes[$crate]) sid=$userSid result=PASS"
         $process.Dispose()
         $process = $null
     }
+    $complete = $true
 } finally {
     $env:SURGE_NATIVE_PROBE_ROOT = $previousRoot
     $env:SURGE_NATIVE_PROBE_SID = $previousSid
+    $env:TEMP = $previousTemp
+    $env:TMP = $previousTmp
     if ($process -and -not $process.HasExited) {
         $process.Kill()
         if (-not $process.WaitForExit(10000)) { throw 'Owned native probe still live; preserving its isolated directory/account' }
     }
-    if (-not $printed) {
-        if ($stdout -and (Test-Path -LiteralPath $stdout)) { Get-Content -LiteralPath $stdout }
-        if ($stderr -and (Test-Path -LiteralPath $stderr)) { Get-Content -LiteralPath $stderr }
+    try {
+        # Settled process logs can now be copied without racing open redirect handles.
+        # This directory is outside the isolated tree so cleanup preserves evidence.
+        if ($stdout -and (Test-Path -LiteralPath $stdout)) {
+            Copy-Item -LiteralPath $stdout -Destination (Join-Path $evidence 'last.stdout.log')
+        }
+        if ($stderr -and (Test-Path -LiteralPath $stderr)) {
+            Copy-Item -LiteralPath $stderr -Destination (Join-Path $evidence 'last.stderr.log')
+        }
+        [ordered]@{
+            revision = $revision; status = $(if ($complete) { 'complete' } else { 'incomplete' })
+            sid = $userSid; binary_sha256 = $binaryHashes
+            inventory = @($cases | ForEach-Object { $_.Filter }); results = @($results.ToArray())
+        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidence 'manifest.json') -Encoding utf8
+        Write-Output "Standard-user native evidence: $evidence"
+    } finally {
+        try {
+            if (-not $printed) {
+                if ($stdout -and (Test-Path -LiteralPath $stdout)) { Get-Content -LiteralPath $stdout }
+                if ($stderr -and (Test-Path -LiteralPath $stderr)) { Get-Content -LiteralPath $stderr }
+            }
+        } finally {
+            if ($process) { $process.Dispose() }
+            if ($created) {
+                $profile = Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $userSid }
+                if ($profile) { $profile | Remove-CimInstance }
+                Remove-LocalUser -Name $account
+            }
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+        }
     }
-    if ($process) { $process.Dispose() }
-    if ($created) {
-        $profile = Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $userSid }
-        if ($profile) { $profile | Remove-CimInstance }
-        Remove-LocalUser -Name $account
-    }
-    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }

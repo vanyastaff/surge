@@ -125,6 +125,14 @@ jobs:
         run: ./scripts/windows-native-probe.ps1
         timeout-minutes: 10
 
+      - name: Upload Windows standard-user evidence
+        if: always() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-standard-user-${{ github.sha }}
+          path: ${{ runner.temp }}/surge-standard-user-evidence-*/
+          if-no-files-found: error
+
       # nextest does not run doctests; the canonical workaround is a single
       # extra `cargo test --locked --doc` invocation. Cheap because no recompilation.
       - name: Run doctests (incl. surge-ui)
