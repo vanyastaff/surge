@@ -1083,6 +1083,11 @@ impl Engine {
             return Err(EngineError::WorkItemRejected(diagnostic));
         }
 
+        // #95: a conflicting terminal history is unconfirmed. Refuse before
+        // any resume side effect (clearing Parked, `RunWokeFromPark`): nothing
+        // may be appended to a log that already claims termination twice.
+        self.refuse_conflicting_terminal_history(run_id).await?;
+
         // Task 12 M3 review, BLOCKING #3: a parked run's registry row
         // (`status = 'parked'`, `wake_at` = the original park time) must
         // not survive unchanged into this resumed execution — otherwise it
@@ -1174,6 +1179,24 @@ impl Engine {
         };
 
         Ok((writer, replayed, was_parked))
+    }
+
+    async fn refuse_conflicting_terminal_history(&self, run_id: RunId) -> Result<(), EngineError> {
+        let reader = self
+            .storage
+            .open_run_reader(run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let last = reader
+            .current_seq()
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let events = reader
+            .read_events(surge_persistence::runs::EventSeq(0)..last.next())
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let verdict = surge_persistence::runs::ReadEvent::terminal_verdict(&events);
+        terminal_conflict(run_id, &verdict).map_or(Ok(()), Err)
     }
 
     fn capacity_continue_reserved(&self, run_id: RunId) -> Result<bool, EngineError> {
@@ -1300,6 +1323,11 @@ impl Engine {
         let (writer, mut replayed, was_parked) = self.prepare_run_resume(run_id, claim).await?;
         tracing::debug!(%run_id, "resume replay completed");
 
+        // A conflict that appeared after the pre-mutation check is still
+        // never settled on one claim nor re-executed (#95).
+        if let Some(conflict) = terminal_conflict(run_id, &replayed.terminal_verdict) {
+            return Err(super::run_execution::close_after_error(writer, conflict).await);
+        }
         // If the run already reached a terminal state, return a handle that
         // resolves immediately without re-executing any stages.
         if let Some(terminal_outcome) = replayed.already_terminal {
@@ -2114,6 +2142,19 @@ const PROFILE_CATALOG_PRODUCER_NODE: &str = "profile_catalog_seed";
 
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
+
+/// The resume refusal for a conflicting terminal history, if any (#95).
+fn terminal_conflict(
+    run_id: RunId,
+    verdict: &surge_core::run_verdict::TerminalVerdict,
+) -> Option<EngineError> {
+    let surge_core::run_verdict::TerminalVerdict::Conflict { .. } = verdict else {
+        return None;
+    };
+    let seqs = verdict.conflicting_seqs();
+    tracing::warn!(%run_id, ?seqs, "resume refused: conflicting terminal history");
+    Some(EngineError::TerminalHistoryConflict { run_id, seqs })
+}
 
 /// Write a finished run's terminal status into the cross-run registry.
 ///

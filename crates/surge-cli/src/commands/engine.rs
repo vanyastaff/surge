@@ -362,7 +362,7 @@ fn require_completed_events(
     run_id: RunId,
     events: &[surge_persistence::runs::reader::ReadEvent],
 ) -> Result<()> {
-    use surge_core::run_verdict::{TerminalOutcome, TerminalVerdict};
+    use surge_core::run_verdict::TerminalVerdict;
     use surge_orchestrator::engine::handle::RunOutcome;
     let claim = match surge_persistence::runs::reader::ReadEvent::terminal_verdict(events) {
         TerminalVerdict::Terminal(claim) => claim,
@@ -379,14 +379,7 @@ fn require_completed_events(
             ));
         },
     };
-    let outcome = match claim.outcome {
-        TerminalOutcome::Completed { terminal_node } => RunOutcome::Completed {
-            terminal: terminal_node,
-        },
-        TerminalOutcome::Failed { error } => RunOutcome::Failed { error },
-        TerminalOutcome::Aborted { reason } => RunOutcome::Aborted { reason },
-    };
-    super::run_lifecycle::require_completed(run_id, outcome)
+    super::run_lifecycle::require_completed(run_id, RunOutcome::from_terminal(&claim.outcome))
 }
 
 async fn resume_command(run_id: String, daemon: bool) -> Result<()> {

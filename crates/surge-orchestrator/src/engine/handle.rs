@@ -66,6 +66,25 @@ pub enum RunOutcome {
     },
 }
 
+impl RunOutcome {
+    /// The outcome a single durable terminal claim states (#95).
+    #[must_use]
+    pub fn from_terminal(outcome: &surge_core::run_verdict::TerminalOutcome) -> Self {
+        use surge_core::run_verdict::TerminalOutcome;
+        match outcome {
+            TerminalOutcome::Completed { terminal_node } => Self::Completed {
+                terminal: terminal_node.clone(),
+            },
+            TerminalOutcome::Failed { error } => Self::Failed {
+                error: error.clone(),
+            },
+            TerminalOutcome::Aborted { reason } => Self::Aborted {
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
 /// A bounded local settlement failure; diagnostics contain no event payload or path.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, thiserror::Error,
