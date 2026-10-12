@@ -2092,7 +2092,7 @@ fn prepare_automatic_quota_wake(
 ) -> Result<
     (
         Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
-        Option<crate::engine::stage::agent::TaskQuotaCycle>,
+        Option<crate::engine::quota_recovery::TaskQuotaCycle>,
     ),
     StageError,
 > {
@@ -2133,7 +2133,7 @@ fn prepare_automatic_quota_wake(
         .admit_provider_open(claim, control.operation)
         .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
     let cycle =
-        crate::engine::stage::agent::TaskQuotaCycle::from_automatic_wake(cycle, reservation);
+        crate::engine::quota_recovery::TaskQuotaCycle::from_automatic_wake(cycle, reservation);
     Ok((Some(opening), Some(cycle)))
 }
 
@@ -2144,7 +2144,7 @@ type TaskQuotaOwner = (
 );
 type PreparedTaskQuota = (
     Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
-    Option<crate::engine::stage::agent::TaskQuotaCycle>,
+    Option<crate::engine::quota_recovery::TaskQuotaCycle>,
 );
 
 async fn bind_current_plan(
@@ -2220,7 +2220,7 @@ fn select_current_plan(
 ) -> Result<PreparedTaskQuota, StageError> {
     let (store, claim, policy) = owner;
     match store
-        .select_planned_capacity(claim, cycle, chrono::Utc::now().timestamp_millis())
+        .select_planned_capacity(claim, cycle, store.clock().now_ms())
         .map_err(|e| StageError::RecoveryRequired(e.to_string()))?
     {
         surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {
@@ -2259,7 +2259,7 @@ fn select_current_plan(
             Ok((
                 Some(opening),
                 Some(
-                    crate::engine::stage::agent::TaskQuotaCycle::from_automatic_wake(
+                    crate::engine::quota_recovery::TaskQuotaCycle::from_automatic_wake(
                         cycle,
                         reservation,
                     ),
@@ -2281,7 +2281,7 @@ fn select_current_plan(
                 )?;
             }
             store
-                .suspend_planned_capacity(claim, &cycle, chrono::Utc::now().timestamp_millis())
+                .suspend_planned_capacity(claim, &cycle, store.clock().now_ms())
                 .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
             Err(StageError::CapacityExhausted)
         },

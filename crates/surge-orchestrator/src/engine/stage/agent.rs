@@ -47,7 +47,7 @@ pub struct AgentStageParams<'a> {
     /// One-shot opening authority for a task-owned fallback candidate.
     pub quota_opening: Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
     /// Recovery state carried when this stage is being retried on a frozen fallback.
-    pub quota_cycle: Option<TaskQuotaCycle>,
+    pub quota_cycle: Option<crate::engine::quota_recovery::TaskQuotaCycle>,
     /// Persistent-task quota owner and the frozen policy for this agent node.
     /// Ordinary runs have no task-owned quota cycle.
     pub quota_owner: Option<(
@@ -146,125 +146,6 @@ pub struct AgentStageParams<'a> {
     /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
     /// emits the matching task-ledger event. `None` outside a task loop.
     pub active_task_id: Option<RoadmapTaskId>,
-}
-
-/// Durable position for one logical stage's ordered provider recovery cycle.
-pub struct TaskQuotaCycle {
-    cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-    reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
-    opening_seq: u64,
-}
-impl TaskQuotaCycle {
-    pub(crate) fn from_automatic_wake(
-        cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-        reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
-    ) -> Self {
-        Self {
-            cycle,
-            reservation,
-            opening_seq: 0,
-        }
-    }
-}
-
-fn initialize_task_quota_cycle(
-    store: &surge_persistence::work_items::WorkItemStore,
-    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
-    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    invocation: surge_core::id::StageInvocationId,
-    opening_seq: u64,
-    control_generation: u64,
-) -> Result<TaskQuotaCycle, surge_persistence::work_items::WorkItemError> {
-    let bound = store.bind_quota_stage(claim, invocation, opening_seq)?;
-    if &bound != policy {
-        return Err(surge_persistence::work_items::WorkItemError::Conflict(
-            "persisted quota stage changed after opening".into(),
-        ));
-    }
-    let cycle = store.begin_recovery_cycle(claim, &invocation.to_string(), control_generation)?;
-    let primary = policy.candidates().first().ok_or_else(|| {
-        surge_persistence::work_items::WorkItemError::Invalid(
-            "frozen quota primary is absent".into(),
-        )
-    })?;
-    let reservation = store.reserve_recovery_candidate(claim, &cycle, primary.candidate())?;
-    let cycle = store.recovery_cycle(claim.run(), &invocation.to_string(), cycle.generation)?;
-    Ok(TaskQuotaCycle {
-        cycle,
-        reservation,
-        opening_seq,
-    })
-}
-
-fn record_task_quota_rate_limit(
-    store: &surge_persistence::work_items::WorkItemStore,
-    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
-    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    quota: &TaskQuotaCycle,
-    invocation: surge_core::id::StageInvocationId,
-    session: surge_core::SessionId,
-    error: &surge_acp::bridge::error::SendMessageError,
-) -> Result<
-    surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-    surge_persistence::work_items::WorkItemError,
-> {
-    let surge_acp::bridge::error::SendMessageError::RateLimited {
-        retry_after,
-        details,
-    } = error
-    else {
-        return Ok(quota.cycle.clone());
-    };
-    let now = chrono::Utc::now().timestamp_millis();
-    let delay_ms = retry_after
-        .map(|delay| {
-            i64::try_from(delay.as_millis()).map_err(|_| {
-                surge_persistence::work_items::WorkItemError::Invalid(
-                    "quota retry delay overflow".into(),
-                )
-            })
-        })
-        .transpose()?;
-    let expires_at_ms = now
-        .checked_add(policy.observation_ttl_ms())
-        .ok_or_else(|| {
-            surge_persistence::work_items::WorkItemError::Invalid(
-                "quota observation expiry overflow".into(),
-            )
-        })?;
-    let reset_at_ms = match delay_ms {
-        Some(delay) => Some(now.checked_add(delay).ok_or_else(|| {
-            surge_persistence::work_items::WorkItemError::Invalid("quota reset overflow".into())
-        })?),
-        None => None,
-    };
-    let retry_after_ms = delay_ms.map(u64::try_from).transpose().map_err(|_| {
-        surge_persistence::work_items::WorkItemError::Invalid(
-            "quota retry delay is negative".into(),
-        )
-    })?;
-    let source = surge_persistence::work_items::recovery_cycles::QuotaRateLimitSource::new(
-        quota.opening_seq,
-        invocation,
-        session,
-        retry_after_ms,
-        details.clone(),
-    )?;
-    let observation = surge_persistence::work_items::recovery_cycles::QuotaObservation::new(
-        surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
-            observed_at_ms: now,
-            expires_at_ms,
-            available: false,
-            reset_at_ms,
-        },
-    )?;
-    store.record_selected_rate_limit(
-        claim,
-        &quota.cycle,
-        &quota.reservation.receipt,
-        &source,
-        &observation,
-    )
 }
 
 /// Largest `verification-report` read back for re-entry feedback.
@@ -1436,7 +1317,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .continuation
             .as_ref()
             .map_or(0, |control| control.generation);
-        match initialize_task_quota_cycle(
+        match crate::engine::quota_recovery::initialize_task_quota_cycle(
             store,
             claim,
             policy,
@@ -1687,7 +1568,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                             store.invalidate_admitted_configured_pin(execution_writer).map_err(|e|StageError::Storage(e.to_string()))?;
                         }
                     }
-                    match record_task_quota_rate_limit(
+                    match crate::engine::quota_recovery::record_selected_rate_limit(
                         store, claim, policy, quota, provider_invocation, session_id, error,
                     ) {
                         Ok(cycle) => quota.cycle = cycle,
@@ -2507,7 +2388,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .iter()
             .any(|target| target.configured_route().is_some());
         let next = if configured {
-            match store.select_planned_capacity(claim,&quota.cycle,chrono::Utc::now().timestamp_millis())
+            match store.select_planned_capacity(claim,&quota.cycle,store.clock().now_ms())
                 .map_err(|error|StageError::RecoveryRequired(format!("select next configured quota candidate: {error}")))? {
                 surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {reservation,..}=>Some(reservation),
                 surge_persistence::work_items::recovery_cycles::CapacitySelection::AllExhausted {..}=>None,
@@ -2567,7 +2448,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 .map_err(|error| {
                     StageError::RecoveryRequired(format!("read fallback quota cycle: {error}"))
                 })?;
-            p.quota_cycle = Some(TaskQuotaCycle {
+            p.quota_cycle = Some(crate::engine::quota_recovery::TaskQuotaCycle {
                 cycle: next_cycle,
                 reservation,
                 opening_seq: quota.opening_seq,
@@ -2576,7 +2457,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             return Box::pin(execute_agent_stage(p)).await;
         }
 
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_ms = store.clock().now_ms();
         let marker = store
             .typed_rate_limit(&quota.reservation.receipt)
             .map_err(|error| {
@@ -2585,34 +2466,13 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .ok_or_else(|| {
                 StageError::RecoveryRequired("exhausted quota candidate has no typed origin".into())
             })?;
-        let reset_at_ms = match marker.observation().evidence() {
-            surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
-                reset_at_ms,
-                ..
-            } => *reset_at_ms,
-            _ => None,
-        };
-        let (origin, due_at_ms) = match reset_at_ms.filter(|reset| *reset > now_ms) {
-            Some(reset) => (
-                surge_persistence::work_items::recovery_cycles::WakeOrigin::ObservedReset,
-                reset,
-            ),
-            None => (
-                surge_persistence::work_items::recovery_cycles::WakeOrigin::PolicyBackoff,
-                now_ms
-                    .checked_add(policy.policy_backoff_ms())
-                    .ok_or_else(|| {
-                        StageError::RecoveryRequired("quota wake time overflow".into())
-                    })?,
-            ),
-        };
-        let wake = surge_persistence::work_items::recovery_cycles::RecoveryWake::new(
+        let wake = crate::engine::quota_recovery::plan_quota_wake(
             surge_core::RunId::new().to_string(),
-            origin,
+            policy,
+            marker.observation(),
             now_ms,
-            due_at_ms,
         )
-        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
+        .map_err(|error| StageError::RecoveryRequired(format!("plan quota wake: {error}")))?;
         let scheduled = store
             .arm_recovery_wake(claim, &quota.cycle, &quota.reservation.receipt, &wake)
             .map_err(|error| StageError::RecoveryRequired(format!("arm quota wake: {error}")))?;
@@ -2659,7 +2519,7 @@ fn validate_configured_capacity_sources(
             .revalidate_capacity_skips(
                 claim,
                 &quota.cycle,
-                chrono::Utc::now().timestamp_millis(),
+                store.clock().now_ms(),
                 p.quota_opening.as_ref(),
             )
             .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
