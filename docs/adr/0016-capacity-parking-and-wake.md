@@ -767,3 +767,45 @@ separate, working mechanism:
   once per configured fallback per visit, which stops ping-pong between
   exhausted agents. Stages under a frozen task quota plan keep their planned
   runtime.
+
+## Addendum 2026-10-12 — one owner for the quota cycle (#93)
+
+Everything above about *what* the engine decides still holds. What changed is
+*where* the decision lives and three rules that were implicit in the code:
+
+- **One owner.** `engine::quota_recovery` owns the run's capacity cycle. The
+  ordinary cycle is `RunCapacity` (`before_dispatch` → dispatch / rotated /
+  park; `after_rate_limit` → rotated / park / surface): the precheck, fallback
+  rotation, reactive park, the one-shot resume bypass and the recovery clear.
+  The task-owned cycle is `TaskQuotaOwner` (automatic wake, host-planned
+  selection, opening confirmation and prompt authorization, typed exhaustion,
+  next-candidate admission, wake and suspension). The M3 text naming
+  `dispatch_agent_node_with_capacity_gate` and `stage/agent.rs` locations is
+  historical. The agent stage runs one provider opening per attempt; a
+  task-owned stage moves to its next frozen candidate in a loop, not by
+  re-entering itself.
+- **Ownership is stated once** (`StageOwnership::of`). No frozen stage for the
+  node: the ordinary cycle prechecks, rotates and parks. A frozen runtime-only
+  plan: the precheck still applies, but the stage keeps its planned runtime and
+  a 429 belongs to the task cycle (surfaced, never parked or rotated by the
+  ordinary cycle). A frozen plan with configured routes under a launch claim:
+  the host planned the opening, so the ordinary precheck does not apply either.
+  The ordinary cycle runs the configured policy with rotation disabled:
+  candidate rotation needs a persisted quota handoff that only the task cycle
+  has, so `Decision::Rotate` was only ever an implicit ownership signal there.
+- **Mechanism 2, as enforced.** The ledger row is cleared only after a
+  dispatch that *succeeded*, keyed by the runtime of the last `SessionOpened`
+  for the node strictly after the dispatch prefix, and applied after the route
+  commit. A non-rate-limited *failure* (authentication, crash) is not evidence
+  that capacity recovered and clears nothing. This replaces the "any
+  non-`RateLimited` outcome clears" wording in M3.
+- **Runtime identity is the run's merged agent registry.** Every capacity key,
+  availability check, frozen-candidate freeze, quota-policy validation and
+  catalog availability lookup resolves through the run's own registry
+  (`[agents.*]` over builtin, builtin when the run carries none). A
+  `[agents.<alias>]` entry named like a static alias (`claude`, `codex`, …) is
+  therefore its own runtime for capacity, not the builtin it shadows
+  (ADR-0019). Readers of a recorded key (`RunParked.runtime`) adopt it as
+  written rather than re-resolving it through another registry. No data
+  migration: a row left under the builtin key is a real builtin row that the
+  next successful builtin dispatch clears or that expires at its reset.

@@ -1421,7 +1421,7 @@ mod tests {
     async fn inbox_working_run_never_consults_the_registry() {
         // The non-terminal counterpart to the test above: a run that is
         // `Working` (not currently parked) is, by the dispatch gate's own
-        // guarantee (`capacity_decision_for` runs before every agent
+        // guarantee (`RunCapacity::before_dispatch` runs before every agent
         // stage), not blocked by capacity right now — so it reads
         // `NeverObserved` even with a matching registry row in play. Only
         // `Attention::Waiting` ever triggers the lookup; see `classify`'s
