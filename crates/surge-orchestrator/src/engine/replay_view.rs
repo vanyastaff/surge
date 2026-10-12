@@ -129,6 +129,8 @@ pub enum TerminalKind {
     Failed,
     /// `RunAborted`.
     Aborted,
+    /// Two or more terminal claims (#95): unconfirmed, no node promoted.
+    Conflicted,
 }
 
 impl TerminalKind {
@@ -139,6 +141,7 @@ impl TerminalKind {
             TerminalKind::Completed => "completed",
             TerminalKind::Failed => "failed",
             TerminalKind::Aborted => "aborted",
+            TerminalKind::Conflicted => "conflicted",
         }
     }
 }
@@ -151,8 +154,13 @@ pub struct ReplayView {
     /// The current frontier node (last `StageEntered`), or `None` for a
     /// terminal run or one not yet started.
     pub active_node: Option<String>,
-    /// Terminal disposition, if the cutoff includes a terminal event.
+    /// Terminal disposition from the run's terminal verdict (#95), if the
+    /// cutoff includes a terminal event.
     pub terminal: Option<TerminalKind>,
+    /// Sequence numbers of execution activity after the first terminal
+    /// event: writer-bug evidence, never a second terminal claim.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub post_terminal_activity: Vec<u64>,
     /// Every graph node with its status, in graph (`BTreeMap`) order.
     pub nodes: Vec<NodeView>,
     /// Edges traversed up to the cutoff, in order.
@@ -173,10 +181,6 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
         .map(|k| (k.as_str().to_owned(), (NodeStatus::Future, 0, None)))
         .collect();
     let mut active_node: Option<String> = None;
-    let mut terminal = None;
-    // `RunCompleted` names the terminal node directly; terminal stages emit no
-    // `StageCompleted` for it, so it is promoted after the fold.
-    let mut terminal_node = None;
     let mut edges_traversed = Vec::new();
     let mut cost = CostView::default();
 
@@ -220,15 +224,32 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
                     to: to.as_str().to_owned(),
                 });
             },
-            EventPayload::RunCompleted { terminal_node: tn } => {
-                terminal = Some(TerminalKind::Completed);
-                terminal_node = Some(tn.as_str().to_owned());
-            },
-            EventPayload::RunFailed { .. } => terminal = Some(TerminalKind::Failed),
-            EventPayload::RunAborted { .. } => terminal = Some(TerminalKind::Aborted),
             _ => {},
         }
     }
+
+    // The disposition is the shared terminal verdict (#95). `RunCompleted`
+    // names the terminal node directly; terminal stages emit no
+    // `StageCompleted` for it, so it is promoted below.
+    let history = ReadEvent::terminal_history(events);
+    let (terminal, terminal_node) = match history.verdict() {
+        surge_core::run_verdict::TerminalVerdict::Open => (None, None),
+        surge_core::run_verdict::TerminalVerdict::Conflict { .. } => {
+            (Some(TerminalKind::Conflicted), None)
+        },
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => match &claim.outcome {
+            surge_core::run_verdict::TerminalOutcome::Completed { terminal_node } => (
+                Some(TerminalKind::Completed),
+                Some(terminal_node.as_str().to_owned()),
+            ),
+            surge_core::run_verdict::TerminalOutcome::Failed { .. } => {
+                (Some(TerminalKind::Failed), None)
+            },
+            surge_core::run_verdict::TerminalOutcome::Aborted { .. } => {
+                (Some(TerminalKind::Aborted), None)
+            },
+        },
+    };
 
     apply_terminal_disposition(
         &mut status,
@@ -251,6 +272,7 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
         event_count: events.len() as u64,
         active_node,
         terminal,
+        post_terminal_activity: history.post_terminal_activity().to_vec(),
         nodes,
         edges_traversed,
         cost,
@@ -657,5 +679,50 @@ mod tests {
             "frontier cleared once the active node completes"
         );
         assert_eq!(node_view(&view, "impl_1").status, NodeStatus::Completed);
+    }
+
+    #[test]
+    fn a_conflicting_terminal_history_is_conflicted_and_promotes_nothing() {
+        let graph = graph_impl_to_end();
+        let impl_k = NodeKey::try_from("impl_1").unwrap();
+        let end_k = NodeKey::try_from("end").unwrap();
+        let events = vec![
+            ev(
+                3,
+                EventPayload::StageEntered {
+                    node: impl_k,
+                    attempt: 1,
+                },
+            ),
+            ev(
+                4,
+                EventPayload::RunCompleted {
+                    terminal_node: end_k,
+                },
+            ),
+            ev(
+                5,
+                EventPayload::RunFailed {
+                    error: "second owner".into(),
+                },
+            ),
+        ];
+        let view = build_replay_view(&graph, &events);
+        assert_eq!(view.terminal, Some(TerminalKind::Conflicted));
+        assert_eq!(view.terminal.map(TerminalKind::as_str), Some("conflicted"));
+        assert_eq!(
+            view.active_node, None,
+            "a conflicted run has no live frontier"
+        );
+        assert_eq!(
+            node_view(&view, "end").status,
+            NodeStatus::Future,
+            "no node is promoted on an unconfirmed outcome"
+        );
+        assert_eq!(
+            node_view(&view, "impl_1").status,
+            NodeStatus::Active,
+            "the last RunFailed is not taken as the frontier's failure"
+        );
     }
 }
