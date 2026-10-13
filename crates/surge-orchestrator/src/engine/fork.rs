@@ -95,6 +95,10 @@ pub struct ForkOutcome {
     pub new_run: RunId,
     /// Number of event payloads copied from the parent (equals `at_seq`).
     pub copied_events: u64,
+    /// Where the child's cursor comes from: the inherited checkpoint, or the
+    /// graph start when the prefix has no checkpoint (the child then
+    /// re-enters the first stage).
+    pub cursor_source: crate::engine::execution_state::CursorSource,
 }
 
 /// Fork a run: copy parent events `1..=at_seq` into `new_run`, then record a
@@ -137,6 +141,8 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
             req.at_seq
         )));
     }
+
+    let cursor_source = forkable_cursor_source(&reader, req.at_seq).await?;
 
     // Inherited prefix: parent events 1..=at_seq.
     let prefix = reader
@@ -233,11 +239,44 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
             // The bounds check guarantees the prefix holds exactly `at_seq`
             // contiguous events (the log has no gaps from seq 1).
             copied_events: req.at_seq,
+            cursor_source,
         })
     }
     .await;
     let close = parent_writer.close().await;
     settle_fork_result(req.parent, operation, close)
+}
+
+/// The cursor source of the parent's execution state at `at_seq` (#100): the
+/// prefix must rebuild (checkpoint, routes, timestamps), and must not end the
+/// run — a fork is a way to execute forward, and a terminal child has nothing
+/// to run.
+async fn forkable_cursor_source(
+    reader: &surge_persistence::runs::RunReader,
+    at_seq: u64,
+) -> Result<crate::engine::execution_state::CursorSource, EngineError> {
+    let parent_state = crate::engine::execution_state::load(
+        reader,
+        crate::engine::execution_state::Position::AtSeq(at_seq),
+    )
+    .await
+    .map_err(|error| EngineError::ForkInvalid(format!("parent state at seq {at_seq}: {error}")))?;
+    match &parent_state.terminal_verdict {
+        surge_core::run_verdict::TerminalVerdict::Open => {},
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+            return Err(EngineError::ForkInvalid(format!(
+                "the parent's prefix ends the run at seq {}; fork at a --seq below it",
+                claim.seq
+            )));
+        },
+        surge_core::run_verdict::TerminalVerdict::Conflict { claims } => {
+            let first = claims.first().map_or(at_seq, |claim| claim.seq);
+            return Err(EngineError::ForkInvalid(format!(
+                "the parent's prefix has conflicting terminal history from seq {first}; fork at a --seq below it"
+            )));
+        },
+    }
+    Ok(parent_state.cursor_source)
 }
 
 async fn write_child_history(
@@ -252,9 +291,9 @@ async fn write_child_history(
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-        // Inherit the parent's latest snapshot at-or-before the fork point so the
-        // child resumes at the fork position rather than `graph.start`. Without
-        // this, `replay` would fall back to `graph.start` for a snapshot-less log.
+        // Inherit the parent's latest checkpoint at or before the fork point,
+        // so the child's latest execution state equals the parent's state at
+        // the fork point (#100), including its cursor source.
         if let Some((snap_seq, blob)) = inherited_snapshot {
             child_writer
                 .write_graph_snapshot(snap_seq, blob)
@@ -552,6 +591,7 @@ fn reject_task_fork(storage: &Storage, req: &ForkRequest) -> Result<(), EngineEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::execution_state::{self, CursorSource, Position as StatePosition};
     use std::collections::BTreeMap;
     use surge_core::agent_config::{AgentConfig, NodeLimits};
     use surge_core::approvals::ApprovalPolicy;
@@ -561,7 +601,6 @@ mod tests {
     use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
     use surge_core::node::{Node, NodeConfig, Position};
     use surge_core::run_event::RunConfig;
-    use surge_core::run_state::RunMemory;
     use surge_core::sandbox::SandboxMode;
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::reader::ReadEvent;
@@ -678,27 +717,6 @@ mod tests {
         }
     }
 
-    /// Fold the given events (whose `seq <= upto`) into a fresh `RunMemory`,
-    /// mirroring what `engine::replay::replay` does internally.
-    fn fold_to(events: &[ReadEvent], run_id: RunId, upto: u64) -> RunMemory {
-        use chrono::TimeZone;
-        let mut mem = RunMemory::default();
-        for ev in events.iter().filter(|e| e.seq.as_u64() <= upto) {
-            let timestamp = chrono::Utc
-                .timestamp_millis_opt(ev.timestamp_ms)
-                .single()
-                .unwrap();
-            let core = surge_core::run_event::RunEvent {
-                run_id,
-                seq: ev.seq.as_u64(),
-                timestamp,
-                payload: ev.payload.payload.clone(),
-            };
-            mem.apply_event(&core);
-        }
-        mem
-    }
-
     async fn read_all(storage: &Arc<Storage>, run_id: RunId) -> Vec<ReadEvent> {
         let reader = storage.open_run_reader(run_id).await.unwrap();
         let max = reader.current_seq().await.unwrap();
@@ -778,13 +796,20 @@ mod tests {
         let cevents = read_all(&storage, child).await;
         assert_eq!(cevents.len(), 3, "child must have exactly 3 copied events");
 
-        // Child fold == parent fold at seq 3 (the fork invariant).
+        // Child state == parent state at seq 3 (the fork invariant).
         let pevents = read_all(&storage, parent).await;
-        let parent_at_3 = fold_to(&pevents, parent, 3);
-        let child_fold = fold_to(&cevents, child, u64::MAX);
+        let preader = storage.open_run_reader(parent).await.unwrap();
+        let creader = storage.open_run_reader(child).await.unwrap();
+        let parent_at_3 = execution_state::load(&preader, StatePosition::AtSeq(3))
+            .await
+            .unwrap();
+        let child_state = execution_state::load(&creader, StatePosition::AtSeq(3))
+            .await
+            .unwrap();
+        drop((preader, creader));
         assert_eq!(
-            child_fold, parent_at_3,
-            "child fold must equal parent fold at seq 3"
+            child_state, parent_at_3,
+            "child state must equal parent state at seq 3"
         );
 
         // Parent recorded ForkCreated lineage.
@@ -806,7 +831,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_inherits_snapshot_so_child_resumes_at_fork_position() {
-        use crate::engine::replay::replay;
         use crate::engine::snapshot::EngineSnapshot;
         use surge_core::run_state::Cursor;
 
@@ -868,13 +892,77 @@ mod tests {
         // Replaying the child must resume at the fork position (mid_node),
         // inherited from the parent snapshot — not at graph.start ("end").
         let creader = storage.open_run_reader(child).await.unwrap();
-        let replayed = replay(&creader).await.expect("replay child");
+        let replayed = execution_state::load(&creader, StatePosition::Latest)
+            .await
+            .expect("load child state");
+        assert_eq!(replayed.cursor_source, CursorSource::Checkpoint { seq: 3 });
         assert_eq!(
             replayed.cursor.node,
             NodeKey::try_from("mid_node").unwrap(),
             "forked child must resume at the snapshot cursor, not graph.start"
         );
         drop(creader);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_refuses_a_prefix_that_ends_the_run() {
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let parent = RunId::new();
+        let worktree = dir.path().to_path_buf();
+        let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+
+        let graph = minimal_graph();
+        let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
+        let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
+            budget: BudgetGuard::default(),
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: vec![],
+        };
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: worktree.clone(),
+                    initial_prompt: String::new(),
+                    config,
+                }),
+                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash,
+                }),
+                VersionedEventPayload::new(EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("end").unwrap(),
+                }),
+            ])
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let terminal = fork(&storage, ForkRequest::new(parent, RunId::new(), 3)).await;
+        assert!(
+            matches!(&terminal, Err(EngineError::ForkInvalid(reason)) if reason.contains("ends the run at seq 3")),
+            "a prefix that ends the run must be refused, got {terminal:?}"
+        );
+        let child = RunId::new();
+        let open = fork(&storage, ForkRequest::new(parent, child, 2))
+            .await
+            .expect("the prefix below the terminal event forks");
+        assert_eq!(open.cursor_source, CursorSource::GraphStart);
+        for run in [parent, child] {
+            storage
+                .open_run_writer(run)
+                .await
+                .unwrap()
+                .close()
+                .await
+                .unwrap();
+        }
         drop(storage);
         dir.close().unwrap();
     }

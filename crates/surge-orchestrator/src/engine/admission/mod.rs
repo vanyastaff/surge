@@ -58,6 +58,7 @@ use surge_persistence::work_items::WorkItemLaunchClaim;
 use crate::engine::config::{EngineConfig, EngineRunConfig, RunSeedArtifact};
 use crate::engine::engine::ActiveRun;
 use crate::engine::error::EngineError;
+use crate::engine::execution_state::{self, ExecutionState, Position};
 use crate::engine::handle::RunOutcome;
 use crate::engine::owned_effects::OwnedFlowEffectFence;
 use crate::engine::quota_recovery::{ContinueEvidence, ResumeEvidence};
@@ -201,8 +202,10 @@ pub(crate) enum Admitted {
 pub(crate) struct AdmittedRun {
     /// The run's identity.
     pub run_id: RunId,
-    /// The graph to execute (fresh, or the latest replayed revision).
-    pub graph: Graph,
+    /// Where execution stands (#100): the latest execution state, loaded
+    /// right after the startup prefix (fresh) or from the log (resume). Its
+    /// graph is the graph to execute.
+    pub execution: ExecutionState,
     /// The run's worktree.
     pub worktree_path: PathBuf,
     /// The validated, frozen run configuration.
@@ -213,8 +216,9 @@ pub(crate) struct AdmittedRun {
     pub artifact_store: ArtifactStore,
     /// The launch claim of a task-claimed run.
     pub claim: Option<WorkItemLaunchClaim>,
-    /// Replayed state, for resumes.
-    pub resume: Option<ResumedState>,
+    /// What a resume found, for the capacity bypass rule; `None` for a
+    /// fresh start.
+    pub resume_evidence: Option<ResumeEvidence>,
     /// The owned-flow effect fence, for owned-Flow task runs.
     pub effect_fence: Option<Arc<OwnedFlowEffectFence>>,
     /// The per-run MCP registry.
@@ -227,24 +231,6 @@ pub(crate) struct AdmittedRun {
     pub capacity_ledger: Arc<dyn crate::engine::capacity::CapacityLedger>,
     /// The run's work estimator.
     pub capacity_estimator: Arc<dyn crate::engine::capacity::WorkEstimator>,
-}
-
-/// A resumed run's replayed position plus the evidence the quota module needs.
-pub(crate) struct ResumedState {
-    /// Cursor to resume from.
-    pub cursor: surge_core::run_state::Cursor,
-    /// Nested execution context captured with the cursor.
-    pub frames: Vec<crate::engine::frames::Frame>,
-    /// Traversal limits already consumed outside active loop frames.
-    pub root_traversal_counts: HashMap<surge_core::keys::EdgeKey, u32>,
-    /// Replayed run memory (gate retention already applied).
-    pub memory: surge_core::run_state::RunMemory,
-    /// Exact prefix folded into memory.
-    pub memory_applied_seq: u64,
-    /// Latest applied graph revision sequence.
-    pub applied_graph_revision_seq: u64,
-    /// What the resume found, for the capacity bypass rule.
-    pub evidence: ResumeEvidence,
 }
 
 /// Which validation steps apply.
@@ -546,9 +532,18 @@ impl Admission<'_> {
         if let Err(rejection) = prepared {
             return Err(close_rejected(writer, rejection).await);
         }
+        // Fresh start is "latest, right after the startup prefix" (#100): the
+        // same reconstruction a resume of this log would make.
+        let execution = match execution_state::load(&writer.reader(), Position::Latest)
+            .await
+            .map_err(state_rejection)
+        {
+            Ok(execution) => execution,
+            Err(rejection) => return Err(close_rejected(writer, rejection).await),
+        };
         self.assemble(
             run_id,
-            graph,
+            execution,
             worktree_path,
             run_config,
             writer,
@@ -704,11 +699,11 @@ impl Admission<'_> {
             return Err(AdmissionRejection::McpGroupNotStopped(diagnostic));
         }
 
-        // Read-only replay first: refuse a conflicting terminal history (#95)
+        // Read-only state first: refuse a conflicting terminal history (#95)
         // and validate the resumed graph before anything durable changes.
-        let preview = self.replay(run_id).await?;
+        let preview = self.load_state(run_id).await?;
         refuse_terminal_conflict(run_id, &preview.terminal_verdict)?;
-        let run_config = if preview.already_terminal.is_none() {
+        let run_config = if preview.terminal_verdict.terminal().is_none() {
             let mut run_config = self.restored_run_config(claim, &preview)?;
             self.validate(
                 &preview.graph,
@@ -724,17 +719,18 @@ impl Admission<'_> {
 
         let (writer, was_parked) = self.open_resumed_writer(run_id).await?;
 
-        let mut replayed = match self.replay(run_id).await {
-            Ok(replayed) => replayed,
+        let mut state = match self.load_state(run_id).await {
+            Ok(state) => state,
             Err(rejection) => return Err(close_rejected(writer, rejection).await),
         };
-        tracing::debug!(%run_id, "resume replay completed");
+        tracing::debug!(%run_id, position = state.position, "resume state loaded");
         // A conflict that appeared after the read-only check is still never
         // settled on one claim nor re-executed (#95).
-        if let Err(rejection) = refuse_terminal_conflict(run_id, &replayed.terminal_verdict) {
+        if let Err(rejection) = refuse_terminal_conflict(run_id, &state.terminal_verdict) {
             return Err(close_rejected(writer, rejection).await);
         }
-        if let Some(outcome) = replayed.already_terminal.take() {
+        if let Some(claim) = state.terminal_verdict.terminal() {
+            let outcome = RunOutcome::from_terminal(&claim.outcome);
             return Ok(Admitted::Terminal { writer, outcome });
         }
         // The log turned non-terminal between the two reads: impossible for
@@ -752,34 +748,25 @@ impl Admission<'_> {
         // only unanswered HumanGate occurrences so a stale card cannot
         // authorize the resumed run; normal stage execution emits a fresh ID.
         if claim.is_none() {
-            replayed.memory.gate_decisions.retain(|_, decision| {
+            state.memory.gate_decisions.retain(|_, decision| {
                 decision.response.is_some()
                     || decision.suspended
                     || decision.purpose != surge_core::run_state::GateDecisionPurpose::HumanGate
             });
         }
-        let resumed = ResumedState {
-            cursor: replayed.cursor,
-            frames: replayed.frames,
-            root_traversal_counts: replayed.root_traversal_counts,
-            memory: replayed.memory,
-            memory_applied_seq: replayed.memory_applied_seq,
-            applied_graph_revision_seq: replayed.applied_graph_revision_seq,
-            evidence: ResumeEvidence {
-                was_parked,
-                continue_control,
-            },
-        };
         let artifact_store = ArtifactStore::new(self.storage.home().join("runs"));
         self.assemble(
             run_id,
-            replayed.graph,
+            state,
             worktree_path,
             run_config,
             writer,
             artifact_store,
             claim,
-            Some(resumed),
+            Some(ResumeEvidence {
+                was_parked,
+                continue_control,
+            }),
         )
         .await
     }
@@ -834,16 +821,15 @@ impl Admission<'_> {
         Ok((writer, was_parked))
     }
 
-    async fn replay(
-        &self,
-        run_id: RunId,
-    ) -> Result<crate::engine::replay::ReplayedState, AdmissionRejection> {
+    async fn load_state(&self, run_id: RunId) -> Result<ExecutionState, AdmissionRejection> {
         let reader = self
             .storage
             .open_run_reader(run_id)
             .await
             .map_err(storage)?;
-        crate::engine::replay::replay(&reader).await.map_err(engine)
+        execution_state::load(&reader, Position::Latest)
+            .await
+            .map_err(state_rejection)
     }
 
     /// Reconstruct a resumed run's config: the reservation's frozen config
@@ -853,7 +839,7 @@ impl Admission<'_> {
     fn restored_run_config(
         &self,
         claim: Option<&WorkItemLaunchClaim>,
-        replayed: &crate::engine::replay::ReplayedState,
+        replayed: &ExecutionState,
     ) -> Result<EngineRunConfig, AdmissionRejection> {
         let mut config = match claim {
             Some(claim) => {
@@ -884,13 +870,13 @@ impl Admission<'_> {
     async fn assemble(
         &self,
         run_id: RunId,
-        graph: Graph,
+        execution: ExecutionState,
         worktree_path: PathBuf,
         run_config: EngineRunConfig,
         writer: RunWriter,
         artifact_store: ArtifactStore,
         claim: Option<&WorkItemLaunchClaim>,
-        resume: Option<ResumedState>,
+        resume_evidence: Option<ResumeEvidence>,
     ) -> Result<Admitted, AdmissionRejection> {
         let effect_fence = match self.owned_flow_effect_fence(&run_config, claim) {
             Ok(fence) => fence,
@@ -909,13 +895,13 @@ impl Admission<'_> {
         let agent_registry = self.agent_registry_for(&run_config);
         Ok(Admitted::Run(Box::new(AdmittedRun {
             run_id,
-            graph,
+            execution,
             worktree_path,
             run_config,
             writer,
             artifact_store,
             claim: claim.cloned(),
-            resume,
+            resume_evidence,
             effect_fence,
             mcp_registry,
             mcp_servers,
@@ -1079,6 +1065,15 @@ fn internal(error: EngineError) -> AdmissionRejection {
     match error {
         EngineError::Storage(message) => AdmissionRejection::Storage(message),
         other => AdmissionRejection::Internal(Box::new(other)),
+    }
+}
+
+fn state_rejection(error: execution_state::ExecutionStateError) -> AdmissionRejection {
+    match error {
+        execution_state::ExecutionStateError::Storage(message) => {
+            AdmissionRejection::Storage(message)
+        },
+        other => AdmissionRejection::Internal(Box::new(EngineError::from(other))),
     }
 }
 
