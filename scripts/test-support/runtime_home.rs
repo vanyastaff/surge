@@ -47,24 +47,33 @@ impl FixtureHome {
         } = self;
         #[cfg(windows)]
         {
-            const SHARING_VIOLATION: i32 = 32;
             drop(owner);
-            let path = outer.keep();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match std::fs::remove_dir_all(&path) {
-                    Ok(()) => return Ok(()),
-                    Err(error)
-                        if error.raw_os_error() == Some(SHARING_VIOLATION)
-                            && std::time::Instant::now() < deadline =>
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    },
-                    Err(error) => return Err(error),
-                }
-            }
+            remove_dir_waiting_for_handles(&outer.keep())
         }
         #[cfg(not(windows))]
         outer.close()
+    }
+}
+
+/// Windows error for a file another handle still holds open.
+#[cfg(windows)]
+const SHARING_VIOLATION: i32 = 32;
+
+/// Remove `path`, retrying only sharing violations for at most 5 s while
+/// background threads release dropped SQLite handles.
+#[cfg(windows)]
+fn remove_dir_waiting_for_handles(path: &std::path::Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let error = match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let retry = error.raw_os_error() == Some(SHARING_VIOLATION)
+            && std::time::Instant::now() < deadline;
+        if !retry {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
