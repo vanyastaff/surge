@@ -101,6 +101,15 @@ stage that was interrupted:
 - **Notify mid-flight** → retried.
 - **Terminal not yet appended** → appended on stage completion.
 
+An agent stage's provider session is owned by its session lease
+(`engine::stage::session_lease`): every session that ends in-process —
+including one that fails before its first prompt — is closed exactly once
+and its `SessionOpened` is paired with exactly one `SessionClosed`. The lease
+writes `SessionClosed` only after a confirmed close (a confirmed forced reap
+counts), because folding it marks the provider writer's cleanup confirmed.
+An unpaired `SessionOpened` therefore means the session may still have been
+live: the owning process died, or its close was never confirmed.
+
 The recovery decision carries the run's last `StageEntered` node
 (`active_node`) so operators get a per-stage view of where crashed runs
 were ("which stage were they at?").

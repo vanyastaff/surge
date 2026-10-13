@@ -107,6 +107,11 @@ mod bootstrap_profile_tests {
 
 pub mod recipe_admission;
 
+// Lets in-crate tests include the shared `tests/fixtures` modules, which name
+// this crate by its external path.
+#[cfg(test)]
+extern crate self as surge_orchestrator;
+
 #[cfg(test)]
 pub(crate) mod runtime_home_fixture {
     #[cfg(windows)]
