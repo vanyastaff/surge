@@ -6,6 +6,10 @@
 //! Continue). M5 treats Escalate as Reject (no escalation channels) and
 //! Continue without a default outcome as a configuration error.
 
+use crate::engine::human_decision::{
+    Deadline, Decision, DecisionOutcome, DecisionRequest, Resolver, RestoredRequest,
+    await_decision, verify_restored_contract,
+};
 use crate::engine::stage::{StageError, StageResult};
 use std::time::Duration;
 use surge_core::approvals::ApprovalChannel;
@@ -34,8 +38,10 @@ pub struct HumanGateStageParams<'a> {
     pub writer: &'a RunWriter,
     /// Accumulated run memory (currently unused in M5 rendering).
     pub run_memory: &'a RunMemory,
-    /// Receiver fed by `Engine::resolve_human_input`. `None` ⇒ test path (timeout immediately).
-    pub resolution_rx: Option<oneshot::Receiver<HumanGateResolution>>,
+    /// The run's node-keyed decision registry `Engine::resolve_gate_input`
+    /// answers through. `None` means nobody can answer: the gate can only
+    /// time out or be cancelled.
+    pub gate_resolutions: Option<&'a GateResolutions>,
     /// Cancel only the decision wait, never a decision's persistence sequence.
     pub cancel: &'a tokio_util::sync::CancellationToken,
     /// Default timeout sourced from `EngineRunConfig` if the gate doesn't override.
@@ -58,16 +64,6 @@ pub struct HumanGateResolution {
     pub response: serde_json::Value,
 }
 
-/// Node-keyed decision registry `Engine::resolve_human_input` drains.
-///
-/// Shared (behind an `Arc`) by `RunTaskParams::gate_resolutions` and any
-/// stage that pauses on an operator decision routed through the generic
-/// `HumanInputRequested`/`HumanInputResolved` pair — today `HumanGate`
-/// nodes and the skill-trust prompt
-/// (`engine::stage::skill_binding::bind_skills`). A caller registers a
-/// sender for its node immediately before requesting the decision (never
-/// earlier) so a stale, unread entry can never sit in the map — see
-/// `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
 /// An exact request and its owned response channel.
 pub struct PendingGate {
     /// Append-only capability from the same run writer owning this waiter.
@@ -81,7 +77,13 @@ pub struct PendingGate {
     pub sender: oneshot::Sender<HumanGateResolution>,
 }
 
-/// Pending node requests; request identity and sender share one lock.
+/// Node-keyed decision registry `Engine::resolve_gate_input` drains; request
+/// identity and sender share one lock.
+///
+/// Only `engine::human_decision` registers into it — immediately before the
+/// request becomes durable, never earlier — and removes its own entry on every
+/// exit path (ADR-0015). Today `HumanGate` nodes and the skill-trust prompt
+/// wait through it.
 pub type GateResolutions = tokio::sync::Mutex<std::collections::HashMap<NodeKey, PendingGate>>;
 
 /// Execute a single `NodeKind::HumanGate` stage.
@@ -134,45 +136,7 @@ async fn execute_gate(
         (None, HumanGateMode::Bootstrap { .. }) => None,
         (None, HumanGateMode::Generic) => Some(p.default_timeout),
     };
-    let timeout = if let Some(record) = restored {
-        match record
-            .schema
-            .as_ref()
-            .and_then(|schema| schema.get("x-surge-timeout-ms"))
-        {
-            Some(serde_json::Value::Null) => None,
-            Some(value) => Some(Duration::from_millis(value.as_u64().ok_or_else(|| {
-                StageError::RecoveryRequired("human gate has an invalid original deadline".into())
-            })?)),
-            None => {
-                return Err(StageError::RecoveryRequired(
-                    "human gate has no original deadline contract".into(),
-                ));
-            },
-        }
-    } else {
-        timeout
-    };
-    let remaining_timeout = timeout.map(|duration| {
-        let elapsed = restored
-            .and_then(|record| (chrono::Utc::now() - record.requested_at).to_std().ok())
-            .unwrap_or_default();
-        duration.saturating_sub(elapsed)
-    });
-    let deadline = async move {
-        match remaining_timeout {
-            Some(timeout) => tokio::time::sleep(timeout).await,
-            None => std::future::pending::<()>().await,
-        }
-    };
-    tokio::pin!(deadline);
-
     let mut schema = build_options_schema(&p.gate_config.options, p.gate_config.allow_freetext);
-    schema["x-surge-timeout-ms"] = timeout
-        .map(|timeout| u64::try_from(timeout.as_millis()).map(serde_json::Value::from))
-        .transpose()
-        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?
-        .unwrap_or(serde_json::Value::Null);
 
     // Bootstrap dispatch: when the gate guards a bootstrap stage, mirror the
     // generic request with lifecycle metadata for bootstrap observers.
@@ -206,115 +170,109 @@ async fn execute_gate(
             Some(*stage)
         },
     };
-
     if let Some(stage) = bootstrap_stage {
         schema["x-surge-bootstrap-stage"] = serde_json::json!(stage);
     }
-    let requested_seq = if let Some(record) = restored {
-        if record.conflicting
-            || record.node != *p.node
-            || record.request_id != p.request_id
-            || record.schema.as_ref() != Some(&schema)
-        {
-            return Err(StageError::RecoveryRequired(
-                "durable gate occurrence contradicts its current contract".into(),
-            ));
-        }
-        record.requested_seq
-    } else {
-        p.writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::HumanInputRequested {
-                    node: p.node.clone(),
-                    session: None,
-                    call_id: Some(p.request_id.to_string()),
-                    prompt: summary,
-                    schema: Some(schema),
+    if let Some(record) = restored
+        && (record.conflicting || record.node != *p.node || record.request_id != p.request_id)
+    {
+        return Err(StageError::RecoveryRequired(
+            "durable gate occurrence contradicts its current contract".into(),
+        ));
+    }
+
+    let (requested_seq, decision) =
+        if let Some(response) = restored.and_then(|record| record.response.as_ref()) {
+            // Already answered before the restart: nothing to wait for.
+            let record = restored.ok_or_else(|| {
+                StageError::RecoveryRequired("restored gate answer lacks its request".into())
+            })?;
+            verify_restored_contract(Some(schema), record.schema.as_ref())?;
+            let outcome = response
+                .get("outcome")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| OutcomeKey::try_from(value).ok())
+                .ok_or_else(|| {
+                    StageError::RecoveryRequired(
+                        "accepted gate response contradicts its original options".into(),
+                    )
+                })?;
+            (
+                record.requested_seq,
+                Decision {
+                    response: response.clone(),
+                    outcome: Some(outcome),
+                    resolved_seq: record_response_seq(restored)?,
                 },
-            ))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?
-            .as_u64()
-    };
-
-    // Holds the operator's freeform `comment` when present; carried into the
-    // BootstrapApprovalDecided / BootstrapEditRequested events below.
-    let mut decided_comment: Option<String> = None;
-    let mut accepted_answer = None;
-
-    let outcome = if let Some(response) = restored.and_then(|record| record.response.as_ref()) {
-        accepted_answer = Some((record_response_seq(restored)?, response.clone()));
-        decided_comment = response
-            .get("comment")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        let outcome = response
-            .get("outcome")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| OutcomeKey::try_from(value).ok())
-            .filter(|outcome| {
-                p.gate_config.allow_freetext
-                    || p.gate_config
+            )
+        } else {
+            let waited = await_decision(DecisionRequest {
+                writer: p.writer,
+                node: p.node,
+                resolver: Resolver::Gate {
+                    registry: p.gate_resolutions,
+                    request_id: p.request_id,
+                    allowed_outcomes: p
+                        .gate_config
                         .options
                         .iter()
-                        .any(|option| &option.outcome == outcome)
-            })
-            .ok_or_else(|| {
-                StageError::RecoveryRequired(
-                    "accepted gate response contradicts its original options".into(),
-                )
-            })?;
-        Some(outcome)
-    } else if let Some(rx) = p.resolution_rx {
-        tokio::select! {
-            biased;
-            () = p.cancel.cancelled() => return Err(StageError::Cancelled),
-            resolved = rx => match resolved {
-                Ok(res) => {
-                    decided_comment = res
-                        .response
-                        .get("comment")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned);
-                    let seq = persist_gate_resolution(p.writer, p.node, p.request_id, &res).await?;
-                    accepted_answer = Some((seq, res.response.clone()));
-                    Some(res.outcome)
-                }
-                Err(_) => None,
-            },
-            () = &mut deadline => None,
-        }
-    } else {
-        tokio::select! {
-            biased;
-            () = p.cancel.cancelled() => return Err(StageError::Cancelled),
-            () = &mut deadline => {},
-        }
-        None
-    };
-
-    let Some(final_outcome) = outcome else {
-        p.writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::HumanInputTimedOut {
-                    node: p.node.clone(),
-                    call_id: Some(p.request_id.to_string()),
-                    elapsed_seconds: timeout
-                        .map_or(u32::MAX, |t| u32::try_from(t.as_secs()).unwrap_or(u32::MAX)),
+                        .map(|option| option.outcome.clone())
+                        .collect(),
+                    allow_freetext: p.gate_config.allow_freetext,
                 },
-            ))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?;
-        match p.gate_config.on_timeout {
-            TimeoutAction::Reject | TimeoutAction::Escalate => {
-                return Err(StageError::HumanGateRejected);
-            },
-            TimeoutAction::Continue => {
-                // M5 has no default_outcome on HumanGateConfig; documented gap.
-                return Err(StageError::HumanGateContinueWithoutDefault);
-            },
-        }
-    };
+                prompt: summary,
+                schema: Some(schema),
+                deadline: timeout.map_or(Deadline::None, Deadline::After),
+                restored: restored.map(|record| RestoredRequest {
+                    requested_seq: record.requested_seq,
+                    requested_at: record.requested_at,
+                    recorded_schema: record.schema.as_ref(),
+                }),
+                cancel: p.cancel,
+                abandon: Vec::new(),
+            })
+            .await?;
+            match waited.outcome {
+                DecisionOutcome::Decided(decision) => (waited.requested_seq, decision),
+                DecisionOutcome::TimedOut { .. } => {
+                    return Err(match p.gate_config.on_timeout {
+                        TimeoutAction::Reject | TimeoutAction::Escalate => {
+                            StageError::HumanGateRejected
+                        },
+                        // M5 has no default_outcome on HumanGateConfig; documented gap.
+                        TimeoutAction::Continue => StageError::HumanGateContinueWithoutDefault,
+                    });
+                },
+                DecisionOutcome::Cancelled => return Err(StageError::Cancelled),
+                DecisionOutcome::Abandoned(reason) => {
+                    return Err(StageError::Internal(format!(
+                        "human gate wait abandoned: {reason:?}"
+                    )));
+                },
+            }
+        };
+    let final_outcome = decision
+        .outcome
+        .clone()
+        .filter(|outcome| {
+            p.gate_config.allow_freetext
+                || p.gate_config
+                    .options
+                    .iter()
+                    .any(|option| &option.outcome == outcome)
+        })
+        .ok_or_else(|| {
+            StageError::RecoveryRequired(
+                "accepted gate response contradicts its original options".into(),
+            )
+        })?;
+    // The operator's freeform `comment`, carried into the
+    // BootstrapApprovalDecided / BootstrapEditRequested events below.
+    let decided_comment = decision
+        .response
+        .get("comment")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
 
     let mut effects = Vec::new();
     let mut failure = None;
@@ -375,9 +333,11 @@ async fn execute_gate(
     }));
     // Required outcome and bootstrap side effects form one accepted batch.
     // The independently accepted human answer survives a rejected effect batch.
-    let (resolved_seq, response) = accepted_answer.ok_or_else(|| {
-        StageError::RecoveryRequired("gate effects lack an accepted answer".into())
-    })?;
+    let Decision {
+        response,
+        resolved_seq,
+        ..
+    } = decision;
     let entry = restored
         .map(|record| record.stage_entry_seq)
         .or_else(|| p.run_memory.stage_occurrences.get(p.node).copied())
@@ -431,43 +391,6 @@ fn bootstrap_decision_from_outcome(outcome: &OutcomeKey) -> Result<BootstrapDeci
         other => Err(StageError::Internal(format!(
             "unsupported bootstrap outcome: {other}"
         ))),
-    }
-}
-
-/// Validate an engine-committed answer or commit a direct stage-fixture answer.
-pub(crate) async fn persist_gate_resolution(
-    writer: &RunWriter,
-    node: &NodeKey,
-    request_id: surge_core::id::GateRequestId,
-    resolution: &HumanGateResolution,
-) -> Result<u64, StageError> {
-    if let Some(seq) = resolution.committed_seq {
-        let events = writer
-            .read_events(
-                surge_persistence::runs::EventSeq(seq)
-                    ..surge_persistence::runs::EventSeq(seq).next(),
-            )
-            .await
-            .map_err(|error| StageError::Storage(error.to_string()))?;
-        if !matches!(events.as_slice(), [event] if matches!(event.payload.payload(), EventPayload::HumanInputResolved { node: accepted_node, call_id: Some(call_id), response } if accepted_node==node && call_id==&request_id.to_string() && response==&resolution.response))
-        {
-            return Err(StageError::RecoveryRequired(
-                "gate response receipt contradicts its owned request".into(),
-            ));
-        }
-        Ok(seq)
-    } else {
-        let seq = writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::HumanInputResolved {
-                    node: node.clone(),
-                    call_id: Some(request_id.to_string()),
-                    response: resolution.response.clone(),
-                },
-            ))
-            .await
-            .map_err(|error| StageError::Storage(error.to_string()))?;
-        Ok(seq.as_u64())
     }
 }
 
@@ -656,13 +579,17 @@ mod tests {
         let node = NodeKey::try_from("description_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("edit").unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": "revise this"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": "revise this"}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -671,7 +598,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -715,13 +642,16 @@ mod tests {
             };
             let cancel = tokio_util::sync::CancellationToken::new();
             cancel.cancel();
-            let (tx, rx) = oneshot::channel();
-            tx.send(HumanGateResolution {
-                committed_seq: None,
-                outcome: "approve".try_into().unwrap(),
-                response: serde_json::json!({"outcome": "approve"}),
-            })
-            .unwrap();
+            let registry = crate::engine::human_decision::test_support::gate_registry();
+            let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+                registry.clone(),
+                node.clone(),
+                HumanGateResolution {
+                    committed_seq: None,
+                    outcome: "approve".try_into().unwrap(),
+                    response: serde_json::json!({"outcome": "approve"}),
+                },
+            );
             let result = tokio::time::timeout(
                 Duration::from_secs(2),
                 execute_human_gate_stage(HumanGateStageParams {
@@ -730,7 +660,7 @@ mod tests {
                     gate_config: &cfg,
                     writer: &writer,
                     run_memory: &memory,
-                    resolution_rx: with_receiver.then_some(rx),
+                    gate_resolutions: with_receiver.then_some(registry.as_ref()),
                     cancel: &cancel,
                     default_timeout: Duration::from_secs(60),
                     bootstrap_edit_loop_cap: 3,
@@ -760,20 +690,23 @@ mod tests {
         let mut memory = RunMemory::default();
         start_test_gate_occurrence(&writer, &mut memory, &node, 3).await;
         let cancel = tokio_util::sync::CancellationToken::new();
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: "edit".try_into().unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": "revise"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: "edit".try_into().unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": "revise"}),
+            },
+        );
         let stage = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &memory,
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             cancel: &cancel,
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -835,7 +768,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: None,
+            gate_resolutions: None,
             default_timeout: Duration::from_millis(10),
             bootstrap_edit_loop_cap: 3,
         })
@@ -861,13 +794,17 @@ mod tests {
         let node = NodeKey::try_from("approve_plan").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("approve").unwrap(),
-            response: serde_json::json!({"outcome": "approve"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("approve").unwrap(),
+                response: serde_json::json!({"outcome": "approve"}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -876,7 +813,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -900,13 +837,17 @@ mod tests {
         let node = NodeKey::try_from("description_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("approve").unwrap(),
-            response: serde_json::json!({"outcome": "approve", "comment": "looks good"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("approve").unwrap(),
+                response: serde_json::json!({"outcome": "approve", "comment": "looks good"}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -915,7 +856,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -959,16 +900,26 @@ mod tests {
         let node = NodeKey::try_from("roadmap_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        let operator = tokio::spawn(async move {
-            // Well past the 10ms run default.
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            let _ = tx.send(HumanGateResolution {
-                committed_seq: None,
-                outcome: OutcomeKey::try_from("approve").unwrap(),
-                response: serde_json::json!({"outcome": "approve"}),
-            });
-        });
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+        let operator = {
+            let registry = registry.clone();
+            let node = node.clone();
+            tokio::spawn(async move {
+                // Well past the 10ms run default.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                crate::engine::human_decision::test_support::answer_when_registered(
+                    registry,
+                    node,
+                    HumanGateResolution {
+                        committed_seq: None,
+                        outcome: OutcomeKey::try_from("approve").unwrap(),
+                        response: serde_json::json!({"outcome": "approve"}),
+                    },
+                )
+                .await
+                .unwrap();
+            })
+        };
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -977,7 +928,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_millis(10),
             bootstrap_edit_loop_cap: 3,
         })
@@ -1004,14 +955,17 @@ mod tests {
         let node = NodeKey::try_from("roadmap_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
         let feedback = "tighten the M3 milestone scope";
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("edit").unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": feedback}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": feedback}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -1020,7 +974,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -1085,13 +1039,17 @@ mod tests {
         let node = NodeKey::try_from("flow_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("reject").unwrap(),
-            response: serde_json::json!({"outcome": "reject", "comment": "off-track"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("reject").unwrap(),
+                response: serde_json::json!({"outcome": "reject", "comment": "off-track"}),
+            },
+        );
 
         let result = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -1100,7 +1058,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -1166,13 +1124,17 @@ mod tests {
         let node = NodeKey::try_from("roadmap_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("edit").unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": "tighten"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": "tighten"}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -1181,7 +1143,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -1220,13 +1182,17 @@ mod tests {
         let node = NodeKey::try_from("description_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("edit").unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": "again"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": "again"}),
+            },
+        );
 
         let result = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -1235,7 +1201,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
         })
@@ -1291,13 +1257,17 @@ mod tests {
         let node = NodeKey::try_from("flow_gate").unwrap();
         start_test_gate_occurrence(&writer, &mut mem, &node, 0).await;
 
-        let (tx, rx) = oneshot::channel();
-        tx.send(HumanGateResolution {
-            committed_seq: None,
-            outcome: OutcomeKey::try_from("edit").unwrap(),
-            response: serde_json::json!({"outcome": "edit", "comment": "again"}),
-        })
-        .unwrap();
+        let registry = crate::engine::human_decision::test_support::gate_registry();
+
+        let _answer = crate::engine::human_decision::test_support::answer_when_registered(
+            registry.clone(),
+            node.clone(),
+            HumanGateResolution {
+                committed_seq: None,
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+                response: serde_json::json!({"outcome": "edit", "comment": "again"}),
+            },
+        );
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
             request_id: surge_core::id::GateRequestId::new(),
@@ -1306,7 +1276,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             cancel: &tokio_util::sync::CancellationToken::new(),
-            resolution_rx: Some(rx),
+            gate_resolutions: Some(registry.as_ref()),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 0,
         })
