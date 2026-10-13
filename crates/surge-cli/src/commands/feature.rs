@@ -1,10 +1,8 @@
 //! `surge feature` — roadmap amendment workflow.
 
-use std::collections::HashMap;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
@@ -21,11 +19,8 @@ use surge_core::sandbox::SandboxMode;
 use surge_core::{ContentHash, RunId, SurgeConfig};
 use surge_git::GitManager;
 use surge_orchestrator::engine::DaemonEngineFacade;
-use surge_orchestrator::engine::hooks::HookExecutor;
-use surge_orchestrator::engine::tools::ToolDispatcher;
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::feature_driver::{
-    FeaturePlannerParams, FeaturePlannerResult, ToolResolutionMap, run_feature_planner,
+    FEATURE_PLANNER_DEADLINE, FeaturePlannerParams, FeaturePlannerResult, run_feature_planner,
 };
 use surge_orchestrator::roadmap_amendment::{
     EngineSource, NotAppliedReason, PatchApplyOutcome, PatchApplyPorts, PatchApplyTarget,
@@ -461,20 +456,17 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
     let bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade> = Arc::new(
         surge_acp::bridge::AcpBridge::with_defaults().context("AcpBridge::with_defaults")?,
     );
-    let tool_dispatcher: Arc<dyn ToolDispatcher> =
-        Arc::new(WorktreeToolDispatcher::new(flow.worktree.clone()));
     let profile_registry = Arc::new(
         surge_orchestrator::profile_loader::ProfileRegistry::load()
             .context("load profile registry")?,
     );
-    let hook_executor = HookExecutor::new();
-    let tool_resolutions: ToolResolutionMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    let memory = surge_core::run_state::RunMemory::default();
-
     progress(
         flow.args.json,
         format_args!("planner_run_id={}", flow.planner_run_id),
     );
+    // Ctrl-C cancels the planner only while it runs; the approval prompt
+    // after it exits on Ctrl-C as usual.
+    let cancel = super::common::cancel_on_ctrl_c();
     let result = run_feature_planner(FeaturePlannerParams {
         request: flow.prompt.clone(),
         roadmap: flow.roadmap_prompt.clone(),
@@ -482,17 +474,16 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
         writer: flow.writer,
         artifact_store: &artifact_store,
         worktree_path: &flow.worktree,
-        tool_dispatcher: &tool_dispatcher,
-        run_memory: &memory,
         run_id: flow.planner_run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(300),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
         profile_registry,
-        hook_executor: &hook_executor,
+        // The operator's `[agents.*]` over builtins (ADR-0019).
+        agent_registry: Some(Arc::new(surge_acp::Registry::for_run(&flow.config))),
+        cancel: cancel.token(),
+        deadline: FEATURE_PLANNER_DEADLINE,
     })
-    .await?;
+    .await;
+    drop(cancel);
+    let result = result?;
 
     match result {
         FeaturePlannerResult::OutOfScope => emit_output(

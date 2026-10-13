@@ -189,6 +189,11 @@ fn main() -> std::process::ExitCode {
             None => (surge_core::SurgeConfig::default(), false),
         };
         let agent_registry = Arc::new(surge_acp::Registry::for_run(&config));
+        // Triage resolves its agent through the same registries as runs (#99).
+        let triage_registries = TriageRegistries {
+            profiles: profile_registry.clone(),
+            agents: Arc::clone(&agent_registry),
+        };
 
         let engine = Arc::new(Engine::new_full(
             Arc::clone(&bridge),
@@ -421,6 +426,7 @@ fn main() -> std::process::ExitCode {
                 Arc::clone(&storage),
                 Arc::clone(&bridge),
                 Arc::clone(&facade),
+                triage_registries.clone(),
             )
             .await
             {
@@ -611,6 +617,14 @@ async fn deliver_desktop(
     }
 }
 
+/// The registries the Triage Author resolves through: the same profile and
+/// agent registries runs use (ADR-0019, #99).
+#[derive(Clone)]
+struct TriageRegistries {
+    profiles: Arc<surge_orchestrator::profile_loader::ProfileRegistry>,
+    agents: Arc<surge_acp::Registry>,
+}
+
 /// Handle a single `RouterOutput::Triage` event end-to-end.
 ///
 /// Pipeline: source lookup → `fetch_task` → candidate assembly →
@@ -626,6 +640,7 @@ async fn handle_triage_event(
     notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
     storage: &Arc<Storage>,
     bridge: &Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
+    triage: &TriageRegistries,
 ) {
     // Step 1: look up source.
     let source = match source_map.get(&event.source_id).cloned() {
@@ -704,7 +719,8 @@ async fn handle_triage_event(
     let scratch_root = storage.home().join("intake").join("triage");
     let opts = surge_orchestrator::triage::TriageOptions::with_scratch_root(
         scratch_root,
-        surge_orchestrator::triage::find_claude_binary(),
+        Arc::clone(&triage.profiles),
+        Some(Arc::clone(&triage.agents)),
     );
 
     // Step 7: dispatch and route the four-way decision.
@@ -1401,6 +1417,7 @@ async fn spawn_task_router(
     storage: Arc<Storage>,
     bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
     engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    triage: TriageRegistries,
 ) -> Option<(
     Arc<HashMap<String, Arc<dyn TaskSource>>>,
     Arc<TokioMutex<rusqlite::Connection>>,
@@ -1482,6 +1499,7 @@ async fn spawn_task_router(
                         &notifier_for_consumer,
                         &storage_for_consumer,
                         &bridge_for_consumer,
+                        &triage,
                     )
                     .await;
                 },

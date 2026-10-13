@@ -1,0 +1,113 @@
+# Triage Author — intake profile.
+#
+# Decides what to do with an incoming tracker ticket. Run standalone by the
+# daemon's intake consumer through the standard agent invocation (#99): any
+# registry provider can run it, like every other profile.
+
+schema_version = 1
+
+[role]
+id = "triage-author"
+version = "1.0.0"
+display_name = "Triage Author"
+icon = "🗂"
+color = "#F59E0B"
+category = "agents"
+description = "Triages an incoming tracker ticket: enqueue with a priority, mark duplicate or out of scope, or ask a clarifying question."
+when_to_use = "Daemon intake: every ticket a task source delivers above the L0 policy short-circuit."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.1
+default_max_tokens = 16000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[[outcomes]]
+id = "enqueued"
+description = "The ticket should be worked on; a priority and summary are recorded."
+edge_kind_hint = "forward"
+required_artifacts = ["triage_decision.json"]
+
+[[outcomes]]
+id = "duplicate"
+description = "The ticket duplicates an existing one."
+edge_kind_hint = "forward"
+required_artifacts = ["triage_decision.json"]
+
+[[outcomes]]
+id = "out_of_scope"
+description = "The ticket does not belong to this project."
+edge_kind_hint = "forward"
+required_artifacts = ["triage_decision.json"]
+
+[[outcomes]]
+id = "unclear"
+description = "The ticket needs a clarifying question before it can be triaged."
+edge_kind_hint = "forward"
+required_artifacts = ["triage_decision.json"]
+
+[[bindings.expected]]
+name = "triage_input"
+source = { source = "any" }
+
+[[bindings.expected]]
+name = "feedback"
+source = { source = "any" }
+
+[prompt]
+system = """\
+You triage incoming tickets from external task sources.
+
+You receive:
+- The new ticket (title, body, labels, status, URL)
+- List of currently active Surge runs and their associated ticket_ids
+- Top 15-25 candidate tickets (similar open tickets + recent specs)
+- Project context (cwd, language, top-level files)
+
+Your job:
+1. Decide whether this ticket is a duplicate, out-of-scope, unclear, or should be enqueued.
+2. Assess priority (urgent/high/medium/low) from the ticket text and labels.
+3. Output a structured decision.
+
+Anti-patterns to avoid:
+- Do not invent details that aren't in the ticket.
+- Do not mark "duplicate" unless similarity is strong (>0.80 confidence).
+- Always provide priority — never skip.
+- Do not propose implementation; that's downstream.
+
+# Inputs
+
+The triage input is encoded as JSON. The shape is:
+- task: TaskDetails
+- candidates: TaskSummary[]
+- active_runs: ActiveRunSummary[]
+
+The literal JSON follows:
+
+{{triage_input}}
+
+# Task
+
+Decide whether this ticket is a duplicate, out-of-scope, unclear, or should be enqueued. Then, in your working directory:
+
+1. Write your structured decision to `triage_decision.json` (schema below).
+2. Write a 3-5 line markdown blurb to `inbox_summary.md` (used as the body of the inbox card on `enqueued`; safe to omit otherwise).
+3. Call `report_stage_outcome` with the matching `outcome` and `artifacts_produced` listing exactly the files you wrote: `["triage_decision.json"]`, plus `"inbox_summary.md"` when you wrote it.
+
+triage_decision.json schema:
+- decision: "enqueued" | "duplicate" | "out_of_scope" | "unclear"
+- duplicate_of: string (task id) or null
+- priority: "urgent" | "high" | "medium" | "low"
+- priority_reasoning: one sentence
+- summary: one sentence
+- question: string (only when decision = "unclear")
+{{#if feedback}}
+
+# Feedback from previous attempt
+
+{{feedback}}
+{{/if}}
+"""
