@@ -425,6 +425,7 @@ impl Storage {
             lifecycle: spawned.lifecycle,
             lease,
             closed: false,
+            clock: self.clock.clone(),
         })
     }
 

@@ -73,11 +73,9 @@ pub(crate) struct RunTaskParams {
     /// Latest accepted graph revision sequence that was durably applied to
     /// the active graph at a stage boundary.
     pub resume_applied_graph_revision_seq: Option<u64>,
-    /// Node-keyed decision registry (`node_key → oneshot::Sender<HumanGateResolution>`).
-    /// Engine's `resolve_human_input` finds the sender and fires it — for a
-    /// `HumanGate` node's own pause, and for the skill-trust prompt
-    /// (`engine::stage::skill_binding::bind_skills`) sharing the same
-    /// registry.
+    /// Node-keyed decision registry (`node_key → PendingGate`). The engine's
+    /// resolve side finds the sender and fires it; `engine::human_decision`
+    /// owns registration for `HumanGate` nodes and the skill-trust prompt.
     pub gate_resolutions: std::sync::Arc<crate::engine::stage::human_gate::GateResolutions>,
     /// Map of `call_id → oneshot::Sender<serde_json::Value>`.
     /// Engine's `resolve_human_input` finds the sender and fires it for
@@ -1917,6 +1915,7 @@ async fn bind_declared_skills(
         gate_enabled,
         gate_resolutions: Some(params.gate_resolutions.as_ref()),
         approval_timeout: params.run_config.human_input_timeout,
+        cancel: &params.cancel,
     })
     .await
 }
@@ -2136,7 +2135,6 @@ async fn execute_human_gate_node(
     state: &RunExecutionState,
     cfg: &surge_core::human_gate_config::HumanGateConfig,
 ) -> Result<StageOutcome, StageError> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
     let records: Vec<_> = state
         .memory
         .gate_decisions
@@ -2170,27 +2168,13 @@ async fn execute_human_gate_node(
     let request_id = restored.map_or_else(surge_core::id::GateRequestId::new, |record| {
         record.request_id
     });
-    params.gate_resolutions.lock().await.insert(
-        state.cursor.node.clone(),
-        crate::engine::stage::human_gate::PendingGate {
-            recorder: params.writer.event_recorder(),
-            allow_freetext: cfg.allow_freetext,
-            allowed_outcomes: cfg
-                .options
-                .iter()
-                .map(|option| option.outcome.clone())
-                .collect(),
-            request_id,
-            sender: tx,
-        },
-    );
     let gate_params = HumanGateStageParams {
         request_id,
         node: &state.cursor.node,
         gate_config: cfg,
         writer: &params.writer,
         run_memory: &state.memory,
-        resolution_rx: Some(rx),
+        gate_resolutions: Some(params.gate_resolutions.as_ref()),
         cancel: &params.cancel,
         default_timeout: params.run_config.human_input_timeout,
         bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
@@ -2200,14 +2184,6 @@ async fn execute_human_gate_node(
     } else {
         execute_human_gate_stage(gate_params).await
     };
-    let mut gate_resolutions = params.gate_resolutions.lock().await;
-    if gate_resolutions
-        .get(&state.cursor.node)
-        .is_some_and(|pending| pending.request_id == request_id)
-    {
-        gate_resolutions.remove(&state.cursor.node);
-    }
-    drop(gate_resolutions);
     result.map(StageOutcome::Routed)
 }
 

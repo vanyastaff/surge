@@ -33,8 +33,10 @@ use surge_core::keys::NodeKey;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_core::skill::{ResolvedSkill, SkillCatalog, SkillError, SkillProvider, SkillRef};
 use surge_persistence::runs::run_writer::RunWriter;
-use tokio::sync::oneshot;
 
+use crate::engine::human_decision::{
+    Deadline, Decision, DecisionOutcome, DecisionRequest, Resolver, await_decision,
+};
 use crate::engine::stage::StageError;
 use crate::engine::stage::human_gate::GateResolutions;
 
@@ -81,6 +83,9 @@ pub struct SkillBindingParams<'a> {
     pub gate_resolutions: Option<&'a GateResolutions>,
     /// How long to wait for a decision before treating the prompt as denied.
     pub approval_timeout: Duration,
+    /// The run's cancellation token: stopping the run ends a pending
+    /// approval at once as [`StageError::Cancelled`], never as a timeout.
+    pub cancel: &'a tokio_util::sync::CancellationToken,
 }
 
 /// Bind `params.declared` skills onto `params.node`.
@@ -132,6 +137,7 @@ pub async fn bind_skills(params: SkillBindingParams<'_>) -> Result<Vec<BoundSkil
                     .collect(),
                 params.gate_resolutions,
                 params.approval_timeout,
+                params.cancel,
             )
             .await?;
         }
@@ -382,11 +388,9 @@ fn approval_response_schema() -> serde_json::Value {
 /// `HumanInputTimedOut` events a `HumanGate` node uses — the path
 /// `cockpit::dispatch::decide_action` and `surge inbox` already render —
 /// rather than the `ApprovalRequested`/`ApprovalDecided` pair, which no
-/// surface renders. The decision-channel sender is registered into
-/// `gate_resolutions` only here, immediately before the request is
-/// durable, never earlier: a node whose skills never need this function has
-/// no entry in the registry to leak, and a node that does can never leave a
-/// stale unread entry behind (the bug this replaces).
+/// surface renders. The wait itself — registration immediately before the
+/// durable request, the deadline contract, cancellation, and identity-checked
+/// deregistration — is `engine::human_decision`'s.
 async fn request_and_await_approval(
     node: &NodeKey,
     writer: &RunWriter,
@@ -394,99 +398,48 @@ async fn request_and_await_approval(
     bindings: Vec<SkillRef>,
     gate_resolutions: Option<&GateResolutions>,
     timeout: Duration,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(), StageError> {
-    let request_id = surge_core::id::GateRequestId::new();
-    let rx = match gate_resolutions {
-        Some(registry) => {
-            let (tx, rx) = oneshot::channel();
-            registry.lock().await.insert(
-                node.clone(),
-                crate::engine::stage::human_gate::PendingGate {
-                    recorder: writer.event_recorder(),
-                    allow_freetext: false,
-                    allowed_outcomes: vec![
-                        surge_core::OutcomeKey::try_from("approve")
-                            .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
-                        surge_core::OutcomeKey::try_from("reject")
-                            .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
-                    ],
-                    request_id,
-                    sender: tx,
-                },
-            );
-            Some(rx)
-        },
-        None => None,
-    };
-
     let mut schema = approval_response_schema();
     schema["x-surge-skill-bindings"] = serde_json::to_value(bindings)
         .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputRequested {
-                node: node.clone(),
-                session: None,
-                call_id: Some(request_id.to_string()),
-                prompt,
-                schema: Some(schema),
-            },
-        ))
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-
-    let resolution = if let Some(rx) = rx {
-        tokio::select! {
-            resolved = rx => resolved.ok(),
-            () = tokio::time::sleep(timeout) => None,
-        }
-    } else {
-        tokio::time::sleep(timeout).await;
-        None
-    };
-
-    // The registry entry is consumed by a resolving `Engine::resolve_human_
-    // input` call already; this covers the timeout path, where it must
-    // still be removed so a later, stray decision can't land on a receiver
-    // nobody is waiting on anymore.
-    if let Some(registry) = gate_resolutions {
-        registry.lock().await.remove(node);
-    }
-
-    // Mirrors `HumanGate`'s own event shape: any actual response — approve
-    // or reject — appends `HumanInputResolved` with the response verbatim;
-    // only a genuine non-response (channel dropped or timeout elapsed)
-    // appends `HumanInputTimedOut`. Only the canonical "approve" outcome
-    // grants trust; anything else (an explicit "reject", or no response at
-    // all) fails closed.
-    match &resolution {
-        Some(res) => {
-            crate::engine::stage::human_gate::persist_gate_resolution(
-                writer, node, request_id, res,
-            )
-            .await?;
+    let decision = await_decision(DecisionRequest {
+        writer,
+        node,
+        resolver: Resolver::Gate {
+            registry: gate_resolutions,
+            request_id: surge_core::id::GateRequestId::new(),
+            allowed_outcomes: vec![
+                surge_core::OutcomeKey::try_from("approve")
+                    .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
+                surge_core::OutcomeKey::try_from("reject")
+                    .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
+            ],
+            allow_freetext: false,
         },
-        None => {
-            writer
-                .append_event(VersionedEventPayload::new(
-                    EventPayload::HumanInputTimedOut {
-                        node: node.clone(),
-                        call_id: Some(request_id.to_string()),
-                        elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
-                    },
-                ))
-                .await
-                .map_err(|e| StageError::Storage(e.to_string()))?;
-        },
-    }
+        prompt,
+        schema: Some(schema),
+        deadline: Deadline::After(timeout),
+        restored: None,
+        cancel,
+        abandon: Vec::new(),
+    })
+    .await?;
 
-    let approved = resolution
-        .as_ref()
-        .is_some_and(|res| res.outcome.as_ref() == "approve");
-    if approved {
-        Ok(())
-    } else {
-        Err(StageError::SkillApprovalRejected)
+    // Fail-closed (ADR-0015): only an explicit, durable "approve" grants
+    // trust; a reject or a timeout denies binding.
+    match decision.outcome {
+        DecisionOutcome::Decided(Decision {
+            outcome: Some(outcome),
+            ..
+        }) if outcome.as_ref() == "approve" => Ok(()),
+        DecisionOutcome::Decided(_) | DecisionOutcome::TimedOut { .. } => {
+            Err(StageError::SkillApprovalRejected)
+        },
+        DecisionOutcome::Cancelled => Err(StageError::Cancelled),
+        DecisionOutcome::Abandoned(reason) => Err(StageError::Internal(format!(
+            "skill approval abandoned: {reason:?}"
+        ))),
     }
 }
 
@@ -613,6 +566,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_millis(20),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -697,6 +651,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -749,6 +704,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -805,6 +761,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_millis(10),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -856,6 +813,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: None,
             approval_timeout: Duration::from_millis(10),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -924,6 +882,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1001,6 +960,7 @@ mod tests {
             gate_enabled: false,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_millis(10),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1065,6 +1025,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: None,
             approval_timeout: Duration::from_millis(10),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1134,6 +1095,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: None,
             approval_timeout: Duration::from_millis(20),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await
         .unwrap();
@@ -1151,6 +1113,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: None,
             approval_timeout: Duration::from_millis(20),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await
         .unwrap();
@@ -1253,6 +1216,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_millis(20),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1312,6 +1276,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1390,6 +1355,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 
@@ -1475,6 +1441,7 @@ mod tests {
             gate_enabled: true,
             gate_resolutions: Some(&registry),
             approval_timeout: Duration::from_secs(5),
+            cancel: &tokio_util::sync::CancellationToken::new(),
         })
         .await;
 

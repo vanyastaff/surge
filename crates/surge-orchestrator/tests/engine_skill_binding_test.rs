@@ -839,3 +839,94 @@ async fn approved_skill_completion_fixture(revisit: bool) {
     }
     dir.close().unwrap();
 }
+
+/// Stopping a run while its skill-trust prompt is pending ends the wait at
+/// once and records the stop, never a timeout (#96). Engine cancellation is
+/// cooperative, so a wait that ignores the run's cancellation token would
+/// hold the run until the (here one-hour) human-input timeout and then end
+/// it `Failed` with an invented `HumanInputTimedOut`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopping_a_run_during_skill_approval_aborts_without_a_timeout() {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        write_project_skill(dir.path(), "reviewer", "code-reviewer", "Review carefully.");
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+        let declared = vec![SkillRef {
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            version: None,
+            hash: None, // unpinned — always requires approval
+        }];
+        let run_id = RunId::new();
+        let run_config = EngineRunConfig {
+            human_input_timeout: Duration::from_secs(3600),
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
+            ..EngineRunConfig::default()
+        };
+        let handle = engine
+            .start_run(
+                run_id,
+                graph_with_declared_skill(declared),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .expect("start_run");
+        let mut watch = SkillRunWatch::new(&engine, &storage, handle, async {}, deadline);
+        let _ = watch.gate(0).await;
+
+        engine
+            .stop_run(run_id, "operator stop".into())
+            .await
+            .expect("stop_run");
+        let outcome = tokio::time::timeout(Duration::from_secs(5), watch.finish())
+            .await
+            .expect("a stopped run must not wait out the human-input timeout");
+        assert!(
+            matches!(outcome, RunOutcome::Aborted { .. }),
+            "a stopped run is aborted, got {outcome:?}"
+        );
+        assert!(
+            mock.recorded_calls.lock().await.is_empty(),
+            "the node never started"
+        );
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(128),
+            )
+            .await
+            .unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|re| re.payload.payload.discriminant_str())
+            .collect();
+        assert_eq!(
+            kinds.iter().filter(|kind| **kind == "RunAborted").count(),
+            1,
+            "exactly one RunAborted, got {kinds:?}"
+        );
+        for forbidden in [
+            "HumanInputTimedOut",
+            "HumanInputResolved",
+            "SkillBound",
+            "StageFailed",
+            "RunFailed",
+        ] {
+            assert!(
+                !kinds.contains(&forbidden),
+                "a stop must not record {forbidden}, got {kinds:?}"
+            );
+        }
+    }
+    memory_dir.close().unwrap();
+}

@@ -43,6 +43,7 @@ pub mod frames;
 mod gate_answers;
 pub mod handle;
 pub mod hooks;
+pub(crate) mod human_decision;
 pub mod ipc;
 mod owned_effects;
 pub mod owned_flow;

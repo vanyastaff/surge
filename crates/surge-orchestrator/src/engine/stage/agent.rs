@@ -1963,78 +1963,69 @@ async fn execute_agent_attempt(
                     None => question.clone(),
                 };
 
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                p.tool_resolutions.lock().await.insert(call_id.clone(), tx);
-                let requested = p.writer
-                    .append_event(VersionedEventPayload::new(
-                        EventPayload::HumanInputRequested {
-                            node: p.node.clone(),
-                            session: Some(session_id),
-                            call_id: Some(call_id.clone()),
-                            prompt,
-                            schema: None,
+                let waited = crate::engine::human_decision::await_decision(
+                    crate::engine::human_decision::DecisionRequest {
+                        writer: p.writer,
+                        node: p.node,
+                        resolver: crate::engine::human_decision::Resolver::Tool {
+                            registry: p.tool_resolutions.as_ref(),
+                            call_id: call_id.clone(),
+                            session: session_id,
                         },
-                    ))
-                    .await;
-                if let Err(error) = requested {
-                    p.tool_resolutions.lock().await.remove(&call_id);
-                    return Err(StageError::Storage(error.to_string()));
-                }
-
-                let resolved = tokio::select! {
-                    biased;
-                    () = p.cancel.cancelled() => Err(StageError::Cancelled),
-                    () = prompt_finished.cancelled() => Err(StageError::Bridge("prompt ended while human input was pending".into())),
-                    () = stage_calls.disconnected(&call_id) => Err(StageError::Bridge("MCP caller disconnected while human input was pending".into())),
-                    response = rx => response.map(Some).map_err(|_| StageError::Cancelled),
-                    () = tokio::time::sleep(p.human_input_timeout) => Ok(None),
+                        prompt,
+                        schema: None,
+                        deadline: crate::engine::human_decision::Deadline::After(
+                            p.human_input_timeout,
+                        ),
+                        restored: None,
+                        cancel: &p.cancel,
+                        abandon: vec![
+                            (
+                                crate::engine::human_decision::AbandonReason::PromptFinished,
+                                Box::pin(prompt_finished.cancelled()),
+                            ),
+                            (
+                                crate::engine::human_decision::AbandonReason::CallerDisconnected,
+                                Box::pin(stage_calls.disconnected(&call_id)),
+                            ),
+                        ],
+                    },
+                )
+                .await?;
+                let reply = match waited.outcome {
+                    crate::engine::human_decision::DecisionOutcome::Decided(decision) => {
+                        AcpResultPayload::Ok {
+                            result_json: decision.response.to_string(),
+                        }
+                    },
+                    crate::engine::human_decision::DecisionOutcome::TimedOut { .. } => {
+                        AcpResultPayload::Error {
+                            message: "human input timed out".into(),
+                        }
+                    },
+                    crate::engine::human_decision::DecisionOutcome::Cancelled => {
+                        return Err(StageError::Cancelled);
+                    },
+                    crate::engine::human_decision::DecisionOutcome::Abandoned(reason) => {
+                        return Err(StageError::Bridge(match reason {
+                            crate::engine::human_decision::AbandonReason::PromptFinished => {
+                                "prompt ended while human input was pending".into()
+                            },
+                            crate::engine::human_decision::AbandonReason::CallerDisconnected => {
+                                "MCP caller disconnected while human input was pending".into()
+                            },
+                            crate::engine::human_decision::AbandonReason::ChannelClosed => {
+                                "human input channel closed without an answer".into()
+                            },
+                        }));
+                    },
                 };
-
-                p.tool_resolutions.lock().await.remove(&call_id);
-
-                if let Some(response) = resolved? {
-                    p.writer
-                        .append_event(VersionedEventPayload::new(
-                            EventPayload::HumanInputResolved {
-                                node: p.node.clone(),
-                                call_id: Some(call_id.clone()),
-                                response: response.clone(),
-                            },
-                        ))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                    stage_calls
-                        .reply(p.writer, p.bridge.as_ref(),
-                            session_id,
-                            call_id,
-                            AcpResultPayload::Ok {
-                                result_json: response.to_string(),
-                            },
-                        )
-                        .await
-                        .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
-                } else {
-                    p.writer
-                        .append_event(VersionedEventPayload::new(
-                            EventPayload::HumanInputTimedOut {
-                                node: p.node.clone(),
-                                call_id: Some(call_id.clone()),
-                                elapsed_seconds: u32::try_from(p.human_input_timeout.as_secs())
-                                    .unwrap_or(u32::MAX),
-                            },
-                        ))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                    stage_calls
-                        .reply(p.writer, p.bridge.as_ref(),
-                            session_id,
-                            call_id,
-                            AcpResultPayload::Error {
-                                message: "human input timed out".into(),
-                            },
-                        )
-                        .await
-                        .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                let timed_out = matches!(reply, AcpResultPayload::Error { .. });
+                stage_calls
+                    .reply(p.writer, p.bridge.as_ref(), session_id, call_id, reply)
+                    .await
+                    .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                if timed_out {
                     // M5 fail-fast: timeout halts the stage.
                     return Err(StageError::HumanGateRejected);
                 }
