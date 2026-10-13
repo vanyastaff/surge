@@ -325,12 +325,12 @@ async fn resuming_a_parked_run_clears_the_row_records_the_wake_and_carries_the_e
     fx.storage.set_run_parked(&run_id, 1).await.unwrap();
 
     let admitted = run(fx.admission().admit(fx.replayed(run_id)).await);
-    let resumed = admitted
-        .resume
+    let evidence = admitted
+        .resume_evidence
         .as_ref()
-        .expect("a resume carries replayed state");
-    assert!(resumed.evidence.was_parked);
-    assert!(resumed.evidence.bypasses_precheck());
+        .expect("a resume carries its evidence");
+    assert!(evidence.was_parked);
+    assert!(evidence.bypasses_precheck());
     release(admitted).await;
 
     let summary = fx.storage.get_run(&run_id).await.unwrap().unwrap();
@@ -363,9 +363,9 @@ async fn resume_re_arms_the_frozen_limits_and_resolves_the_memory_store() {
     assert_eq!(admitted.run_config.budget, budget);
     assert_eq!(admitted.run_config.bootstrap.edit_loop_cap, 7);
     assert_eq!(admitted.run_config.memory_store_path, Some(store));
-    let resumed = admitted.resume.as_ref().unwrap();
-    assert!(!resumed.evidence.was_parked);
-    assert!(!resumed.evidence.bypasses_precheck());
+    let evidence = admitted.resume_evidence.as_ref().unwrap();
+    assert!(!evidence.was_parked);
+    assert!(!evidence.bypasses_precheck());
     release(admitted).await;
     fx.close();
 }
@@ -619,7 +619,7 @@ async fn task_start_trusts_its_frozen_reservation_and_refuses_a_used_journal() {
     let admitted = run(fx.admission().admit(AdmissionKind::TaskStart(&claim)).await);
     assert_eq!(admitted.run_id, run_id);
     assert!(admitted.claim.is_some());
-    assert!(admitted.resume.is_none());
+    assert!(admitted.resume_evidence.is_none());
     release(admitted).await;
     assert_eq!(fx.kinds(run_id).await.first(), Some(&"RunStarted"));
 

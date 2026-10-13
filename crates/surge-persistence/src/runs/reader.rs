@@ -43,7 +43,44 @@ pub struct ReadEvent {
     pub payload: VersionedEventPayload,
 }
 
+/// A persisted event whose recorded timestamp is not a valid instant (#100).
+///
+/// Rebuilding execution state never substitutes the wall clock (which breaks
+/// determinism) or the epoch (which makes a gate look decades old): a corrupt
+/// timestamp refuses execution, resume and fork. Display-only readers may
+/// render the event's time as unknown instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("event {seq} has a corrupt timestamp ({raw_ms} ms)")]
+pub struct CorruptTimestamp {
+    /// The event's sequence.
+    pub seq: u64,
+    /// The raw recorded milliseconds.
+    pub raw_ms: i64,
+}
+
 impl ReadEvent {
+    /// The one conversion from a persisted event to a core event (#100):
+    /// deterministic, with no clock fallback.
+    ///
+    /// # Errors
+    /// [`CorruptTimestamp`] when the recorded milliseconds are out of range.
+    pub fn to_run_event(
+        &self,
+        run_id: surge_core::id::RunId,
+    ) -> Result<surge_core::run_event::RunEvent, CorruptTimestamp> {
+        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(self.timestamp_ms)
+            .ok_or(CorruptTimestamp {
+            seq: self.seq.as_u64(),
+            raw_ms: self.timestamp_ms,
+        })?;
+        Ok(surge_core::run_event::RunEvent {
+            run_id,
+            seq: self.seq.as_u64(),
+            timestamp,
+            payload: self.payload.payload.clone(),
+        })
+    }
+
     /// The terminal verdict over persisted events, in sequence order (#95).
     #[must_use]
     pub fn terminal_verdict(events: &[Self]) -> surge_core::run_verdict::TerminalVerdict {
