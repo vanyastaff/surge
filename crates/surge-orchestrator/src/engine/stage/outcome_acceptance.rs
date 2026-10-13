@@ -1165,3 +1165,57 @@ mod budget_tests {
         );
     }
 }
+
+/// The producer side of the artifact-name authority (#98): every logical name
+/// the agent stage derives for a bundled profile's declared outputs either
+/// resolves to that output's declared kind or is not an artifact-contract
+/// name at all. A profile change that shifts the stem/path naming can never
+/// make the roadmap (or any contract artifact) unfindable or misread.
+#[cfg(test)]
+mod naming_authority_tests {
+    use super::*;
+    use surge_core::artifact_contract::{ArtifactFormat, artifact_name, canonical_seed_path};
+
+    #[test]
+    fn producer_names_resolve_to_their_declared_kind() {
+        let mut checked = 0;
+        for profile in surge_core::BundledRegistry::all() {
+            for outcome in &profile.outcomes {
+                let paths: Vec<String> = outcome
+                    .produced_artifacts
+                    .iter()
+                    .map(|artifact| artifact.path.clone())
+                    .collect();
+                let stem_counts = artifact_stem_counts(&paths);
+                for declared in &outcome.produced_artifacts {
+                    let name = logical_artifact_name(
+                        Path::new(&declared.path),
+                        &declared.path,
+                        &stem_counts,
+                    );
+                    let kind = declared.contract.kind;
+                    // Concrete contract paths only: a pattern (an ADR's
+                    // numbered file) names no single artifact.
+                    let canonical = [None, Some(ArtifactFormat::Markdown)]
+                        .into_iter()
+                        .filter_map(|format| canonical_seed_path(kind, format))
+                        .any(|path| path == Path::new(&declared.path));
+                    match artifact_name(&name) {
+                        Some(resolved) => assert_eq!(
+                            resolved.kind, kind,
+                            "{}: {} named {name}",
+                            profile.role.id, declared.path
+                        ),
+                        None => assert!(
+                            !canonical,
+                            "{}: canonical {} named {name} is not resolvable",
+                            profile.role.id, declared.path
+                        ),
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "bundled profiles declare produced artifacts");
+    }
+}

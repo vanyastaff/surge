@@ -27,7 +27,7 @@ pub struct Graph {
 /// Computing a graph's identity failed (its JSON serialization failed).
 #[derive(Debug, thiserror::Error)]
 #[error("graph identity serialization failed: {0}")]
-pub struct GraphIdentityError(#[from] serde_json::Error);
+pub struct GraphIdentityError(#[from] pub serde_json::Error);
 
 impl Graph {
     /// The graph's canonical identity (#98): the content hash of

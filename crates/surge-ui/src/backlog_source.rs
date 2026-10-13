@@ -139,7 +139,7 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
     let mut all = Vec::new();
     for op in operations {
         let roadmap: Option<RoadmapArtifact> =
-            crate::roadmap_source::read_run_artifact(surge_home, op.planning_run, "roadmap_toml")
+            crate::roadmap_source::read_run_roadmap(surge_home, op.planning_run)
                 .and_then(|b| String::from_utf8(b).ok())
                 .and_then(|t| toml::from_str(&t).ok());
         let ledger: Ledger = storage

@@ -469,17 +469,15 @@ impl BootstrapSupervisor {
             .bootstrap_edit_loop_cap
             .ok_or(Attention::MissingBootstrapPolicy)?;
         let graph = if let Some(child) = &record.child {
-            let checked = crate::bootstrap_continuation::load_child(
-                &self.services.storage,
-                runtime,
-                &capture.fields().planning_worktree,
-                child,
-            )
-            .await
-            .map_err(continuation_attention)?;
+            let graph =
+                crate::bootstrap_continuation::load_child(&self.services.storage, runtime, child)
+                    .await
+                    .map_err(continuation_attention)?;
             config.budget = child.budget();
-            config.seed_artifacts = checked.seeds;
-            checked.graph
+            // The engine inherits the parent's approved artifacts through the
+            // same handoff, once (#98); the daemon passes no bootstrap seeds.
+            config.bootstrap_parent = Some(child.parent());
+            graph
         } else {
             runtime.graph()
         };
@@ -567,11 +565,9 @@ impl BootstrapSupervisor {
             .map_err(runtime_attention)?;
         runtime.verify(capture).await.map_err(runtime_attention)?;
         let child = crate::bootstrap_continuation::prepare_child(
-            &self.services.engine,
             &self.services.storage,
             runtime,
             record.status.planning_run,
-            &capture.fields().planning_worktree,
             intent,
         )
         .await;

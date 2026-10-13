@@ -16,14 +16,14 @@ async fn bootstrap_materializes_bug_fix_refactor_and_spike_archetypes() {
             .complete_agent_with_artifact(
                 0,
                 "description.md",
-                &format!("## Goal\nExercise the {archetype} bootstrap path.\n"),
+                fixtures::bootstrap::VALID_DESCRIPTION,
             )
             .await;
         harness.approve_next_gate().await;
 
         harness.wait_for_subscribe_count(2).await;
         harness
-            .complete_agent_with_artifact(1, "roadmap.md", "## Milestones\n1. Plan\n2. Execute\n")
+            .complete_agent_with_artifact(1, "roadmap.toml", fixtures::bootstrap::VALID_ROADMAP)
             .await;
         harness.approve_next_gate().await;
 
@@ -38,8 +38,8 @@ async fn bootstrap_materializes_bug_fix_refactor_and_spike_archetypes() {
         harness.approve_next_gate().await;
 
         let materialized = driver.await.unwrap().expect("bootstrap succeeds");
-        assert_eq!(materialized.materialized_graph.metadata.name, archetype);
-        validate_for_m6(&materialized.materialized_graph).unwrap();
+        assert_eq!(materialized.graph.metadata.name, archetype);
+        validate_for_m6(&materialized.graph).unwrap();
         harness.close();
     }
 }

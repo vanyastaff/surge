@@ -11,7 +11,8 @@
 //!
 //! # Rules
 //! - The parent must be confirmed completed: its log's terminal verdict is a
-//!   single `RunCompleted`.
+//!   single `RunCompleted`. Only the log up to that event is considered: the
+//!   approved plan never changes after completion.
 //! - The follow-up graph is the latest `PipelineMaterialized` after the
 //!   first. The first is the bootstrap graph itself (replay keeps selecting
 //!   that one; the handoff selects the generated one).
@@ -229,13 +230,18 @@ pub async fn prepare(
     parent: RunId,
     context: &HandoffContext<'_>,
 ) -> Result<BootstrapHandoff, HandoffRejection> {
-    let events = read_parent(storage, parent).await?;
+    let mut events = read_parent(storage, parent).await?;
     let TerminalVerdict::Terminal(claim) = ReadEvent::terminal_verdict(&events) else {
         return Err(HandoffRejection::ParentNotCompleted);
     };
     if !matches!(claim.outcome, TerminalOutcome::Completed { .. }) {
         return Err(HandoffRejection::ParentNotCompleted);
     }
+    // The approved plan is what existed when the bootstrap completed:
+    // anything appended afterwards (telemetry, or a stray later artifact)
+    // never changes what a child inherits, so a pinned continuation reloads
+    // exactly what was approved.
+    events.retain(|event| event.seq.as_u64() <= claim.seq);
     let parent_worktree = events
         .iter()
         .find_map(|event| match &event.payload.payload {

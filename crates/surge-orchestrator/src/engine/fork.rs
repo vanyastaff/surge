@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use surge_core::agent_config::PromptOverride;
-use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
 use surge_core::keys::{NodeKey, ProfileKey};
@@ -479,10 +478,9 @@ fn apply_fork_edits(
     let mut graph = (**graph).clone();
     apply_edits_to_graph(&mut graph, edits)?;
 
-    let graph_hash = ContentHash::compute(
-        &serde_json::to_vec(&graph)
-            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?,
-    );
+    let graph_hash = graph
+        .identity()
+        .map_err(|e| EngineError::Internal(e.to_string()))?;
     copied[idx].payload = EventPayload::PipelineMaterialized {
         graph: Box::new(graph),
         graph_hash,

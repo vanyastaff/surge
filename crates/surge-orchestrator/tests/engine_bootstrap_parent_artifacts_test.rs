@@ -1,4 +1,6 @@
-//! Task 20 — follow-up runs inherit bootstrap artifacts.
+//! Follow-up runs inherit their bootstrap parent's approved artifacts through
+//! the one bootstrap handoff (#98): each exactly once, at its canonical path,
+//! and only for the graph the handoff validated.
 
 mod fixtures;
 use fixtures::runtime_home as runtime_home_fixture;
@@ -13,15 +15,19 @@ use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
 use surge_core::node::{Node, NodeConfig, Position};
-use surge_core::run_event::{EventPayload, RunConfig, RunEvent, VersionedEventPayload};
-use surge_core::run_state::RunMemory;
+use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+use surge_orchestrator::bootstrap::handoff::HandoffRejection;
+use surge_orchestrator::engine::config::RunSeedArtifact;
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
-use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
+use surge_orchestrator::engine::{Engine, EngineConfig, EngineError, EngineRunConfig, RunOutcome};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::{EventSeq, Storage};
+
+const DESCRIPTION: &str = fixtures::bootstrap::VALID_DESCRIPTION;
+const ROADMAP: &str = fixtures::bootstrap::VALID_ROADMAP;
 
 fn terminal_graph() -> Graph {
     let end = NodeKey::try_from("end").unwrap();
@@ -40,14 +46,7 @@ fn terminal_graph() -> Graph {
     );
     Graph {
         schema_version: SCHEMA_VERSION,
-        metadata: GraphMetadata {
-            name: "bootstrap-parent-artifacts".into(),
-            description: None,
-            template_origin: None,
-            created_at: chrono::Utc::now(),
-            author: None,
-            archetype: None,
-        },
+        metadata: GraphMetadata::new("bootstrap-parent-artifacts", chrono::Utc::now()),
         start: end,
         nodes,
         edges: vec![],
@@ -55,288 +54,220 @@ fn terminal_graph() -> Graph {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_run_with_bootstrap_parent_seeds_parent_artifacts() {
-    let storage_dir = FixtureHome::new().unwrap();
-    {
-        let parent_worktree = tempfile::tempdir().unwrap();
+struct Fixture {
+    home: FixtureHome,
+    parent_worktree: tempfile::TempDir,
+    child_worktree: tempfile::TempDir,
+    storage: Arc<Storage>,
+    engine: Engine,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let home = FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
         let child_worktree = tempfile::tempdir().unwrap();
-        let storage = Storage::open(storage_dir.path()).await.unwrap();
-        let artifact_store = ArtifactStore::new(storage.home().join("runs"));
-
-        let parent_run_id = RunId::new();
-        let parent_writer = storage
-            .create_run(parent_run_id, parent_worktree.path(), None)
-            .await
-            .unwrap();
-        let parent_node = NodeKey::try_from("description_author").unwrap();
-        let description = artifact_store
-            .put(parent_run_id, "description", b"# Description\n")
-            .await
-            .unwrap();
-        let roadmap = artifact_store
-            .put(parent_run_id, "roadmap", b"# Roadmap\n")
-            .await
-            .unwrap();
-        let flow = artifact_store
-            .put(parent_run_id, "flow", b"schema_version = 1\n")
-            .await
-            .unwrap();
-
-        parent_writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: parent_worktree.path().to_path_buf(),
-                    initial_prompt: "bootstrap this".into(),
-                    config: RunConfig {
-                        bootstrap_edit_loop_cap: None,
-                        budget: Default::default(),
-                        sandbox_default: SandboxMode::WorkspaceWrite,
-                        approval_default: ApprovalPolicy::OnRequest,
-                        auto_pr: false,
-                        mcp_servers: vec![],
-                    },
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node.clone(),
-                    artifact: description.hash,
-                    path: description.path,
-                    name: "description".into(),
-                    source_path: None,
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node.clone(),
-                    artifact: roadmap.hash,
-                    path: roadmap.path,
-                    name: "roadmap".into(),
-                    source_path: None,
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node,
-                    artifact: flow.hash,
-                    path: flow.path,
-                    name: "flow".into(),
-                    source_path: None,
-                }),
-            ])
-            .await
-            .unwrap();
-        parent_writer.close().await.unwrap();
-
         let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
         let dispatcher = Arc::new(WorktreeToolDispatcher::new(
             child_worktree.path().to_path_buf(),
         )) as Arc<dyn ToolDispatcher>;
         let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        Self {
+            home,
+            parent_worktree: tempfile::tempdir().unwrap(),
+            child_worktree,
+            storage,
+            engine,
+        }
+    }
 
-        let child_run_id = RunId::new();
-        let handle = engine
-            .start_run(
-                child_run_id,
-                terminal_graph(),
-                child_worktree.path().to_path_buf(),
-                EngineRunConfig {
-                    bootstrap_parent: Some(parent_run_id),
-                    ..EngineRunConfig::default()
-                },
-            )
+    /// A completed bootstrap run whose generated plan is `follow_up`, with
+    /// the roadmap produced under the planner's duplicate-stem names.
+    async fn completed_parent(&self, follow_up: &Graph) -> RunId {
+        let parent = RunId::new();
+        let store = ArtifactStore::new(self.storage.home().join("runs"));
+        let writer = self
+            .storage
+            .create_run(parent, self.parent_worktree.path(), None)
             .await
             .unwrap();
-        let outcome = handle.await_completion().await.unwrap();
-        match outcome {
-            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-            other => panic!("expected completion, got {other:?}"),
-        }
-
-        let reader = storage.open_run_reader(child_run_id).await.unwrap();
-        let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
-        let mut memory = RunMemory::default();
-        let mut inherited = BTreeMap::new();
-
-        for event in &events {
-            let payload = event.payload.payload.clone();
-            if let EventPayload::ArtifactProduced {
-                node,
-                artifact,
-                path,
-                name,
-                ..
-            } = &payload
-                && ["description", "roadmap", "flow"].contains(&name.as_str())
-            {
-                assert_eq!(node.as_ref(), "bootstrap_parent");
-                assert_eq!(path.file_name().unwrap(), artifact.to_hex().as_str());
-                inherited.insert(name.clone(), std::fs::read(path).unwrap());
-            }
-            memory.apply_event(&RunEvent {
-                run_id: child_run_id,
-                seq: event.seq.as_u64(),
-                timestamp: chrono::Utc::now(),
-                payload,
+        let mut events = vec![
+            EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: self.parent_worktree.path().to_path_buf(),
+                initial_prompt: "bootstrap this".into(),
+                config: RunConfig {
+                    bootstrap_edit_loop_cap: Some(3),
+                    budget: Default::default(),
+                    sandbox_default: SandboxMode::WorkspaceWrite,
+                    approval_default: ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                    mcp_servers: vec![],
+                },
+            },
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(
+                    surge_core::BundledFlows::by_name_latest("bootstrap")
+                        .unwrap()
+                        .graph,
+                ),
+                graph_hash: surge_core::ContentHash::compute(b"bootstrap"),
+            },
+        ];
+        let flow = toml::to_string(follow_up).unwrap();
+        for (name, content) in [
+            ("description", DESCRIPTION),
+            ("roadmap_toml", ROADMAP),
+            ("roadmap_md", "# Roadmap\n"),
+            ("flow", flow.as_str()),
+        ] {
+            let stored = store.put(parent, name, content.as_bytes()).await.unwrap();
+            events.push(EventPayload::ArtifactProduced {
+                node: NodeKey::try_from("planner").unwrap(),
+                artifact: stored.hash,
+                path: stored.path,
+                name: name.into(),
+                source_path: None,
             });
         }
-
-        assert_eq!(
-            inherited.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["description", "flow", "roadmap"]
-        );
-        assert_eq!(inherited["description"], b"# Description\n");
-        assert_eq!(inherited["roadmap"], b"# Roadmap\n");
-        assert_eq!(inherited["flow"], b"schema_version = 1\n");
-        assert!(memory.artifacts.contains_key("description"));
-        assert!(memory.artifacts.contains_key("roadmap"));
-        assert!(memory.artifacts.contains_key("flow"));
+        events.push(EventPayload::PipelineMaterialized {
+            graph: Box::new(follow_up.clone()),
+            graph_hash: follow_up.identity().unwrap(),
+        });
+        events.push(EventPayload::RunCompleted {
+            terminal_node: NodeKey::try_from("approved").unwrap(),
+        });
+        writer
+            .append_events(events.into_iter().map(VersionedEventPayload::new).collect())
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        parent
     }
-    storage_dir.close().unwrap();
+
+    async fn start_child(
+        &self,
+        graph: Graph,
+        config: EngineRunConfig,
+    ) -> Result<(RunId, RunOutcome), EngineError> {
+        let child = RunId::new();
+        let handle = self
+            .engine
+            .start_run(
+                child,
+                graph,
+                self.child_worktree.path().to_path_buf(),
+                config,
+            )
+            .await?;
+        Ok((child, handle.await_completion().await?))
+    }
+
+    fn close(self) {
+        drop(self.engine);
+        drop(self.storage);
+        self.home.close().unwrap();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_roadmap_planner_alias_is_inherited_as_roadmap() {
-    let storage_dir = FixtureHome::new().unwrap();
-    {
-        let parent_worktree = tempfile::tempdir().unwrap();
-        let child_worktree = tempfile::tempdir().unwrap();
-        let storage = Storage::open(storage_dir.path()).await.unwrap();
-        let artifact_store = ArtifactStore::new(storage.home().join("runs"));
+async fn a_follow_up_inherits_each_approved_artifact_exactly_once() {
+    let fx = Fixture::new().await;
+    let follow_up = terminal_graph();
+    let parent = fx.completed_parent(&follow_up).await;
 
-        let parent_run_id = RunId::new();
-        let parent_writer = storage
-            .create_run(parent_run_id, parent_worktree.path(), None)
-            .await
-            .unwrap();
-        let parent_node = NodeKey::try_from("description_author").unwrap();
-        let description = artifact_store
-            .put(parent_run_id, "description", b"# Description\n")
-            .await
-            .unwrap();
-        let roadmap = artifact_store
-            .put(parent_run_id, "roadmap_toml", b"schema_version = 2\n")
-            .await
-            .unwrap();
-        let roadmap_md = artifact_store
-            .put(parent_run_id, "roadmap_md", b"# Roadmap\n")
-            .await
-            .unwrap();
-        let flow = artifact_store
-            .put(parent_run_id, "flow", b"schema_version = 1\n")
-            .await
-            .unwrap();
+    let (child, outcome) = fx
+        .start_child(
+            follow_up,
+            EngineRunConfig {
+                bootstrap_parent: Some(parent),
+                ..EngineRunConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, RunOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
 
-        parent_writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: parent_worktree.path().to_path_buf(),
-                    initial_prompt: "bootstrap this".into(),
-                    config: RunConfig {
-                        bootstrap_edit_loop_cap: None,
-                        budget: Default::default(),
-                        sandbox_default: SandboxMode::WorkspaceWrite,
-                        approval_default: ApprovalPolicy::OnRequest,
-                        auto_pr: false,
-                        mcp_servers: vec![],
-                    },
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node.clone(),
-                    artifact: description.hash,
-                    path: description.path,
-                    name: "description".into(),
-                    source_path: None,
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node.clone(),
-                    artifact: roadmap.hash,
-                    path: roadmap.path,
-                    name: "roadmap_toml".into(),
-                    source_path: None,
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node.clone(),
-                    artifact: roadmap_md.hash,
-                    path: roadmap_md.path,
-                    name: "roadmap_md".into(),
-                    source_path: None,
-                }),
-                VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: parent_node,
-                    artifact: flow.hash,
-                    path: flow.path,
-                    name: "flow".into(),
-                    source_path: None,
-                }),
-            ])
-            .await
-            .unwrap();
-        parent_writer.close().await.unwrap();
+    let reader = fx.storage.open_run_reader(child).await.unwrap();
+    let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
+    let inherited: Vec<(String, std::path::PathBuf)> = events
+        .iter()
+        .filter_map(|event| match &event.payload.payload {
+            EventPayload::ArtifactProduced {
+                node, path, name, ..
+            } if node.as_ref() == "bootstrap_parent" => Some((name.clone(), path.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        inherited,
+        [
+            ("description".into(), "description.md".into()),
+            ("roadmap".into(), "roadmap.toml".into()),
+            ("flow".into(), "flow.toml".into()),
+        ],
+        "each inherited artifact exactly once, at its canonical path"
+    );
+    let worktree = fx.child_worktree.path();
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("roadmap.toml")).unwrap(),
+        ROADMAP,
+        "the machine-readable roadmap, not the markdown view"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("description.md")).unwrap(),
+        DESCRIPTION
+    );
+    drop(reader);
+    fx.close();
+}
 
-        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-        let dispatcher = Arc::new(WorktreeToolDispatcher::new(
-            child_worktree.path().to_path_buf(),
-        )) as Arc<dyn ToolDispatcher>;
-        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_follow_up_for_another_graph_or_with_duplicate_seeds_is_refused() {
+    let fx = Fixture::new().await;
+    let follow_up = terminal_graph();
+    let parent = fx.completed_parent(&follow_up).await;
 
-        let child_run_id = RunId::new();
-        let handle = engine
-            .start_run(
-                child_run_id,
-                terminal_graph(),
-                child_worktree.path().to_path_buf(),
-                EngineRunConfig {
-                    bootstrap_parent: Some(parent_run_id),
-                    ..EngineRunConfig::default()
-                },
-            )
-            .await
-            .unwrap();
-        let outcome = handle.await_completion().await.unwrap();
-        match outcome {
-            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-            other => panic!("expected completion, got {other:?}"),
-        }
+    let mut other = follow_up.clone();
+    other.metadata.name.push_str("-not-the-approved-plan");
+    let refused = fx
+        .start_child(
+            other,
+            EngineRunConfig {
+                bootstrap_parent: Some(parent),
+                ..EngineRunConfig::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            EngineError::BootstrapHandoff(HandoffRejection::IdentityMismatch { .. })
+        ),
+        "{refused}"
+    );
 
-        let reader = storage.open_run_reader(child_run_id).await.unwrap();
-        let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
-        let mut memory = RunMemory::default();
-        let mut inherited = BTreeMap::new();
-
-        for event in &events {
-            let payload = event.payload.payload.clone();
-            if let EventPayload::ArtifactProduced {
-                node,
-                artifact,
-                path,
-                name,
-                ..
-            } = &payload
-                && ["description", "roadmap", "flow"].contains(&name.as_str())
-            {
-                assert_eq!(node.as_ref(), "bootstrap_parent");
-                assert_eq!(path.file_name().unwrap(), artifact.to_hex().as_str());
-                inherited.insert(name.clone(), std::fs::read(path).unwrap());
-            }
-            memory.apply_event(&RunEvent {
-                run_id: child_run_id,
-                seq: event.seq.as_u64(),
-                timestamp: chrono::Utc::now(),
-                payload,
-            });
-        }
-
-        assert_eq!(
-            inherited.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["description", "flow", "roadmap"]
-        );
-        assert_eq!(inherited["description"], b"# Description\n");
-        assert_eq!(
-            inherited["roadmap"], b"schema_version = 2\n",
-            "the machine-readable alias, not the markdown view"
-        );
-        assert_eq!(inherited["flow"], b"schema_version = 1\n");
-        assert!(memory.artifacts.contains_key("description"));
-        assert!(memory.artifacts.contains_key("roadmap"));
-        assert!(memory.artifacts.contains_key("flow"));
-    }
-    storage_dir.close().unwrap();
+    let duplicate = fx
+        .start_child(
+            follow_up,
+            EngineRunConfig {
+                bootstrap_parent: Some(parent),
+                seed_artifacts: vec![
+                    RunSeedArtifact::new("roadmap", "roadmap.toml", ROADMAP, "bootstrap_parent")
+                        .unwrap(),
+                ],
+                ..EngineRunConfig::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, EngineError::BootstrapHandoff(_)),
+        "{duplicate}"
+    );
+    fx.close();
 }

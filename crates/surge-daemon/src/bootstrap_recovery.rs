@@ -126,7 +126,7 @@ pub fn classify_startup(
         return Ok(StartupState::Incomplete(Conflict::StartupEvents));
     };
     if graph_hash != &expected.graph_hash
-        || ContentHash::compute(&serde_json::to_vec(graph)?) != *graph_hash
+        || graph.identity().map_err(|error| error.0)? != *graph_hash
     {
         return Ok(StartupState::Incomplete(Conflict::Identity));
     }

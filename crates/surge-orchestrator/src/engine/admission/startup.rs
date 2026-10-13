@@ -2,18 +2,15 @@
 //! (#97: moved out of `Engine` into run admission unchanged).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
-use surge_persistence::runs::Storage;
 
 use crate::engine::config::EngineRunConfig;
 use crate::engine::error::EngineError;
 
 pub(super) async fn build_startup_events(
-    storage: &Arc<Storage>,
     artifact_store: &surge_persistence::artifacts::ArtifactStore,
     run_id: RunId,
     graph: &Graph,
@@ -22,8 +19,7 @@ pub(super) async fn build_startup_events(
 ) -> Result<Vec<VersionedEventPayload>, EngineError> {
     let mut events = startup_run_events(graph, worktree_path, run_config)?;
     events.extend(
-        collect_startup_artifact_events(storage, artifact_store, run_id, worktree_path, run_config)
-            .await?,
+        collect_startup_artifact_events(artifact_store, run_id, worktree_path, run_config).await?,
     );
     Ok(events)
 }
@@ -34,13 +30,12 @@ fn startup_run_events(
     run_config: &EngineRunConfig,
 ) -> Result<Vec<VersionedEventPayload>, EngineError> {
     use surge_core::approvals::ApprovalPolicy;
-    use surge_core::content_hash::ContentHash;
     use surge_core::run_event::RunConfig as CoreRunConfig;
     use surge_core::sandbox::SandboxMode;
 
-    let graph_bytes = serde_json::to_vec(graph)
-        .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
-    let graph_hash = ContentHash::compute(&graph_bytes);
+    let graph_hash = graph
+        .identity()
+        .map_err(|e| EngineError::Internal(e.to_string()))?;
     let core_run_config = CoreRunConfig {
         bootstrap_edit_loop_cap: Some(run_config.bootstrap.edit_loop_cap),
         sandbox_default: SandboxMode::WorkspaceWrite,
@@ -79,19 +74,12 @@ fn startup_run_events(
 }
 
 async fn collect_startup_artifact_events(
-    storage: &Arc<Storage>,
     artifact_store: &surge_persistence::artifacts::ArtifactStore,
     run_id: RunId,
     worktree_path: &Path,
     run_config: &EngineRunConfig,
 ) -> Result<Vec<VersionedEventPayload>, EngineError> {
     let mut events = Vec::new();
-    if let Some(parent_run_id) = run_config.bootstrap_parent {
-        events.extend(
-            bootstrap_parent_artifact_events(storage, artifact_store, run_id, parent_run_id)
-                .await?,
-        );
-    }
     if let Some(event) = project_context_artifact_event(artifact_store, run_id, run_config).await? {
         events.push(event);
     }
@@ -108,73 +96,6 @@ async fn collect_startup_artifact_events(
         events.push(event);
     }
     Ok(events)
-}
-
-async fn bootstrap_parent_artifact_events(
-    storage: &Arc<Storage>,
-    artifact_store: &surge_persistence::artifacts::ArtifactStore,
-    child_run_id: RunId,
-    parent_run_id: RunId,
-) -> Result<Vec<VersionedEventPayload>, EngineError> {
-    use surge_core::keys::NodeKey;
-    use surge_persistence::runs::EventSeq;
-
-    const BOOTSTRAP_PARENT_NODE: &str = "bootstrap_parent";
-
-    let reader = storage
-        .open_run_reader(parent_run_id)
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-    let current = reader
-        .current_seq()
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-    let parent_events = reader
-        .read_events(EventSeq(1)..current.next())
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    let (parent_worktree, artifacts) =
-        collect_bootstrap_parent_artifacts(parent_events, parent_run_id)?;
-    let inherited_node = NodeKey::try_from(BOOTSTRAP_PARENT_NODE).map_err(|e| {
-        EngineError::Internal(format!("invalid bootstrap parent producer key: {e}"))
-    })?;
-
-    let mut inherited_events = Vec::with_capacity(BOOTSTRAP_PARENT_ARTIFACTS.len());
-    for name in BOOTSTRAP_PARENT_ARTIFACTS {
-        let artifact = artifacts.get(name).ok_or_else(|| {
-            EngineError::Internal(format!(
-                "bootstrap parent {parent_run_id} is missing required artifact {name}"
-            ))
-        })?;
-        let bytes = artifact_store
-            .open_ref(parent_run_id, artifact, &parent_worktree)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-        let child_ref = artifact_store
-            .put(child_run_id, name, &bytes)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-        tracing::debug!(
-            target: "engine::startup",
-            run_id = %child_run_id,
-            bootstrap_parent = %parent_run_id,
-            artifact = name,
-            hash = %child_ref.hash,
-            "inherited bootstrap artifact",
-        );
-
-        inherited_events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-            node: inherited_node.clone(),
-            artifact: child_ref.hash,
-            path: child_ref.path,
-            name: name.to_owned(),
-            source_path: None,
-        }));
-    }
-
-    Ok(inherited_events)
 }
 
 async fn project_context_artifact_event(
@@ -388,80 +309,6 @@ fn artifact_produced_event(
         source_path: None,
     })
 }
-
-/// Canonical artifact name under which the run's free-form initial prompt is
-/// surfaced to agent stages. Bootstrap profiles bind to this name (either via
-/// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
-/// The parent run's worktree and the description / roadmap / flow artifacts a
-/// follow-up run inherits, keyed by logical name.
-///
-/// The roadmap planner emits the roadmap under an alias (`roadmap_toml`); it is
-/// inherited as `roadmap`, refusing competing aliases rather than guessing.
-fn collect_bootstrap_parent_artifacts(
-    parent_events: Vec<surge_persistence::runs::ReadEvent>,
-    parent_run_id: RunId,
-) -> Result<
-    (
-        std::path::PathBuf,
-        std::collections::BTreeMap<String, surge_core::run_state::ArtifactRef>,
-    ),
-    EngineError,
-> {
-    use surge_core::run_state::ArtifactRef;
-
-    let mut parent_worktree = None;
-    let mut artifacts = std::collections::BTreeMap::new();
-    for event in parent_events {
-        match event.payload.payload {
-            EventPayload::RunStarted { project_path, .. } => {
-                parent_worktree = Some(project_path);
-            },
-            EventPayload::ArtifactProduced {
-                node,
-                artifact,
-                path,
-                name,
-                ..
-            } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str())
-                || crate::bootstrap_driver::is_roadmap_toml_alias(&name) =>
-            {
-                artifacts.insert(
-                    name.clone(),
-                    ArtifactRef {
-                        hash: artifact,
-                        path,
-                        name,
-                        produced_by: node,
-                        produced_at_seq: event.seq.as_u64(),
-                    },
-                );
-            },
-            _ => {},
-        }
-    }
-
-    if let Some(roadmap) =
-        crate::bootstrap_driver::canonical_roadmap_ref(artifacts.values(), "roadmap")
-            .map_err(|()| {
-                EngineError::Internal(format!(
-                    "bootstrap parent {parent_run_id} has competing roadmap artifacts"
-                ))
-            })?
-            .cloned()
-    {
-        artifacts.insert("roadmap".to_owned(), roadmap);
-    }
-
-    let parent_worktree = parent_worktree.ok_or_else(|| {
-        EngineError::Internal(format!(
-            "bootstrap parent {parent_run_id} has no RunStarted event"
-        ))
-    })?;
-    Ok((parent_worktree, artifacts))
-}
-
-/// Logical names a follow-up run inherits from its bootstrap parent.
-const BOOTSTRAP_PARENT_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
 
 pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
 

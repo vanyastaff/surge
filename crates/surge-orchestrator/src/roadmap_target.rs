@@ -8,20 +8,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use surge_core::artifact_contract::ArtifactKind;
 use surge_core::roadmap_patch::{ActivePickupPolicy, RoadmapPatchTarget};
 use surge_core::{ContentHash, RunId, RunStatus};
 use surge_persistence::runs::{
     ArtifactRecord, OpenError, RunFilter, RunSummary, Storage, StorageError,
 };
-
-const ROADMAP_ARTIFACT_NAMES: &[&str] = &[
-    "roadmap",
-    "roadmap.md",
-    "roadmap.toml",
-    "roadmap-md",
-    "roadmap-toml",
-];
-const FLOW_ARTIFACT_NAMES: &[&str] = &["flow", "flow.toml", "flow-toml"];
 
 /// Selector supplied by CLI or higher-level orchestration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,10 +267,10 @@ impl RoadmapTargetResolver {
     ) -> Result<Option<RoadmapTargetCandidate>, RoadmapTargetError> {
         let reader = self.storage.open_run_reader(summary.id).await?;
         let artifacts = reader.artifacts().await?;
-        let Some(roadmap) = latest_named_artifact(&artifacts, ROADMAP_ARTIFACT_NAMES) else {
+        let Some(roadmap) = latest_of_kind(&artifacts, ArtifactKind::Roadmap) else {
             return Ok(None);
         };
-        let flow = latest_named_artifact(&artifacts, FLOW_ARTIFACT_NAMES);
+        let flow = latest_of_kind(&artifacts, ArtifactKind::Flow);
         let active_pickup = pickup_for_status(summary.status);
         tracing::info!(
             target: "roadmap_target",
@@ -332,13 +324,15 @@ impl RoadmapTargetResolver {
     }
 }
 
-fn latest_named_artifact<'a>(
-    artifacts: &'a [ArtifactRecord],
-    names: &[&str],
-) -> Option<&'a ArtifactRecord> {
+/// The latest artifact of `kind`, in any format and under any spelling the
+/// name authority accepts (#98).
+fn latest_of_kind(artifacts: &[ArtifactRecord], kind: ArtifactKind) -> Option<&ArtifactRecord> {
     artifacts
         .iter()
-        .filter(|artifact| names.contains(&artifact.name.as_str()))
+        .filter(|artifact| {
+            surge_core::artifact_contract::artifact_name(&artifact.name)
+                .is_some_and(|name| name.kind == kind)
+        })
         .max_by_key(|artifact| artifact.produced_at_seq)
 }
 

@@ -439,6 +439,32 @@ async fn unconfirmed_parents_are_retryable() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artifacts_appended_after_completion_are_never_inherited() {
+    let fx = Fixture::new().await;
+    let parent = fx.parent(Parent::default()).await;
+    let store = ArtifactStore::new(fx.storage.home().join("runs"));
+    let later = store
+        .put(parent, "description", b"a different, later description")
+        .await
+        .unwrap();
+    let writer = fx.storage.open_run_writer(parent).await.unwrap();
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+            node: node("description_author"),
+            artifact: later.hash,
+            path: later.path,
+            name: "description".into(),
+            source_path: None,
+        }))
+        .await
+        .unwrap();
+    writer.close().await.unwrap();
+    let handoff = fx.prepare(parent).await.unwrap();
+    assert_eq!(handoff.artifacts[0].content, DESCRIPTION);
+    fx.close();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reload_requires_the_pinned_identity() {
     let fx = Fixture::new().await;
     let parent = fx.parent(Parent::default()).await;

@@ -13,13 +13,13 @@ async fn flow_generator_invalid_twice_then_valid_materializes_after_two_edits() 
 
     harness.wait_for_subscribe_count(1).await;
     harness
-        .complete_agent_with_artifact(0, "description.md", "## Goal\nRetry invalid flows.\n")
+        .complete_agent_with_artifact(0, "description.md", fixtures::bootstrap::VALID_DESCRIPTION)
         .await;
     harness.approve_next_gate().await;
 
     harness.wait_for_subscribe_count(2).await;
     harness
-        .complete_agent_with_artifact(1, "roadmap.md", "## Milestones\n1. Retry flow\n")
+        .complete_agent_with_artifact(1, "roadmap.toml", fixtures::bootstrap::VALID_ROADMAP)
         .await;
     harness.approve_next_gate().await;
 
@@ -44,7 +44,7 @@ async fn flow_generator_invalid_twice_then_valid_materializes_after_two_edits() 
     harness.approve_next_gate().await;
 
     let materialized = driver.await.unwrap().expect("bootstrap succeeds");
-    assert_eq!(materialized.materialized_graph.metadata.name, "linear-3");
+    assert_eq!(materialized.graph.metadata.name, "linear-3");
 
     let events = harness.read_events().await;
     let payloads = fixtures::bootstrap::event_payloads(&events);
