@@ -15,6 +15,20 @@ use surge_persistence::runs::Storage;
 /// [`surge_core::home::surge_home_dir`], the canonical resolver shared
 /// with the daemon's `pidfile::daemon_dir` and the persistence layer's
 /// memory store.
+/// A cancellation token fired by Ctrl-C, so a standalone agent invocation
+/// stops its agent and closes its session instead of outliving the command.
+pub(crate) fn cancel_on_ctrl_c() -> tokio_util::sync::CancellationToken {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\nCancelling the agent…");
+            trigger.cancel();
+        }
+    });
+    cancel
+}
+
 pub(crate) fn surge_home_dir() -> Result<PathBuf> {
     surge_core::home::surge_home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))
 }

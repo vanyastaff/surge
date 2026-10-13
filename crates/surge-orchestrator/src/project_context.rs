@@ -1,27 +1,20 @@
 //! Stable project-context generation for `surge project describe`.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
-use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
-use surge_acp::client::PermissionPolicy;
 use surge_core::ContentHash;
 use surge_core::MemoryClaim;
 use surge_core::agent_config::{ArtifactSource, Binding, TemplateVar};
 use surge_core::context_pack::{ContextPack, ContextPackConfig, PackReceipt};
-use surge_core::keys::OutcomeKey;
 use surge_core::profile::keyref::parse_key_ref;
 use surge_persistence::memory::MemoryStore;
 use tracing::{debug, info, warn};
 
 use crate::engine::config::{EngineRunConfig, ProjectContextSeed};
 use crate::profile_loader::ProfileRegistry;
-use crate::prompt::PromptRenderer;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 64 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 256 * 1024;
@@ -37,6 +30,9 @@ pub struct ProjectContextOptions {
     pub refresh: bool,
     pub dry_run: bool,
     pub limits: ScanLimits,
+    /// The operator's merged agent registry (`[agents.*]` over builtins,
+    /// ADR-0019). `None` uses the builtins.
+    pub agents: Option<Arc<surge_acp::Registry>>,
 }
 
 impl ProjectContextOptions {
@@ -48,7 +44,16 @@ impl ProjectContextOptions {
             refresh: false,
             dry_run: false,
             limits: ScanLimits::default(),
+            agents: None,
         }
+    }
+
+    /// Resolve the Project Context Author through `agents` (the operator's
+    /// merged registry) instead of the builtins.
+    #[must_use]
+    pub fn with_agent_registry(mut self, agents: Arc<surge_acp::Registry>) -> Self {
+        self.agents = Some(agents);
+        self
     }
 }
 
@@ -156,8 +161,8 @@ pub enum ProjectContextError {
     Profile(String),
     #[error("profile runtime agent id {agent_id:?} is unknown; known ids and aliases: {known}")]
     UnknownAgentId { agent_id: String, known: String },
-    #[error("project context author bridge failed: {0}")]
-    Bridge(String),
+    #[error("project context author failed: {0}")]
+    Invocation(#[from] crate::agent_invocation::InvocationFailure),
     #[error("project context author reported no artifact")]
     MissingAuthorArtifact,
 }
@@ -178,7 +183,8 @@ pub fn describe_project(
         "project context describe started"
     );
     let scan = scan_project(&options.project_root, options.limits)?;
-    let invocation = project_context_invocation(&options.project_root, &scan)?;
+    let invocation =
+        project_context_invocation(&options.project_root, &scan, options.agents.as_deref())?;
     let rendered = render_project_context(&scan, &invocation);
     finish_project_context(options, scan, invocation, rendered)
 }
@@ -196,6 +202,7 @@ pub fn describe_project(
 pub async fn describe_project_with_bridge(
     options: ProjectContextOptions,
     bridge: Arc<dyn BridgeFacade>,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ProjectContextOutcome, ProjectContextError> {
     debug!(
         root = %options.project_root.display(),
@@ -205,14 +212,9 @@ pub async fn describe_project_with_bridge(
         "bridge-backed project context describe started"
     );
     let scan = scan_project(&options.project_root, options.limits)?;
-    let invocation = project_context_invocation(&options.project_root, &scan)?;
-    let rendered = invoke_project_context_author(
-        &options.project_root,
-        &options.output_path,
-        &invocation,
-        bridge,
-    )
-    .await?;
+    let invocation =
+        project_context_invocation(&options.project_root, &scan, options.agents.as_deref())?;
+    let rendered = invoke_project_context_author(&options, &invocation, &bridge, cancel).await?;
     finish_project_context(options, scan, invocation, rendered)
 }
 
@@ -273,157 +275,51 @@ fn finish_project_context(
     })
 }
 
+/// Run the Project Context Author through the one standalone invocation
+/// (#99): registry-resolved provider, the session closed on every path, and
+/// the artifact read only inside the project root.
 async fn invoke_project_context_author(
-    root: &Path,
-    output_path: &Path,
+    options: &ProjectContextOptions,
     invocation: &ProjectContextInvocation,
-    bridge: Arc<dyn BridgeFacade>,
+    bridge: &Arc<dyn BridgeFacade>,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, ProjectContextError> {
-    let prompt = PromptRenderer::strict()
-        .render(&invocation.prompt_template, &invocation.binding_values)
-        .map_err(|e| ProjectContextError::Bridge(format!("prompt render failed: {e}")))?;
-    let mut receiver = bridge.subscribe();
-    let session = bridge
-        .open_session(project_context_session_config(
-            root,
-            invocation,
-            prompt.clone(),
-        )?)
-        .await
-        .map_err(|e| ProjectContextError::Bridge(format!("open_session: {e}")))?
-        .session;
-
-    bridge
-        .send_message(session, MessageContent::Text(prompt))
-        .await
-        .map_err(|e| ProjectContextError::Bridge(format!("send_message: {e}")))?;
-
-    let deadline = tokio::time::Instant::now() + PROJECT_CONTEXT_AUTHOR_TIMEOUT;
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return Err(ProjectContextError::Bridge(
-                "timed out waiting for OutcomeReported".to_string(),
-            ));
-        }
-        let event = tokio::time::timeout(deadline.duration_since(now), receiver.recv())
-            .await
-            .map_err(|_| {
-                ProjectContextError::Bridge("timed out waiting for OutcomeReported".to_string())
-            })?
-            .map_err(|e| ProjectContextError::Bridge(format!("bridge event stream: {e}")))?;
-
-        match event {
-            BridgeEvent::OutcomeReported {
-                session: event_session,
-                outcome,
-                artifacts_produced,
-                ..
-            } if event_session == session => {
-                let content =
-                    read_author_output(root, output_path, outcome.as_ref(), &artifacts_produced)?;
-                if let Err(e) = bridge.close_session(session).await {
-                    warn!(error = %e, "project context author session close failed");
-                }
-                return Ok(content);
-            },
-            BridgeEvent::SessionEnded {
-                session: event_session,
-                reason,
-            } if event_session == session => {
-                return Err(ProjectContextError::Bridge(format!(
-                    "session ended before OutcomeReported: {reason:?}"
-                )));
-            },
-            _ => {},
-        }
-    }
-}
-
-fn project_context_session_config(
-    root: &Path,
-    invocation: &ProjectContextInvocation,
-    prompt: String,
-) -> Result<SessionConfig, ProjectContextError> {
-    let declared_outcomes = ["drafted", "no_change"]
-        .into_iter()
-        .map(|outcome| {
-            OutcomeKey::try_from(outcome).map_err(|e| {
-                ProjectContextError::Bridge(format!("invalid declared outcome {outcome:?}: {e}"))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let bindings = BTreeMap::from([
-        ("profile".to_string(), invocation.profile_id.clone()),
-        ("agent".to_string(), invocation.normalized_agent_id.clone()),
-    ]);
-    Ok(SessionConfig {
-        effect_fence: None,
-        writer_id: surge_core::id::ExecutionWriterId::new(),
-        invocation: surge_core::id::StageInvocationId::new(),
-        runtime: invocation.normalized_agent_id.clone(),
-        opening: Default::default(),
-        config_selections: Vec::new(),
-        stage_mcp: None,
-        agent_kind: invocation.agent_kind(),
-        working_dir: root.to_path_buf(),
-        system_prompt: prompt,
-        declared_outcomes,
-        allows_escalation: false,
-        tools: Vec::new(),
-        sandbox: Box::new(AlwaysAllowSandbox),
-        permission_policy: PermissionPolicy::default(),
-        bindings,
-        env: invocation.agent_env.clone(),
-    })
-}
-
-fn read_author_output(
-    root: &Path,
-    output_path: &Path,
-    outcome: &str,
-    artifacts_produced: &[String],
-) -> Result<String, ProjectContextError> {
-    let candidate = artifacts_produced.first().map_or_else(
-        || {
-            (outcome == "no_change")
-                .then_some(output_path.to_path_buf())
-                .ok_or(ProjectContextError::MissingAuthorArtifact)
+    let profiles =
+        ProfileRegistry::load().map_err(|e| ProjectContextError::Profile(e.to_string()))?;
+    let outcome = crate::agent_invocation::invoke(
+        bridge,
+        crate::agent_invocation::InvocationRequest {
+            profile: PROJECT_CONTEXT_PROFILE,
+            bindings: invocation
+                .binding_values
+                .iter()
+                .map(|(var, value)| (var.0.clone(), value.clone()))
+                .collect(),
+            working_dir: &options.project_root,
+            deadline: PROJECT_CONTEXT_AUTHOR_TIMEOUT,
+            cancel,
+            recorder: None,
+            profiles: &profiles,
+            agents: options.agents.as_deref(),
+            max_contract_rejections: crate::agent_invocation::DEFAULT_MAX_CONTRACT_REJECTIONS,
         },
-        |reported| author_artifact_path(root, reported),
-    )?;
-    std::fs::read_to_string(&candidate).map_err(|source| ProjectContextError::Io {
-        path: candidate,
-        source,
-    })
-}
-
-fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectContextError> {
-    let path = PathBuf::from(reported);
-    let candidate = if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    };
-    let root = root
-        .canonicalize()
-        .map_err(|source| ProjectContextError::Io {
-            path: root.to_path_buf(),
-            source,
-        })?;
-    let candidate = candidate
-        .canonicalize()
-        .map_err(|source| ProjectContextError::Io {
-            path: candidate.clone(),
-            source,
-        })?;
-    if !candidate.starts_with(&root) {
-        return Err(ProjectContextError::Bridge(format!(
-            "reported artifact path escapes project root: {}",
-            candidate.display()
-        )));
+    )
+    .await?;
+    if let Some(artifact) = outcome.artifacts.first() {
+        return String::from_utf8(artifact.bytes.clone()).map_err(|_| ProjectContextError::Io {
+            path: options.project_root.join(&artifact.path),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, "not UTF-8"),
+        });
     }
-    Ok(candidate)
+    if outcome.outcome.as_str() == "no_change" {
+        return std::fs::read_to_string(&options.output_path).map_err(|source| {
+            ProjectContextError::Io {
+                path: options.output_path.clone(),
+                source,
+            }
+        });
+    }
+    Err(ProjectContextError::MissingAuthorArtifact)
 }
 
 /// Seed every config-derived field on an [`EngineRunConfig`].
@@ -863,26 +759,14 @@ pub fn scan_project(root: &Path, limits: ScanLimits) -> Result<ProjectScan, Proj
 struct ProjectContextInvocation {
     profile_id: String,
     normalized_agent_id: String,
-    agent_command: String,
-    agent_args: Vec<String>,
-    agent_env: BTreeMap<String, String>,
-    prompt_template: String,
     bindings: Vec<Binding>,
     binding_values: Vec<(TemplateVar, String)>,
-}
-
-impl ProjectContextInvocation {
-    fn agent_kind(&self) -> AgentKind {
-        AgentKind::Custom {
-            binary: PathBuf::from(&self.agent_command),
-            args: self.agent_args.clone(),
-        }
-    }
 }
 
 fn project_context_invocation(
     root: &Path,
     scan: &ProjectScan,
+    agents: Option<&surge_acp::Registry>,
 ) -> Result<ProjectContextInvocation, ProjectContextError> {
     let registry =
         ProfileRegistry::load().map_err(|e| ProjectContextError::Profile(e.to_string()))?;
@@ -891,19 +775,14 @@ fn project_context_invocation(
     let resolved = registry
         .resolve(&key_ref)
         .map_err(|e| ProjectContextError::Profile(e.to_string()))?;
-    let agent_registry = surge_acp::Registry::builtin();
+    // The operator's merged registry (ADR-0019), not only the builtins.
+    let agent_registry = crate::engine::capacity::run_agent_registry_or_builtin(agents);
     let normalized_agent_id = agent_registry
         .normalize_agent_id(&resolved.profile.runtime.agent_id)
         .ok_or_else(|| ProjectContextError::UnknownAgentId {
             agent_id: resolved.profile.runtime.agent_id.clone(),
             known: agent_registry.known_ids_and_aliases().join(", "),
         })?;
-    let entry = agent_registry.find(&normalized_agent_id).ok_or_else(|| {
-        ProjectContextError::UnknownAgentId {
-            agent_id: normalized_agent_id.clone(),
-            known: agent_registry.known_ids_and_aliases().join(", "),
-        }
-    })?;
     let bindings = vec![
         Binding {
             source: ArtifactSource::Static {
@@ -920,15 +799,6 @@ fn project_context_invocation(
             optional: false,
         },
     ];
-    // Resolve the entry's env spec here, on the real invocation path, so a
-    // project-context run on Ollama (or any future env-bearing runtime)
-    // reaches the same provider routing as an engine run of that profile.
-    let agent_env = surge_acp::agent_env::resolve(&entry.id, &entry.env).map_err(|e| {
-        ProjectContextError::Profile(format!(
-            "runtime '{}' cannot resolve its environment: {e}",
-            entry.id
-        ))
-    })?;
     let binding_values = vec![
         (
             TemplateVar("worktree_root".to_string()),
@@ -953,10 +823,6 @@ fn project_context_invocation(
             resolved.profile.role.version
         ),
         normalized_agent_id,
-        agent_command: entry.command.clone(),
-        agent_args: entry.default_args.clone(),
-        agent_env,
-        prompt_template: resolved.profile.prompt.system.clone(),
         bindings,
         binding_values,
     })

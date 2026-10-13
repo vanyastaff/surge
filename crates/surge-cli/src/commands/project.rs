@@ -71,7 +71,9 @@ async fn describe(args: ProjectDescribeArgs) -> Result<()> {
         "running project describe"
     );
 
-    let mut options = ProjectContextOptions::new(project_root, output_path);
+    // The operator's `[agents.*]` over builtins (ADR-0019).
+    let mut options = ProjectContextOptions::new(project_root, output_path)
+        .with_agent_registry(Arc::new(surge_acp::Registry::for_run(&config)));
     options.refresh = args.refresh;
     options.dry_run = args.dry_run;
     let outcome = describe_with_mode(options, args.author_mode)
@@ -153,7 +155,8 @@ async fn describe_with_agent(
             storage.work_items(),
         ),
     );
-    let result = describe_project_with_bridge(options, facade).await;
+    let cancel = super::common::cancel_on_ctrl_c();
+    let result = describe_project_with_bridge(options, facade, &cancel).await;
     if let Ok(bridge) = Arc::try_unwrap(bridge)
         && let Err(e) = bridge.shutdown().await
     {
