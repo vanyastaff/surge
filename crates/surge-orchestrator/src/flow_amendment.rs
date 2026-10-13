@@ -60,6 +60,9 @@ pub enum FlowAmendmentError {
     /// TOML serialization failed.
     #[error("failed to serialize amended flow: {0}")]
     Serialize(#[from] toml::ser::Error),
+    /// Computing a graph's identity failed.
+    #[error("failed to compute graph identity: {0}")]
+    Identity(String),
 }
 
 /// Insert amendment stages into an active graph before its success terminal.
@@ -198,7 +201,7 @@ fn finalize_graph(
         "flow_amendment_validation_succeeded"
     );
     let flow_toml = toml::to_string(&graph)?;
-    let graph_hash = ContentHash::compute(flow_toml.as_bytes());
+    let graph_hash = graph_content_hash(&graph)?;
     Ok(FlowAmendmentResult {
         graph,
         flow_toml,
@@ -512,7 +515,30 @@ fn amendment_spec_text(label: &str, roadmap_markdown: &str) -> String {
     )
 }
 
-pub(crate) fn graph_content_hash(graph: &Graph) -> Result<ContentHash, toml::ser::Error> {
-    let toml = toml::to_string(graph)?;
-    Ok(ContentHash::compute(toml.as_bytes()))
+/// A graph's identity for amendment records: [`Graph::identity`], the same
+/// hash `PipelineMaterialized` records, so an amendment's
+/// `previous_graph_hash` is comparable with the active graph's (#98).
+pub(crate) fn graph_content_hash(graph: &Graph) -> Result<ContentHash, FlowAmendmentError> {
+    graph
+        .identity()
+        .map_err(|error| FlowAmendmentError::Identity(error.to_string()))
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// An amendment's `previous_graph_hash` is the active graph's recorded
+    /// identity (#98): for an unamended graph the two are equal, so a stale
+    /// revision can be detected by comparison.
+    #[test]
+    fn amendment_hashes_are_the_graph_identity() {
+        let graph = surge_core::BundledFlows::by_name_latest("linear-3")
+            .unwrap()
+            .graph;
+        assert_eq!(
+            graph_content_hash(&graph).unwrap(),
+            graph.identity().unwrap()
+        );
+    }
 }

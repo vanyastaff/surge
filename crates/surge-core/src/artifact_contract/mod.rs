@@ -8,6 +8,7 @@
 mod contract;
 mod diagnostic;
 mod kinds;
+mod names;
 mod parse;
 mod path;
 mod schema;
@@ -24,6 +25,9 @@ pub use contract::{
 pub use diagnostic::{
     ArtifactDiagnosticCode, ArtifactDiagnosticSeverity, ArtifactValidationDiagnostic,
     ArtifactValidationError, ArtifactValidationReport,
+};
+pub use names::{
+    AmbiguousArtifact, ArtifactName, artifact_name, canonical_seed_path, select_canonical,
 };
 pub use schema::{ContractSummary, contract_summary, json_schema_for, markdown_outline};
 

@@ -10,9 +10,7 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::id::{RunId, SessionId};
 use surge_core::keys::OutcomeKey;
 use surge_core::run_event::EventPayload;
-use surge_orchestrator::bootstrap_driver::{
-    BootstrapError, MaterializedRun, run_bootstrap_in_worktree,
-};
+use surge_orchestrator::bootstrap_driver::{BootstrapError, run_bootstrap_in_worktree};
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig};
@@ -107,7 +105,11 @@ impl BootstrapHarness {
         dir.close().unwrap();
     }
 
-    pub fn start(&self, prompt: &str) -> JoinHandle<Result<MaterializedRun, BootstrapError>> {
+    pub fn start(
+        &self,
+        prompt: &str,
+    ) -> JoinHandle<Result<surge_orchestrator::bootstrap::handoff::BootstrapHandoff, BootstrapError>>
+    {
         let engine = self.engine.clone();
         let prompt = prompt.to_owned();
         let run_id = self.run_id;
@@ -314,6 +316,13 @@ pub fn event_payloads(events: &[ReadEvent]) -> Vec<&EventPayload> {
         .map(|event| &event.payload.payload)
         .collect::<Vec<_>>()
 }
+
+/// A description that satisfies its artifact contract: the bootstrap
+/// handoff refuses anything else (#98).
+pub const VALID_DESCRIPTION: &str = include_str!("artifacts/valid/description.md");
+
+/// A machine roadmap that satisfies its artifact contract.
+pub const VALID_ROADMAP: &str = include_str!("artifacts/valid/roadmap.toml");
 
 pub fn bundled_flow_toml(name: &str) -> String {
     let graph = surge_core::BundledFlows::by_name_latest(name)

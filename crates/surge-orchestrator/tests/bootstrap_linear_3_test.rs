@@ -13,21 +13,13 @@ async fn bootstrap_linear_3_materializes_valid_followup_graph() {
 
     harness.wait_for_subscribe_count(1).await;
     harness
-        .complete_agent_with_artifact(
-            0,
-            "description.md",
-            "## Goal\nShip a small focused CLI improvement.\n",
-        )
+        .complete_agent_with_artifact(0, "description.md", fixtures::bootstrap::VALID_DESCRIPTION)
         .await;
     harness.approve_next_gate().await;
 
     harness.wait_for_subscribe_count(2).await;
     harness
-        .complete_agent_with_artifact(
-            1,
-            "roadmap.md",
-            "## Milestones\n1. Specify\n2. Implement\n3. Verify\n",
-        )
+        .complete_agent_with_artifact(1, "roadmap.toml", fixtures::bootstrap::VALID_ROADMAP)
         .await;
     harness.approve_next_gate().await;
 
@@ -42,8 +34,8 @@ async fn bootstrap_linear_3_materializes_valid_followup_graph() {
     harness.approve_next_gate().await;
 
     let materialized = driver.await.unwrap().expect("bootstrap succeeds");
-    assert_eq!(materialized.materialized_graph.metadata.name, "linear-3");
-    validate_for_m6(&materialized.materialized_graph).unwrap();
+    assert_eq!(materialized.graph.metadata.name, "linear-3");
+    validate_for_m6(&materialized.graph).unwrap();
 
     let events = harness.read_events().await;
     assert!(events.iter().any(|event| {

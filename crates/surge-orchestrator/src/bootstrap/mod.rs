@@ -8,6 +8,7 @@
 //! → Approve.
 
 mod builder;
+pub mod handoff;
 mod minimal;
 
 pub use builder::{BootstrapBuildError, BootstrapGraphBuilder, BootstrapPrompt};

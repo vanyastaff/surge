@@ -130,6 +130,9 @@ pub(crate) enum AdmissionRejection {
     /// control.
     #[error("{0}")]
     OwnedFlowInputs(String),
+    /// A follow-up run's bootstrap handoff was refused (#98).
+    #[error("bootstrap handoff refused: {0}")]
+    BootstrapHandoff(crate::bootstrap::handoff::HandoffRejection),
     /// The log already claims termination more than once (#95).
     #[error("run {run_id} has conflicting terminal history at seqs {seqs:?}")]
     TerminalConflict {
@@ -171,6 +174,7 @@ impl From<AdmissionRejection> for EngineError {
                 Self::TerminalHistoryConflict { run_id, seqs }
             },
             AdmissionRejection::Storage(message) => Self::Storage(message),
+            AdmissionRejection::BootstrapHandoff(rejection) => Self::BootstrapHandoff(rejection),
         }
     }
 }
@@ -502,6 +506,15 @@ impl Admission<'_> {
             "entered engine path",
         );
 
+        // A follow-up of a bootstrap run inherits exactly what the handoff
+        // validated for the graph it was given (#98), through the seed path:
+        // each inherited artifact is recorded once, and loop-seed validation
+        // sees the inherited roadmap.
+        if let Some(parent) = run_config.bootstrap_parent {
+            self.inherit_bootstrap_handoff(parent, &graph, &mut run_config)
+                .await?;
+        }
+
         // A task-claimed start trusts its reservation: the same sequence
         // validated and froze this config at reservation time.
         if claim.is_none() {
@@ -560,16 +573,10 @@ impl Admission<'_> {
         claim: Option<&WorkItemLaunchClaim>,
         task_context: Option<surge_core::work_item::WorkItemContext>,
     ) -> Result<(), AdmissionRejection> {
-        let mut events = startup::build_startup_events(
-            self.storage,
-            artifact_store,
-            run_id,
-            graph,
-            worktree_path,
-            run_config,
-        )
-        .await
-        .map_err(internal)?;
+        let mut events =
+            startup::build_startup_events(artifact_store, run_id, graph, worktree_path, run_config)
+                .await
+                .map_err(internal)?;
         if let Some(context) = task_context {
             if let Some(claim) = claim {
                 self.storage
@@ -594,6 +601,46 @@ impl Admission<'_> {
                 .acknowledge_owned_flow_startup(claim, inputs.manifest())
                 .map_err(|error| AdmissionRejection::OwnedFlowInputs(error.to_string()))?;
         }
+        Ok(())
+    }
+
+    /// Reload the bootstrap handoff for `graph` and add its inherited
+    /// artifacts to the run's seeds, refusing a caller seed that would record
+    /// one of them a second time.
+    async fn inherit_bootstrap_handoff(
+        &self,
+        parent: RunId,
+        graph: &Graph,
+        run_config: &mut EngineRunConfig,
+    ) -> Result<(), AdmissionRejection> {
+        use crate::bootstrap::handoff::{HandoffContext, HandoffRejection, reload};
+        let expected = graph.identity().map_err(|error| {
+            AdmissionRejection::Internal(Box::new(EngineError::Internal(error.to_string())))
+        })?;
+        let agents = self.agent_registry_for(run_config);
+        let context = HandoffContext {
+            profiles: self.config.profile_registry.as_deref(),
+            agents: agents.as_deref(),
+        };
+        let handoff = reload(self.storage, parent, &context, expected)
+            .await
+            .map_err(AdmissionRejection::BootstrapHandoff)?;
+        let seeds = handoff
+            .seed_artifacts()
+            .map_err(AdmissionRejection::BootstrapHandoff)?;
+        if let Some(collision) = run_config
+            .seed_artifacts
+            .iter()
+            .find(|seed| seeds.iter().any(|inherited| inherited.name == seed.name))
+        {
+            return Err(AdmissionRejection::BootstrapHandoff(
+                HandoffRejection::Internal(format!(
+                    "seed {} would duplicate the artifact inherited from bootstrap parent {parent}",
+                    collision.name
+                )),
+            ));
+        }
+        run_config.seed_artifacts.extend(seeds);
         Ok(())
     }
 

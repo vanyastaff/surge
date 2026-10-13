@@ -385,6 +385,25 @@ impl Engine {
             .map_err(EngineError::from)
     }
 
+    /// The validated handoff of a completed bootstrap run, against this
+    /// engine's profile registry and agent catalog (#98). Read-only.
+    ///
+    /// # Errors
+    /// A typed [`crate::bootstrap::handoff::HandoffRejection`].
+    pub async fn prepare_bootstrap_handoff(
+        &self,
+        parent: RunId,
+    ) -> Result<
+        crate::bootstrap::handoff::BootstrapHandoff,
+        crate::bootstrap::handoff::HandoffRejection,
+    > {
+        let context = crate::bootstrap::handoff::HandoffContext {
+            profiles: self.config.profile_registry.as_deref(),
+            agents: self.config.agent_registry.as_deref(),
+        };
+        crate::bootstrap::handoff::prepare(&self.storage, parent, &context).await
+    }
+
     /// Launch exactly the host's durable reservation, never a caller-owned binding.
     pub async fn start_work_item(
         &self,

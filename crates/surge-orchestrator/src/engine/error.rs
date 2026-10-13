@@ -41,6 +41,11 @@ pub enum EngineError {
     #[error("resume refused: the run's graph no longer validates: {0}")]
     ResumeGraphInvalid(String),
 
+    /// Run admission (#98): a follow-up run's bootstrap handoff was refused
+    /// (an invalid plan, or a parent whose completion is not confirmed).
+    #[error("bootstrap handoff refused: {0}")]
+    BootstrapHandoff(crate::bootstrap::handoff::HandoffRejection),
+
     /// Run admission (#97, ADR-0021): a prior MCP process group of the run
     /// could not be stopped or its ownership is unclear.
     #[error("resume refused: prior MCP process group is not stopped: {0}")]

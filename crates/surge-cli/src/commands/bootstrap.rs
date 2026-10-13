@@ -11,8 +11,9 @@ use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_core::run_event::{BootstrapStage, EventPayload};
 use surge_git::{GitManager, WorktreeLocation};
+use surge_orchestrator::bootstrap::handoff::{BootstrapHandoff, BootstrapStop};
 use surge_orchestrator::bootstrap_driver::{
-    MaterializedRun, materialized_run_from_completed, run_bootstrap_in_worktree,
+    BootstrapError, handoff_from_completed, run_bootstrap_in_worktree,
 };
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunOutcome};
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
@@ -84,20 +85,19 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
         .await
     });
 
-    let materialized = await_bootstrap_driver(driver, approvals, |reason| {
+    let handoff = await_bootstrap_driver(driver, approvals, |reason| {
         engine.stop_run(bootstrap_run_id, reason)
     })
-    .await?;
-    start_followup_run(engine, materialized, worktree, project_root, config).await
+    .await
+    .map_err(|error| render_driver_error(bootstrap_run_id, error))?;
+    start_followup_run(engine, &handoff, worktree, project_root, config).await
 }
 
 async fn await_bootstrap_driver<S, C>(
-    mut driver: tokio::task::JoinHandle<
-        Result<MaterializedRun, surge_orchestrator::bootstrap_driver::BootstrapError>,
-    >,
+    mut driver: tokio::task::JoinHandle<Result<BootstrapHandoff, BootstrapError>>,
     mut approvals: tokio::task::JoinHandle<Result<()>>,
     stop: S,
-) -> Result<MaterializedRun>
+) -> Result<BootstrapHandoff>
 where
     S: FnOnce(String) -> C,
     C: std::future::Future<Output = Result<(), surge_orchestrator::engine::EngineError>>,
@@ -145,49 +145,65 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
         |prompt| prompt_for_gate_decision(None, prompt),
     )
     .await?;
-    match outcome {
-        RunOutcome::Completed { .. } => {},
-        RunOutcome::SettlementFailed { failures, .. } => {
-            return Err(anyhow!(
-                "bootstrap resource settlement failed; completion is unconfirmed: {failures:?}"
-            ));
-        },
-        RunOutcome::Failed { error } => return Err(anyhow!("bootstrap run failed: {error}")),
-        RunOutcome::Aborted { reason } => return Err(anyhow!("bootstrap run aborted: {reason}")),
-        RunOutcome::Parked { wake_at } => {
-            return Err(anyhow!(
-                "bootstrap run parked until {wake_at} (provider rate limit exhausted); the \
-                 worktree and event log are intact — run `surge bootstrap resume {bootstrap_run_id}` \
-                 again after that time"
-            ));
-        },
-        _ => return Err(anyhow!("bootstrap run reached an unknown terminal outcome")),
+    if let Some(message) = stop_message(
+        bootstrap_run_id,
+        &surge_orchestrator::bootstrap::handoff::classify(&outcome),
+    ) {
+        return Err(anyhow!(message));
     }
 
-    let materialized = materialized_run_from_completed(engine.as_ref(), bootstrap_run_id).await?;
-    start_followup_run(engine, materialized, worktree, project_root, config).await
+    let handoff = handoff_from_completed(engine.as_ref(), bootstrap_run_id)
+        .await
+        .map_err(|error| render_driver_error(bootstrap_run_id, error.into()))?;
+    start_followup_run(engine, &handoff, worktree, project_root, config).await
 }
 
+/// Start the follow-up run the handoff validated. The engine inherits the
+/// parent's approved artifacts through the same handoff, once; the CLI
+/// passes no bootstrap seeds (#98).
 async fn start_followup_run(
     engine: Arc<Engine>,
-    materialized: MaterializedRun,
+    handoff: &BootstrapHandoff,
+    worktree: PathBuf,
+    project_root: PathBuf,
+    config: SurgeConfig,
+) -> Result<()> {
+    if handoff.edits_applied > 0 {
+        println!(
+            "applied {} plan edit(s) from the flow approval",
+            handoff.edits_applied
+        );
+    }
+    launch_followup(
+        engine,
+        handoff.graph.clone(),
+        Some(handoff.parent),
+        worktree,
+        project_root,
+        config,
+    )
+    .await
+}
+
+async fn launch_followup(
+    engine: Arc<Engine>,
+    graph: surge_core::graph::Graph,
+    bootstrap_parent: Option<RunId>,
     worktree: PathBuf,
     project_root: PathBuf,
     config: SurgeConfig,
 ) -> Result<()> {
     let followup_run_id = RunId::new();
     println!("followup_run_id={followup_run_id}");
-    let seed_artifacts = bootstrap_seeds(&materialized, &worktree).await?;
     let events = engine.subscribe_tap();
     let handle = engine
         .start_run(
             followup_run_id,
-            materialized.materialized_graph,
-            worktree.clone(),
+            graph,
+            worktree,
             surge_orchestrator::project_context::with_project_context_seed(
                 EngineRunConfig {
-                    bootstrap_parent: Some(materialized.bootstrap_run_id),
-                    seed_artifacts,
+                    bootstrap_parent,
                     ..EngineRunConfig::default()
                 },
                 &project_root,
@@ -202,37 +218,43 @@ async fn start_followup_run(
     super::run_lifecycle::require_completed(followup_run_id, outcome)
 }
 
-/// The approved description, roadmap and flow as run seeds for the follow-up
-/// run. A `multi-milestone` flow iterates the seeded `roadmap`, so without
-/// these it fails validation before its first step (the daemon and desktop
-/// app seed the same three artifacts).
-async fn bootstrap_seeds(
-    materialized: &MaterializedRun,
-    worktree: &Path,
-) -> Result<Vec<surge_orchestrator::engine::config::RunSeedArtifact>> {
-    use surge_orchestrator::engine::config::RunSeedArtifact;
-    use surge_persistence::artifacts::ArtifactStore;
+/// The operator-facing message for a bootstrap run that stopped without a
+/// handoff; `None` when it completed. One arm per [`BootstrapStop`].
+fn stop_message(run_id: RunId, stop: &BootstrapStop) -> Option<String> {
+    Some(match stop {
+        BootstrapStop::Completed => return None,
+        BootstrapStop::Parked { wake_at } => format!(
+            "bootstrap run parked until {wake_at} (provider rate limit exhausted); the \
+             worktree and event log are intact — run `surge bootstrap resume {run_id}` \
+             again after that time"
+        ),
+        BootstrapStop::Suspended => format!(
+            "bootstrap run {run_id} is suspended and resumable; continue it with \
+             `surge bootstrap resume {run_id}`"
+        ),
+        BootstrapStop::RecoveryRequired { diagnostic } => format!(
+            "bootstrap run {run_id} needs explicit recovery: {diagnostic}; inspect it with \
+             `surge engine replay {run_id}`"
+        ),
+        BootstrapStop::Failed { error } => format!("bootstrap run failed: {error}"),
+        BootstrapStop::Aborted { reason } => format!("bootstrap run aborted: {reason}"),
+        BootstrapStop::SettlementFailed { failures } => {
+            format!("bootstrap resource settlement failed; completion is unconfirmed: {failures}")
+        },
+    })
+}
 
-    let store = ArtifactStore::new(surge_home_dir()?.join("runs"));
-    let mut seeds = Vec::new();
-    for artifact in &materialized.artifacts {
-        let bytes = store
-            .open_ref(materialized.bootstrap_run_id, artifact, worktree)
-            .await
-            .with_context(|| format!("read approved {} artifact", artifact.name))?;
-        let text = String::from_utf8(bytes)
-            .with_context(|| format!("{} artifact is not UTF-8", artifact.name))?;
-        let path = match artifact.name.as_str() {
-            "flow" => "flow.toml".to_string(),
-            "roadmap" if toml::from_str::<toml::Value>(&text).is_ok() => "roadmap.toml".to_string(),
-            name => format!("{name}.md"),
-        };
-        seeds.push(
-            RunSeedArtifact::new(&artifact.name, path, &text, "bootstrap_parent")
-                .map_err(|e| anyhow!("seed {}: {e}", artifact.name))?,
-        );
+fn render_driver_error(run_id: RunId, error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<BootstrapError>() {
+        Some(BootstrapError::Stopped(stop)) => match stop_message(run_id, stop) {
+            Some(message) => anyhow!(message),
+            None => error,
+        },
+        Some(BootstrapError::Handoff(rejection)) => {
+            anyhow!("the approved plan of bootstrap run {run_id} was refused: {rejection}")
+        },
+        _ => error,
     }
-    Ok(seeds)
 }
 
 async fn drive_run_handle<D>(
@@ -643,11 +665,9 @@ mod tests {
         let driver = tokio::spawn(async move {
             cancelled.await.unwrap();
             settled_by_driver.store(true, Ordering::SeqCst);
-            Err(
-                surge_orchestrator::bootstrap_driver::BootstrapError::RunFailed(
-                    "persist RunAborted: disk failure".into(),
-                ),
-            )
+            Err(BootstrapError::Stopped(BootstrapStop::Failed {
+                error: "persist RunAborted: disk failure".into(),
+            }))
         });
         let approvals = tokio::spawn(async { Err(anyhow!("approval input closed")) });
         let error = tokio::time::timeout(
@@ -674,13 +694,16 @@ mod tests {
         let id = RunId::new();
         let driver = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            Ok(MaterializedRun {
-                bootstrap_run_id: id,
-                materialized_graph: toml::from_str(include_str!(
-                    "../../../../examples/flow_terminal_only.toml"
-                ))
-                .unwrap(),
+            let graph: surge_core::graph::Graph =
+                toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml"))
+                    .unwrap();
+            Ok(BootstrapHandoff {
+                parent: id,
+                parent_worktree: PathBuf::new(),
+                identity: graph.identity().unwrap(),
+                graph,
                 artifacts: vec![],
+                edits_applied: 0,
             })
         });
         let approvals = tokio::spawn(async { Ok(()) });
@@ -693,7 +716,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(run.bootstrap_run_id, id);
+        assert_eq!(run.parent, id);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -818,6 +841,43 @@ mod tests {
         .unwrap()
     }
 
+    /// No bootstrap outcome is "unknown": suspended and recovery-required runs
+    /// say they are resumable / need recovery, with the diagnostic (#98).
+    #[test]
+    fn every_bootstrap_stop_has_a_specific_message() {
+        let run = RunId::new();
+        assert_eq!(stop_message(run, &BootstrapStop::Completed), None);
+        let suspended = stop_message(run, &BootstrapStop::Suspended).unwrap();
+        assert!(suspended.contains("resumable"), "{suspended}");
+        assert!(suspended.contains(&format!("surge bootstrap resume {run}")));
+        let recovery = stop_message(
+            run,
+            &BootstrapStop::RecoveryRequired {
+                diagnostic: "fence lost".into(),
+            },
+        )
+        .unwrap();
+        assert!(recovery.contains("fence lost"), "{recovery}");
+        let parked = stop_message(
+            run,
+            &BootstrapStop::Parked {
+                wake_at: chrono::Utc::now(),
+            },
+        )
+        .unwrap();
+        assert!(parked.contains("surge bootstrap resume"), "{parked}");
+        for stop in [
+            BootstrapStop::Failed { error: "e".into() },
+            BootstrapStop::Aborted { reason: "r".into() },
+            BootstrapStop::SettlementFailed {
+                failures: "f".into(),
+            },
+        ] {
+            let message = stop_message(run, &stop).unwrap();
+            assert!(!message.contains("unknown"), "{message}");
+        }
+    }
+
     #[test]
     fn gate_explicit_decisions_and_blank_enter() {
         for (text, outcome, comment) in [
@@ -895,13 +955,10 @@ mod tests {
                 );
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
-                start_followup_run(
+                launch_followup(
                     engine,
-                    MaterializedRun {
-                        bootstrap_run_id: parent,
-                        materialized_graph: failure,
-                        artifacts: vec![],
-                    },
+                    failure,
+                    None,
                     temp.path().to_path_buf(),
                     temp.path().to_path_buf(),
                     SurgeConfig::default(),
