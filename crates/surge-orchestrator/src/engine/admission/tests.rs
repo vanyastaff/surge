@@ -508,3 +508,121 @@ fn only_matching_capacity_continue_or_a_park_bypasses_the_precheck() {
         .bypasses_precheck()
     );
 }
+
+impl Fixture {
+    /// Reserve a durable task whose frozen config is the default and graph `graph`,
+    /// exactly as the daemon's reservation step leaves it. Returns its run.
+    fn reserve(&self, graph: Graph) -> RunId {
+        use surge_core::work_item::{
+            WorkItemCommand, WorkItemRequirements, WorkItemResult, WorkItemWorkspace,
+        };
+        let path = self.worktree.path().to_path_buf();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let workspace = WorkItemWorkspace {
+            repository: path.join(".git").canonicalize().unwrap(),
+            checkout: path.clone(),
+            path: path.clone(),
+            ownership: RunId::new().to_string(),
+            branch: "fixture".into(),
+            base_commit: "a".repeat(40),
+        };
+        let create = WorkItemCommand::Create {
+            operation_id: surge_core::id::WorkItemOperationId::new(),
+            project: path,
+            title: "Admission oracle".into(),
+            requirements: WorkItemRequirements::new("Do it".into(), vec!["done".into()]).unwrap(),
+        };
+        let WorkItemResult::Detail(created) = self
+            .storage
+            .work_items()
+            .mutate(&create, Some(&workspace), None, "human", 1)
+            .unwrap()
+        else {
+            panic!("created")
+        };
+        let start = WorkItemCommand::Start {
+            operation_id: surge_core::id::WorkItemOperationId::new(),
+            item: created.item.id,
+            expected_version: created.item.version,
+            graph: Box::new(graph),
+            quota_recovery: None,
+        };
+        let frozen = serde_json::to_string(&EngineRunConfig::default()).unwrap();
+        let WorkItemResult::Attempt(attempt) = self
+            .storage
+            .work_items()
+            .mutate(&start, None, Some(&frozen), "host", 2)
+            .unwrap()
+        else {
+            panic!("reserved")
+        };
+        attempt.run
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn untracked_start_or_resume_of_a_reserved_task_requires_ownership() {
+    let fx = Fixture::new().await;
+    let run_id = fx.reserve(graph("implementer@1.0"));
+    let rejection = fx
+        .admission()
+        .admit(fx.fresh(run_id, graph("implementer@1.0"), EngineRunConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(rejection, AdmissionRejection::OwnershipRequired(_)),
+        "{rejection}"
+    );
+    let rejection = fx
+        .admission()
+        .admit(fx.replayed(run_id))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(rejection, AdmissionRejection::OwnershipRequired(_)),
+        "{rejection}"
+    );
+    assert!(matches!(
+        EngineError::from(rejection),
+        EngineError::OwnershipRequired(_)
+    ));
+    assert!(fx.storage.get_run(&run_id).await.unwrap().is_none());
+    fx.close();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_start_trusts_its_frozen_reservation_and_refuses_a_used_journal() {
+    // The reservation's graph references a profile the registry does not
+    // hold. Fresh admission would refuse it; a task start must not re-run
+    // validation — freezing is the only producer of a task's config.
+    let mut fx = Fixture::new().await;
+    let run_id = fx.reserve(graph("not-in-the-registry@1.0"));
+    fx.config.profile_registry = Some(registry());
+    let claim = fx.storage.work_items().claim(run_id).unwrap();
+
+    let admitted = run(fx.admission().admit(AdmissionKind::TaskStart(&claim)).await);
+    assert_eq!(admitted.run_id, run_id);
+    assert!(admitted.claim.is_some());
+    assert!(admitted.resume.is_none());
+    admitted.writer.close().await.unwrap();
+    assert_eq!(fx.kinds(run_id).await.first(), Some(&"RunStarted"));
+
+    let rejection = fx
+        .admission()
+        .admit(AdmissionKind::TaskStart(&claim))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(rejection, AdmissionRejection::NonEmptyJournal),
+        "{rejection}"
+    );
+    fx.close();
+}
