@@ -111,6 +111,12 @@ Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Fold
 | `Notify` | side-effect, no routing decision. |
 | `Terminal` | append `RunCompleted` / `RunFailed` / `RunAborted`, exit. |
 
+**Only the run task writes `StageFailed`.** A stage returns its failure as a
+typed `StageError` and never records terminal state itself; the run task runs
+the node's `on_error` hooks and then either records the suppressed outcome or
+appends exactly one `StageFailed` for the visit. A stage visit is therefore
+failed or routed, never both.
+
 ### Replay, fork, crash recovery
 
 - **Replay** = fold the events up to seq `N` and render the canvas / detail panel at that point.

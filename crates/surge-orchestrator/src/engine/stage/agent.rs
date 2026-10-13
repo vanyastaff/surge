@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use surge_acp::bridge::event::BridgeEvent;
@@ -17,16 +17,14 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
 use surge_core::agent_config::{AgentConfig, ArtifactSource};
-use surge_core::artifact_contract::{ArtifactDiagnosticSeverity, validate_artifact};
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::node::{LedgerEffect, OutcomeDecl};
+use surge_core::node::OutcomeDecl;
 use surge_core::profile::registry::ResolvedProfile;
 use surge_core::roadmap::RoadmapTaskId;
 use surge_core::run_event::{
     EscalationCause, EventPayload, SessionDisposition, VersionedEventPayload,
 };
-use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
 
@@ -1174,7 +1172,8 @@ async fn execute_agent_attempt(
     // Track outcomes rejected by `on_outcome` hooks within THIS session so we
     // can surface `StageFailed` once the agent burns its retry budget.
     let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
-    let mut outcome_rejection_attempts: u32 = 0;
+    let mut rejection_budget =
+        super::outcome_acceptance::RejectionBudget::new(max_outcome_rejections);
 
     let execution_writer = session_config.writer_id;
     p.writer
@@ -1620,7 +1619,7 @@ async fn execute_agent_attempt(
                 prompt_success = true;
     // Record each steer delivery only after the prompt was actually sent, so a
     // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
-    for steer in p.steers.iter().filter(|_| outcome_rejection_attempts == 0) {
+    for steer in p.steers.iter().filter(|_| rejection_budget.attempts() == 0) {
         p.writer
             .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
                 id: steer.id.clone(),
@@ -1671,313 +1670,35 @@ async fn execute_agent_attempt(
                 verification_report,
                 ..
             } => {
-                let mut outcome = outcome;
-                let mut summary = summary;
-                // on_outcome hook chain runs BEFORE OutcomeReported is persisted.
-                // A rejecting hook lets the agent attempt a different outcome
-                // until `limits.max_retries` is exhausted.
-                let hook_ctx = HookContext::for_node(p.node)
-                    .with_writer(p.writer, provider_invocation)
-                    .with_worktree_path(p.worktree_path)
-                    .with_session(session_id)
-                    .with_outcome(&outcome);
-                let outcome_chain = p
-                    .hook_executor
-                    .run_hooks(&effective_hooks, HookTrigger::OnOutcome, &hook_ctx)
-                    .await;
-                for record in outcome_chain.executed() {
-                    record_hook_executed(p.writer, record).await;
-                }
-
-                if let HookOutcome::Reject {
-                    reason, hook_id, ..
-                } = &outcome_chain
-                {
-                    record_outcome_rejection(
-                        RejectionRecordParams {
-                            writer: p.writer,
-                            bridge: p.bridge,
-                            node: p.node,
-                            session_id,
-                            outcome: &outcome,
-                            hook_id,
-                            reason,
-                            source: "on_outcome hook",
-                            max_rejections: max_outcome_rejections,
-                        },
-                        &mut outcome_rejection_attempts,
-                    )
-                    .await?;
-                    retry_feedback = Some(validation_retry_prompt(&format!("{hook_id}: {reason}")));
-                    continue;
-                }
-
-                // Sealed-verifier gate. A `Verified` outcome is the sole path
-                // to a verified `Completed` ledger status, so it may only be
-                // reported from a sealed (read-only, no-network, no-shell)
-                // sandbox — a verifier that can edit the workspace cannot be
-                // trusted to certify it. Rejecting forces the agent to pick a
-                // different outcome; a misconfigured verifier exhausts retries
-                // and the stage fails with a clear diagnostic.
-                if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified
-                    && sandbox_cfg.mode != surge_core::sandbox::SandboxMode::ReadOnly
-                {
-                    record_outcome_rejection(
-                        RejectionRecordParams {
-                            writer: p.writer,
-                            bridge: p.bridge,
-                            node: p.node,
-                            session_id,
-                            outcome: &outcome,
-                            hook_id: "verification_authority",
-                            reason: "a Verified outcome requires a sealed \
-                                     read-only sandbox (no workspace writes)",
-                            source: "verification authority",
-                            max_rejections: max_outcome_rejections,
-                        },
-                        &mut outcome_rejection_attempts,
-                    )
-                    .await?;
-                    retry_feedback = Some(validation_retry_prompt("A verified outcome requires a sealed read-only sandbox. Report an appropriate non-verified outcome instead."));
-                    continue;
-                }
-
-                let accepted_report = if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified && p.active_task_id.is_none() && verification_report.is_none()
-                    && resolved_profile.as_ref().is_some_and(|profile| profile.profile.outcomes.iter().any(|declaration| declaration.id == outcome && declaration.produced_artifacts.iter().any(|artifact| artifact.contract.kind == ArtifactKind::VerificationReport))) {
-                    None // Historical file audit: the existing profile contract still validates it.
-                } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified {
-                    match super::verification::seal(p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
-                        Ok(report) => Some(report),
-                        Err(reason) => {
-                            record_outcome_rejection(RejectionRecordParams { writer: p.writer, bridge: p.bridge, node: p.node, session_id, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts).await?;
-                            retry_feedback = Some(validation_retry_prompt(&reason));
-                            continue;
-                        }
-                    }
-                } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::FailedVerification {
-                    verification_report.map(|report| super::verification::seal_failure(p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
-                } else { None };
-                if let Some(rejection) = validate_profile_artifact_contracts(
-                    resolved_profile.as_ref(),
-                    p.agent_config.profile.as_str(),
-                    &outcome,
-                    &artifacts_produced,
-                    p.worktree_path,
-                    accepted_report.is_some(),
+                let acceptance = super::outcome_acceptance::accept(
+                    &super::outcome_acceptance::AcceptanceContext {
+                        stage: p,
+                        effective_hooks: &effective_hooks,
+                        sandbox_mode: sandbox_cfg.mode,
+                        resolved_profile: resolved_profile.as_ref(),
+                        verification_input: verification_input.as_ref(),
+                        verification_input_seq,
+                        stage_context: &stage_calls.context,
+                        provider_invocation,
+                        session_id,
+                    },
+                    super::outcome_acceptance::Candidate {
+                        outcome,
+                        summary,
+                        artifacts_produced,
+                        verification_report,
+                    },
+                    &mut rejection_budget,
                 )
-                .await?
-                {
-                    record_outcome_rejection(
-                        RejectionRecordParams {
-                            writer: p.writer,
-                            bridge: p.bridge,
-                            node: p.node,
-                            session_id,
-                            outcome: &outcome,
-                            hook_id: &rejection.hook_id,
-                            reason: &rejection.reason,
-                            source: "profile artifact contract",
-                            max_rejections: max_outcome_rejections,
-                        },
-                        &mut outcome_rejection_attempts,
-                    )
-                    .await?;
-                    retry_feedback = Some(validation_retry_prompt(&format!("{}: {}", rejection.hook_id, rejection.reason)));
-                    continue;
+                .await?;
+                match acceptance {
+                    super::outcome_acceptance::Acceptance::Accepted(outcome) => break outcome,
+                    super::outcome_acceptance::Acceptance::Rejected { feedback, remaining } => {
+                        tracing::debug!(target: "engine::stage::agent", node = %p.node, remaining,
+                            "awaiting a retried outcome");
+                        retry_feedback = Some(feedback);
+                    },
                 }
-
-                // Task 30: emit one ArtifactProduced event per declared
-                // path BEFORE the OutcomeReported event so the standard
-                // fold rule populates RunMemory.artifacts deterministically.
-                // A missing or unreadable path is logged and skipped — it
-                // does not fail the stage.
-                let mut produced_hashes: BTreeMap<String, ContentHash> = BTreeMap::new();
-                let mut discovered_tasks_bytes: Option<Vec<u8>> = None;
-                if !artifacts_produced.is_empty() {
-                    let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                    let stem_counts = artifact_stem_counts(&artifacts_produced);
-                    let mut emitted_names = BTreeSet::new();
-                    for declared_path in &artifacts_produced {
-                        let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
-                            tracing::warn!(
-                                target: "engine::stage::agent",
-                                node = %p.node,
-                                path = %declared_path,
-                                "artifact path escapes worktree — skipping"
-                            );
-                            continue;
-                        };
-                        let absolute = p.worktree_path.join(&relative_path);
-                        let canonical_path = match tokio::fs::canonicalize(&absolute).await {
-                            Ok(path) => path,
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "engine::stage::agent",
-                                    node = %p.node,
-                                    path = %declared_path,
-                                    err = %e,
-                                    "artifact path missing — skipping"
-                                );
-                                continue;
-                            },
-                        };
-                        if !canonical_path.starts_with(&canonical_worktree) {
-                            tracing::warn!(
-                                target: "engine::stage::agent",
-                                node = %p.node,
-                                path = %declared_path,
-                                canonical_path = %canonical_path.display(),
-                                "artifact path escapes worktree — skipping"
-                            );
-                            continue;
-                        }
-                        let mut bytes = match tokio::fs::read(&canonical_path).await {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "engine::stage::agent",
-                                    node = %p.node,
-                                    path = %declared_path,
-                                    err = %e,
-                                    "artifact path missing — skipping"
-                                );
-                                continue;
-                            },
-                        };
-                        // Project memory: stamp provenance (run + node) into an
-                        // agent-authored `.surge/memory/` note BEFORE it is
-                        // content-addressed and stored, so the store blob, the
-                        // recorded hash, and the worktree file all agree. The
-                        // stamped note accumulates across runs (part of the diff).
-                        if is_project_memory_note(&relative_path)
-                            && let Some(stamped) = stamp_memory_bytes(&bytes, p.run_id, p.node)
-                        {
-                            tokio::fs::write(&canonical_path, &stamped)
-                                .await
-                                .map_err(|e| StageError::Storage(e.to_string()))?;
-                            bytes = stamped;
-                        }
-                        let name =
-                            logical_artifact_name(&relative_path, declared_path, &stem_counts);
-                        if !emitted_names.insert(name.clone()) {
-                            return Err(StageError::Internal(format!(
-                                "duplicate artifact logical name '{name}' from declared path '{declared_path}'"
-                            )));
-                        }
-                        let artifact_ref = p
-                            .artifact_store
-                            .put(p.run_id, &name, &bytes)
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                        produced_hashes.insert(name.clone(), artifact_ref.hash);
-                        if name == "discovered-tasks" {
-                            discovered_tasks_bytes = Some(bytes.clone());
-                        }
-                        tracing::info!(
-                            target: "engine::stage::agent",
-                            node = %p.node,
-                            name = %name,
-                            hash = %artifact_ref.hash,
-                            store_path = %artifact_ref.path.display(),
-                            "artifact_produced"
-                        );
-                        p.writer
-                            .append_event(VersionedEventPayload::new(
-                                EventPayload::ArtifactProduced {
-                                    node: p.node.clone(),
-                                    artifact: artifact_ref.hash,
-                                    path: artifact_ref.path,
-                                    name,
-                                    source_path: Some(relative_path),
-                                },
-                            ))
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                    }
-                }
-
-                if let Some(report) = &accepted_report {
-                    let bytes = toml::to_string(report).map_err(|error| StageError::Storage(error.to_string()))?.into_bytes();
-                    let artifact = p.artifact_store.put(p.run_id, "verification-report", &bytes).await.map_err(|error| StageError::Storage(error.to_string()))?;
-                    produced_hashes.insert("verification-report".into(), artifact.hash);
-                    p.writer.append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced { node: p.node.clone(), artifact: artifact.hash, path: artifact.path, name: "verification-report".into(), source_path: None })).await.map_err(|error| StageError::Storage(error.to_string()))?;
-                }
-                if verification_input.is_some() || p.active_task_id.is_some() || p.run_memory.verification.subject.is_some() {
-                    super::verification::observe_after(p.writer, p.worktree_path, verification_input.as_ref().map(|input| &input.subject).or(p.run_memory.verification.subject.as_ref())).await?;
-                }
-                if crate::engine::bootstrap::is_flow_generator_profile(
-                    p.agent_config.profile.as_str(),
-                ) {
-                    match crate::engine::bootstrap::run_flow_generator_post_processing_with_registry(
-                        p.node,
-                        p.run_memory,
-                        p.run_memory.bootstrap_edit_loop_cap.unwrap_or(0),
-                        p.worktree_path,
-                        p.writer,
-                        p.profile_registry.as_deref(),
-                    )
-                    .await?
-                    {
-                        crate::engine::bootstrap::FlowValidationDecision::Materialized => {},
-                        crate::engine::bootstrap::FlowValidationDecision::EditRequested { feedback } => {
-                            outcome = OutcomeKey::try_from(
-                                crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
-                            )
-                            .map_err(|error| StageError::Internal(format!("validation retry outcome key: {error}")))?;
-                            summary = format!("Flow Generator validation retry: {feedback}");
-                        },
-                        crate::engine::bootstrap::FlowValidationDecision::CapExceeded { cap } => {
-                            return Err(StageError::EditLoopCapExceeded {
-                                stage: surge_core::run_event::BootstrapStage::Flow,
-                                cap,
-                            });
-                        },
-                        crate::engine::bootstrap::FlowValidationDecision::MissingArtifact => {
-                            return Err(StageError::Internal(
-                                "Flow Generator stage finished without producing flow.toml".into(),
-                            ));
-                        },
-                    }
-                }
-                let mut committed = vec![VersionedEventPayload::new(EventPayload::OutcomeReported {
-                    node: p.node.clone(), outcome: outcome.clone(), summary,
-                })];
-
-                // Task ledger: when this stage runs inside a task loop and the
-                // reported outcome carries a ledger effect, append the matching
-                // ledger event (TaskStatusChanged / TaskVerified). The
-                // sealed-verifier gate above guarantees a `Verified` effect
-                // only reaches here from a read-only sandbox.
-                if let Some(task_id) = p.active_task_id.as_ref() {
-                    if let Some(payload) = ledger_event(
-                        p.node,
-                        p.run_memory,
-                        task_id,
-                        outcome_ledger_effect(p.declared_outcomes, &outcome),
-                        &produced_hashes,
-                        accepted_report,
-                    )? {
-                        committed.push(VersionedEventPayload::new(payload));
-                    }
-                    // Capture any work the agent discovered mid-task into the
-                    // ledger as pending tasks, each with a discovered_from edge
-                    // to the current task. A malformed artifact is logged and
-                    // skipped — it never fails the stage.
-                    if let Some(bytes) = discovered_tasks_bytes.as_deref() {
-                        committed.extend(discovered_task_events(p.node, task_id, bytes).into_iter().map(VersionedEventPayload::new));
-                    }
-                }
-                let effects_hash = ContentHash::compute(&serde_json::to_vec(&committed)
-                    .map_err(|error| StageError::Storage(error.to_string()))?);
-                let effects_count = u32::try_from(committed.len()).map_err(|_| StageError::Internal("stage effects batch is too large".into()))?;
-                let commit = surge_core::execution_recovery::commit::StageOutcomeCommit::new(
-                    stage_calls.context.clone(), session_id, provider_invocation, outcome.clone(), effects_count, effects_hash,
-                ).map_err(|error| StageError::Internal(error.to_string()))?;
-                committed.push(VersionedEventPayload::new(EventPayload::StageOutcomeCommitted { commit }));
-                p.writer.append_events(committed).await.map_err(|error| StageError::Storage(error.to_string()))?;
-                break outcome;
             },
             BridgeEvent::PermissionRequested {
                 request_id,
@@ -2431,174 +2152,9 @@ async fn apply_memory_claim_pack(
     Ok(Some(receipt))
 }
 
-/// Look up the [`LedgerEffect`] declared for `outcome` on this node, defaulting
-/// to [`LedgerEffect::None`] when the outcome is not found (or declares none).
-fn outcome_ledger_effect(declared: &[OutcomeDecl], outcome: &OutcomeKey) -> LedgerEffect {
-    declared
-        .iter()
-        .find(|decl| &decl.id == outcome)
-        .map_or(LedgerEffect::None, |decl| decl.ledger_effect)
-}
-
-/// Append the task-ledger event implied by `effect` for `task_id`.
-///
-/// - `ReadyForVerification` / `FailedVerification` → `TaskStatusChanged` (the
-///   `from` status is read from the folded ledger, defaulting to `Pending`).
-/// - `Verified` → `TaskVerified` with `evidence` = the produced
-///   host-sealed `verification-report` hash and its exact bound report.
-///   Missing reports are rejected; other artifacts cannot substitute as proof.
-/// - `None` → no event.
-fn ledger_event(
-    node: &NodeKey,
-    memory: &surge_core::run_state::RunMemory,
-    task_id: &RoadmapTaskId,
-    effect: LedgerEffect,
-    produced_hashes: &BTreeMap<String, ContentHash>,
-    sealed_report: Option<surge_core::roadmap::VerificationReportArtifact>,
-) -> Result<Option<EventPayload>, StageError> {
-    use surge_core::roadmap::RoadmapStatus;
-
-    let payload = match effect {
-        LedgerEffect::None => return Ok(None),
-        LedgerEffect::ReadyForVerification | LedgerEffect::FailedVerification => {
-            let to = if matches!(effect, LedgerEffect::ReadyForVerification) {
-                RoadmapStatus::ReadyForVerification
-            } else {
-                RoadmapStatus::FailedVerification
-            };
-            let from = memory
-                .ledger
-                .tasks
-                .get(task_id)
-                .map_or(RoadmapStatus::Pending, |task| task.status);
-            EventPayload::TaskStatusChanged {
-                task_id: task_id.clone(),
-                from,
-                to,
-                authority_node: node.clone(),
-            }
-        },
-        LedgerEffect::Verified => {
-            let evidence = produced_hashes
-                .get("verification-report")
-                .copied()
-                .ok_or_else(|| StageError::Internal("missing sealed verification report".into()))?;
-            EventPayload::TaskVerified {
-                task_id: task_id.clone(),
-                node: node.clone(),
-                evidence,
-
-                report: sealed_report,
-            }
-        },
-    };
-    Ok(Some(payload))
-}
-
-/// True when `relative_path` is an agent-authored project-memory note
-/// (`.surge/memory/*.md`, excluding the human-facing `MEMORY.md` index).
-fn is_project_memory_note(relative_path: &Path) -> bool {
-    relative_path.starts_with(".surge/memory")
-        && relative_path.extension().and_then(|ext| ext.to_str()) == Some("md")
-        && relative_path.file_name().and_then(|name| name.to_str()) != Some("MEMORY.md")
-}
-
-/// Return `bytes` with a provenance comment prepended, or `None` when it is
-/// already stamped (idempotent across retry/replay) or not UTF-8. Pure: the
-/// caller writes the result to disk before content-addressing it. The marker is
-/// an HTML comment, invisible in rendered markdown but visible in source and to
-/// the next run's memory seed.
-fn stamp_memory_bytes(
-    bytes: &[u8],
-    run_id: surge_core::id::RunId,
-    node: &NodeKey,
-) -> Option<Vec<u8>> {
-    const MARKER: &str = "<!-- surge:memory";
-    let text = std::str::from_utf8(bytes).ok()?;
-    if text.trim_start().starts_with(MARKER) {
-        return None;
-    }
-    Some(format!("{MARKER} run={run_id} node={} -->\n{text}", node.as_str()).into_bytes())
-}
-
-/// Parse a produced `discovered-tasks` artifact and append one
-/// `TaskDiscovered` event per entry, attaching each to `discovered_from`.
-///
-/// Lenient: a malformed or invalid artifact is logged and skipped rather than
-/// failing the stage — discovered work is advisory, and an AFK run should not
-/// abort because a side artifact was ill-formed.
-fn discovered_task_events(
-    node: &NodeKey,
-    discovered_from: &RoadmapTaskId,
-    bytes: &[u8],
-) -> Vec<EventPayload> {
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) => {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                node = %node,
-                err = %error,
-                "discovered-tasks artifact is not UTF-8 — skipping"
-            );
-            return Vec::new();
-        },
-    };
-    let artifact: surge_core::DiscoveredTasksArtifact = match toml::from_str(text) {
-        Ok(artifact) => artifact,
-        Err(error) => {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                node = %node,
-                err = %error,
-                "discovered-tasks artifact failed to parse — skipping"
-            );
-            return Vec::new();
-        },
-    };
-    let issues = artifact.validate();
-    if !issues.is_empty() {
-        tracing::warn!(
-            target: "engine::stage::agent",
-            node = %node,
-            issues = ?issues,
-            "discovered-tasks artifact is invalid — skipping"
-        );
-        return Vec::new();
-    }
-    artifact
-        .tasks
-        .into_iter()
-        .map(|entry| EventPayload::TaskDiscovered {
-            task_id: entry.id,
-            discovered_from: discovered_from.clone(),
-            title: entry.title,
-        })
-        .collect()
-}
-
-struct RejectionRecordParams<'a> {
-    writer: &'a RunWriter,
-    bridge: &'a Arc<dyn BridgeFacade>,
-    node: &'a NodeKey,
-    session_id: surge_core::id::SessionId,
-    outcome: &'a OutcomeKey,
-    hook_id: &'a str,
-    reason: &'a str,
-    source: &'a str,
-    max_rejections: u32,
-}
-
 /// Follow-up turns granted to an agent that ends its turn without calling
 /// `report_stage_outcome`, before the stage fails.
 const MAX_MISSING_OUTCOME_REMINDERS: u32 = 2;
-
-/// Follow-up turn after validation rejected a reported outcome.
-fn validation_retry_prompt(feedback: &str) -> String {
-    format!(
-        "Your stage outcome was rejected by validation:\n{feedback}\n\nCorrect the artifacts or outcome, then call report_stage_outcome again with a new unique call_id. The stage is not complete until validation accepts the result."
-    )
-}
 
 /// Follow-up turn after the agent ended its turn without reporting.
 fn missing_outcome_prompt(declared: &[OutcomeDecl]) -> String {
@@ -2617,382 +2173,6 @@ fn missing_outcome_prompt(declared: &[OutcomeDecl]) -> String {
          still missing, then call report_stage_outcome with a new unique call_id. \
          Allowed outcomes: {outcomes}."
     )
-}
-
-async fn record_outcome_rejection(
-    params: RejectionRecordParams<'_>,
-    attempts: &mut u32,
-) -> Result<(), StageError> {
-    params
-        .writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::OutcomeRejectedByHook {
-                node: params.node.clone(),
-                outcome: params.outcome.clone(),
-                hook_id: params.hook_id.to_owned(),
-            },
-        ))
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-
-    *attempts += 1;
-    tracing::info!(
-        target: "engine::stage::agent",
-        node = %params.node,
-        outcome = %params.outcome,
-        hook_id = %params.hook_id,
-        attempt = *attempts,
-        max = params.max_rejections,
-        reason = %params.reason,
-        source = %params.source,
-        "outcome rejected; awaiting agent retry"
-    );
-
-    if *attempts > params.max_rejections {
-        let exhausted_reason = format!(
-            "on_outcome rejection budget exhausted (last reject from '{}')",
-            params.hook_id
-        );
-        params
-            .writer
-            .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
-                node: params.node.clone(),
-                reason: exhausted_reason.clone(),
-                retry_available: false,
-            }))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?;
-        // Close the session before bailing — the agent isn't going to recover
-        // at this point.
-        let _ = params.bridge.close_session(params.session_id).await;
-        return Err(StageError::AgentCrashed(exhausted_reason));
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct ArtifactContractRejection {
-    hook_id: String,
-    reason: String,
-}
-
-async fn validate_profile_artifact_contracts(
-    resolved_profile: Option<&ResolvedProfile>,
-    profile_ref: &str,
-    outcome: &OutcomeKey,
-    artifacts_produced: &[String],
-    worktree_path: &Path,
-    inline_verification: bool,
-) -> Result<Option<ArtifactContractRejection>, StageError> {
-    let Some(profile) = resolved_profile else {
-        return Ok(None);
-    };
-    let Some(profile_outcome) = profile
-        .profile
-        .outcomes
-        .iter()
-        .find(|candidate| candidate.id == *outcome)
-    else {
-        return Ok(None);
-    };
-    if profile_outcome.produced_artifacts.is_empty() {
-        return Ok(None);
-    }
-
-    let canonical_worktree = tokio::fs::canonicalize(worktree_path)
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    let produced_paths: Vec<PathBuf> = artifacts_produced
-        .iter()
-        .filter_map(|declared_path| safe_declared_artifact_path(declared_path))
-        .collect();
-
-    for declaration in &profile_outcome.produced_artifacts {
-        if inline_verification && declaration.contract.kind == ArtifactKind::VerificationReport {
-            continue;
-        }
-        let matching_paths: Vec<&PathBuf> = produced_paths
-            .iter()
-            .filter(|path| artifact_declaration_matches_path(declaration, path))
-            .collect();
-        if matching_paths.is_empty() {
-            return Ok(Some(artifact_contract_rejection(
-                declaration.contract.kind,
-                missing_declared_artifact_reason(outcome, declaration),
-            )));
-        }
-
-        for relative_path in matching_paths {
-            let Some(validation_input) =
-                read_produced_artifact(worktree_path, &canonical_worktree, relative_path).await?
-            else {
-                return Ok(Some(artifact_contract_rejection(
-                    declaration.contract.kind,
-                    format!(
-                        "artifact '{}' was reported but could not be read from the worktree",
-                        normalize_artifact_path(relative_path)
-                    ),
-                )));
-            };
-            let content = String::from_utf8_lossy(&validation_input.bytes);
-            if declaration.contract.kind == ArtifactKind::VerificationReport
-                && toml::from_str::<surge_core::roadmap::VerificationReportArtifact>(&content)
-                    .is_ok_and(|report| report.binding.is_some())
-            {
-                return Ok(Some(artifact_contract_rejection(
-                    ArtifactKind::VerificationReport,
-                    "worktree reports cannot supply host binding".into(),
-                )));
-            }
-
-            // Flow-generator output is validated by the bootstrap post-processor,
-            // which persists diagnostics and routes the bounded edit loop. Keep
-            // path/readability checks here, but do not consume its retry there.
-            if declaration.contract.kind == ArtifactKind::Flow
-                && crate::engine::bootstrap::is_flow_generator_profile(profile_ref)
-            {
-                continue;
-            }
-            let report = validate_artifact(
-                declaration.contract.kind,
-                Some(validation_input.relative_path.as_path()),
-                &content,
-            );
-            if report.is_valid() {
-                continue;
-            }
-            return Ok(Some(artifact_contract_rejection(
-                declaration.contract.kind,
-                format_artifact_validation_reason(
-                    declaration.contract.kind,
-                    validation_input.relative_path.as_path(),
-                    &report.diagnostics,
-                ),
-            )));
-        }
-    }
-
-    Ok(None)
-}
-
-struct ProducedArtifactInput {
-    relative_path: PathBuf,
-    bytes: Vec<u8>,
-}
-
-async fn read_produced_artifact(
-    worktree_path: &Path,
-    canonical_worktree: &Path,
-    relative_path: &Path,
-) -> Result<Option<ProducedArtifactInput>, StageError> {
-    let absolute = worktree_path.join(relative_path);
-    let canonical_path = match tokio::fs::canonicalize(&absolute).await {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                relative_path = %normalize_artifact_path(relative_path),
-                absolute_path = %absolute.display(),
-                err = %error,
-                "reported artifact could not be canonicalized"
-            );
-            return Ok(None);
-        },
-    };
-    if !canonical_path.starts_with(canonical_worktree) {
-        tracing::warn!(
-            target: "engine::stage::agent",
-            relative_path = %normalize_artifact_path(relative_path),
-            canonical_path = %canonical_path.display(),
-            canonical_worktree = %canonical_worktree.display(),
-            "reported artifact canonical path escaped the worktree"
-        );
-        return Ok(None);
-    }
-    let bytes = match tokio::fs::read(&canonical_path).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                relative_path = %normalize_artifact_path(relative_path),
-                canonical_path = %canonical_path.display(),
-                err = %error,
-                "reported artifact could not be read"
-            );
-            return Ok(None);
-        },
-    };
-    Ok(Some(ProducedArtifactInput {
-        relative_path: relative_path.to_path_buf(),
-        bytes,
-    }))
-}
-
-fn missing_declared_artifact_reason(
-    outcome: &OutcomeKey,
-    declaration: &ProfileArtifactDeclaration,
-) -> String {
-    let kind = declaration.contract.kind;
-    match kind {
-        ArtifactKind::Adr | ArtifactKind::Story => {
-            let contract = kind.contract();
-            format!(
-                "outcome '{outcome}' must produce a {kind} artifact matching declared path '{}' (contract pattern '{}')",
-                declaration.path, contract.canonical_path
-            )
-        },
-        _ => format!(
-            "outcome '{outcome}' must produce artifact '{}'",
-            declaration.path
-        ),
-    }
-}
-
-fn artifact_contract_rejection(kind: ArtifactKind, reason: String) -> ArtifactContractRejection {
-    ArtifactContractRejection {
-        hook_id: format!("profile-artifact-contract:{kind}"),
-        reason,
-    }
-}
-
-fn format_artifact_validation_reason(
-    kind: ArtifactKind,
-    path: &Path,
-    diagnostics: &[surge_core::ArtifactValidationDiagnostic],
-) -> String {
-    let errors = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == ArtifactDiagnosticSeverity::Error)
-        .take(3)
-        .map(|diagnostic| {
-            let location = diagnostic
-                .location
-                .as_ref()
-                .map(|location| format!(" at {location}"))
-                .unwrap_or_default();
-            format!("{}{}: {}", diagnostic.code, location, diagnostic.message)
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    format!(
-        "{kind} artifact '{}' failed contract validation: {errors}",
-        normalize_artifact_path(path)
-    )
-}
-
-fn artifact_declaration_matches_path(
-    declaration: &ProfileArtifactDeclaration,
-    relative_path: &Path,
-) -> bool {
-    let declared = normalize_profile_declared_path(&declaration.path);
-    let actual = normalize_artifact_path(relative_path);
-    if declared == actual {
-        return true;
-    }
-
-    match declaration.contract.kind {
-        ArtifactKind::Adr | ArtifactKind::Story => {
-            declared == declaration.contract.kind.contract().canonical_path
-                && declaration
-                    .contract
-                    .kind
-                    .contract()
-                    .accepts_path(relative_path)
-        },
-        _ => false,
-    }
-}
-
-fn artifact_stem_counts(paths: &[String]) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for declared_path in paths {
-        let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
-            continue;
-        };
-        let Some(stem) = artifact_stem(&relative_path) else {
-            continue;
-        };
-        *counts.entry(stem).or_insert(0) += 1;
-    }
-    counts
-}
-
-fn logical_artifact_name(
-    relative_path: &Path,
-    declared_path: &str,
-    stem_counts: &BTreeMap<String, usize>,
-) -> String {
-    let Some(stem) = artifact_stem(relative_path) else {
-        return sanitize_artifact_name(declared_path);
-    };
-    if stem_counts.get(&stem).copied().unwrap_or_default() <= 1 {
-        return stem;
-    }
-    path_based_artifact_name(relative_path).unwrap_or(stem)
-}
-
-fn artifact_stem(path: &Path) -> Option<String> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn path_based_artifact_name(path: &Path) -> Option<String> {
-    let normalized = normalize_artifact_path(path);
-    let name = sanitize_artifact_name(&normalized);
-    (!name.is_empty()).then_some(name)
-}
-
-fn sanitize_artifact_name(input: &str) -> String {
-    let mut name = String::with_capacity(input.len());
-    let mut last_was_separator = false;
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' {
-            name.push(ch);
-            last_was_separator = false;
-        } else if !last_was_separator {
-            name.push('_');
-            last_was_separator = true;
-        }
-    }
-    name.trim_matches('_').to_string()
-}
-
-fn normalize_profile_declared_path(path: &str) -> String {
-    safe_declared_artifact_path(path).map_or_else(
-        || path.replace('\\', "/"),
-        |path| normalize_artifact_path(&path),
-    )
-}
-
-fn normalize_artifact_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(part) => Some(part.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
-    if declared_path.trim().is_empty() {
-        return None;
-    }
-
-    let path = Path::new(declared_path);
-    let mut has_normal_component = false;
-    for component in path.components() {
-        match component {
-            Component::Normal(_) => has_normal_component = true,
-            Component::CurDir => {},
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    has_normal_component.then(|| path.to_path_buf())
 }
 
 /// Inline handler for `BridgeEvent::PermissionRequested` that:
@@ -4079,7 +3259,7 @@ mod tests {
         .unwrap();
         let outcome = OutcomeKey::try_from("drafted").unwrap();
         let artifacts = vec!["flow.toml".to_owned()];
-        let deferred = validate_profile_artifact_contracts(
+        let deferred = super::super::outcome_acceptance::validate_profile_artifact_contracts(
             Some(&profile),
             "flow-generator@1.0",
             &outcome,
@@ -4090,7 +3270,7 @@ mod tests {
         .await
         .unwrap();
         assert!(deferred.is_none());
-        let rejected = validate_profile_artifact_contracts(
+        let rejected = super::super::outcome_acceptance::validate_profile_artifact_contracts(
             Some(&profile),
             "implementer@1.0",
             &outcome,
@@ -4101,7 +3281,7 @@ mod tests {
         .await
         .unwrap();
         assert!(rejected.is_some());
-        let missing = validate_profile_artifact_contracts(
+        let missing = super::super::outcome_acceptance::validate_profile_artifact_contracts(
             Some(&profile),
             "flow-generator@1.0",
             &outcome,

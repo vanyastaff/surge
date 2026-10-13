@@ -1563,7 +1563,8 @@ async fn observe_failed_agent(
     state: &RunExecutionState,
     result: &Result<StageOutcome, StageError>,
 ) -> Result<(), StageError> {
-    if result.is_ok() || state.memory.verification.subject.is_none() {
+    use crate::engine::stage::verification::{VerificationPoint, verification_in_play};
+    if result.is_ok() || !verification_in_play(VerificationPoint::AfterFailure, &state.memory) {
         return Ok(());
     }
     crate::engine::stage::verification::observe_after(
@@ -2333,6 +2334,25 @@ fn terminal_run_outcome(terminal: TerminalOutcome) -> RunOutcome {
     }
 }
 
+/// Whether suppressing `error` into `suppressed` would hand back an outcome
+/// the stage's validation rejected during this visit (#94). Such a
+/// suppression is refused like one into an undeclared outcome.
+fn launders_rejected_outcome(
+    error: &StageError,
+    suppressed: &OutcomeKey,
+    node: &surge_core::keys::NodeKey,
+) -> bool {
+    let StageError::OutcomeBudgetExhausted { rejected, .. } = error else {
+        return false;
+    };
+    let launders = rejected.contains(suppressed);
+    if launders {
+        tracing::warn!(target: "engine::stage::error", %node, outcome = %suppressed,
+            "on_error suppression into an outcome rejected this visit is refused");
+    }
+    launders
+}
+
 async fn resolve_stage_error(
     params: &RunTaskParams,
     state: &RunExecutionState,
@@ -2361,13 +2381,15 @@ async fn resolve_stage_error(
         crate::engine::hooks::record_hook_executed(&params.writer, record).await;
     }
 
-    if state.memory.verification.subject.is_some()
-        && let Err(observation_error) = crate::engine::stage::verification::observe_after(
-            &params.writer,
-            &params.worktree_path,
-            state.memory.verification.subject.as_ref(),
-        )
-        .await
+    if crate::engine::stage::verification::verification_in_play(
+        crate::engine::stage::verification::VerificationPoint::AfterFailure,
+        &state.memory,
+    ) && let Err(observation_error) = crate::engine::stage::verification::observe_after(
+        &params.writer,
+        &params.worktree_path,
+        state.memory.verification.subject.as_ref(),
+    )
+    .await
     {
         return Err(failed(
             params,
@@ -2376,7 +2398,14 @@ async fn resolve_stage_error(
         .await);
     }
 
-    if let Some(suppressed) = on_error_resolution.outcome {
+    // An `on_error` hook may suppress an exhausted outcome budget, but never
+    // into an outcome the stage's validation rejected during this visit:
+    // that would launder the rejected result. Refuse it like a suppression
+    // into an undeclared outcome — the failure stands.
+    if let Some(suppressed) = on_error_resolution
+        .outcome
+        .filter(|suppressed| !launders_rejected_outcome(&error, suppressed, &state.cursor.node))
+    {
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 
