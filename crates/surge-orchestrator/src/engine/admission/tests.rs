@@ -633,5 +633,8 @@ async fn task_start_trusts_its_frozen_reservation_and_refuses_a_used_journal() {
         matches!(rejection, AdmissionRejection::NonEmptyJournal),
         "{rejection}"
     );
+    // The launch claim holds a lease in the store; release it before the
+    // fixture removes its directory (an open handle locks it on Windows).
+    drop(claim);
     fx.close();
 }
