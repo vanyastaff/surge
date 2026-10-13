@@ -20,7 +20,7 @@ pub(crate) struct Fixture {
     worktree: tempfile::TempDir,
     home: crate::runtime_home_fixture::FixtureHome,
     /// Observes this Storage's registry teardown: Windows refuses to remove
-    /// the home while its native SQLite handles are still settling.
+    /// the home while its native database handles are still settling.
     #[cfg(windows)]
     registry: surge_persistence::runs::storage::reader_pool_witness::RegistryPoolWitness,
 }
