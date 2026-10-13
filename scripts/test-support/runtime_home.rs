@@ -60,7 +60,7 @@ impl FixtureHome {
 const SHARING_VIOLATION: i32 = 32;
 
 /// Remove `path`, retrying only sharing violations for at most 5 s while
-/// background threads release dropped SQLite handles.
+/// background threads release dropped database handles.
 #[cfg(windows)]
 fn remove_dir_waiting_for_handles(path: &std::path::Path) -> std::io::Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
