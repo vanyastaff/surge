@@ -29,6 +29,7 @@ pub mod roadmap;
 pub mod roadmap_patch;
 pub mod spec;
 pub mod state;
+pub mod triage_decision;
 
 // New modules — Surge data model.
 pub mod agent_config;

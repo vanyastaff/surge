@@ -123,6 +123,9 @@ fn validate_artifact_text_into(
         ArtifactKind::Story => kinds::story::validate_story_markdown(report, content),
         ArtifactKind::Plan => kinds::plan::validate_plan_markdown(report, content),
         ArtifactKind::Flow => kinds::flow::validate_flow_toml(report, content),
+        ArtifactKind::TriageDecision => {
+            kinds::triage_decision::validate_triage_decision(report, content)
+        },
     }
 }
 
@@ -152,6 +155,7 @@ mod tests {
                 ArtifactKind::Story,
                 ArtifactKind::Plan,
                 ArtifactKind::Flow,
+                ArtifactKind::TriageDecision,
             ]
         );
     }

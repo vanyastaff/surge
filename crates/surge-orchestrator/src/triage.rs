@@ -11,7 +11,7 @@
 //! Triage stays standalone. Running it as an engine graph node ("Layer 2")
 //! is not planned; see `docs/ARCHITECTURE.md`.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +21,7 @@ use crate::agent_invocation::{
     DEFAULT_MAX_CONTRACT_REJECTIONS, InvocationFailure, InvocationRequest, invoke,
 };
 use crate::profile_loader::ProfileRegistry;
+use surge_core::triage_decision::{TriageDecisionArtifact, TriagePriority, TriageVerdict};
 use surge_intake::types::{Priority, TaskDetails, TaskId, TaskSummary, TriageDecision};
 
 /// Full input bundle handed to Triage Author at the start of its session.
@@ -44,69 +45,40 @@ pub struct ActiveRunSummary {
     pub started_at: String,
 }
 
-/// Raw JSON shape Triage Author writes to `triage_decision.json`.
-///
-/// The agent fills as many fields as apply for its chosen decision; this
-/// type is intentionally permissive (all variant-specific fields are
-/// `Option`/`#[serde(default)]`) so we can normalise into the strict
-/// [`TriageDecision`] enum via [`Self::into_decision`].
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TriageJson {
-    pub decision: String,
-    #[serde(default)]
-    pub duplicate_of: Option<String>,
-    #[serde(default)]
-    pub priority: Option<String>,
-    #[serde(default)]
-    pub priority_reasoning: Option<String>,
-    #[serde(default)]
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub question: Option<String>,
-}
-
-impl TriageJson {
-    /// Convert the loose JSON into a strict [`TriageDecision`].
-    ///
-    /// Returns `Err(message)` if required fields for the chosen decision
-    /// are missing (e.g. `duplicate` without `duplicate_of`) or the
-    /// decision/priority strings are unrecognised.
-    pub(crate) fn into_decision(self) -> Result<TriageDecision, String> {
-        let prio_str = self.priority.as_deref().unwrap_or("medium");
-        let priority = match prio_str {
-            "urgent" => Priority::Urgent,
-            "high" => Priority::High,
-            "medium" => Priority::Medium,
-            "low" => Priority::Low,
-            other => return Err(format!("unknown priority: {other}")),
-        };
-        match self.decision.as_str() {
-            "enqueued" => Ok(TriageDecision::Enqueued {
-                priority,
-                reasoning: self.priority_reasoning.unwrap_or_default(),
-                summary: self.summary.unwrap_or_default(),
-            }),
-            "duplicate" => {
-                let dup = self
-                    .duplicate_of
-                    .ok_or_else(|| "duplicate decision requires duplicate_of".to_string())?;
-                let id = TaskId::try_new(dup).map_err(|e| format!("invalid duplicate_of: {e}"))?;
-                Ok(TriageDecision::Duplicate {
-                    of: id,
-                    reasoning: self.priority_reasoning.unwrap_or_default(),
-                })
-            },
-            "out_of_scope" => Ok(TriageDecision::OutOfScope {
-                reasoning: self.priority_reasoning.unwrap_or_default(),
-            }),
-            "unclear" => Ok(TriageDecision::Unclear {
-                question: self
-                    .question
-                    .unwrap_or_else(|| "no question provided".into()),
-            }),
-            other => Err(format!("unknown decision: {other}")),
-        }
+/// Turn `triage_decision.json` into a [`TriageDecision`]. The shape and the
+/// per-decision required fields are [`TriageDecisionArtifact`]'s rule — the
+/// same one the profile's artifact contract checks in-session (#119) — so
+/// this only maps an accepted artifact, plus the task-id syntax of
+/// `duplicate_of`, which the intake crate owns.
+fn decision_from_artifact(raw: &[u8]) -> Result<TriageDecision, String> {
+    let content = std::str::from_utf8(raw).map_err(|error| format!("not UTF-8: {error}"))?;
+    let artifact = TriageDecisionArtifact::parse(content).map_err(|error| error.to_string())?;
+    if let Some(issue) = artifact.validate().into_iter().next() {
+        return Err(issue.to_string());
     }
+    let priority = match artifact.priority() {
+        TriagePriority::Urgent => Priority::Urgent,
+        TriagePriority::High => Priority::High,
+        TriagePriority::Medium => Priority::Medium,
+        TriagePriority::Low => Priority::Low,
+    };
+    let reasoning = artifact.priority_reasoning.unwrap_or_default();
+    Ok(match artifact.decision {
+        TriageVerdict::Enqueued => TriageDecision::Enqueued {
+            priority,
+            reasoning,
+            summary: artifact.summary.unwrap_or_default(),
+        },
+        TriageVerdict::Duplicate => TriageDecision::Duplicate {
+            of: TaskId::try_new(artifact.duplicate_of.unwrap_or_default())
+                .map_err(|error| format!("invalid duplicate_of: {error}"))?,
+            reasoning,
+        },
+        TriageVerdict::OutOfScope => TriageDecision::OutOfScope { reasoning },
+        TriageVerdict::Unclear => TriageDecision::Unclear {
+            question: artifact.question.unwrap_or_default(),
+        },
+    })
 }
 
 /// The bundled Triage Author profile.
@@ -253,13 +225,9 @@ async fn try_one_attempt(
             Err(error) => return Attempt::Retry(format!("triage_decision.json missing: {error}")),
         },
     };
-    let parsed: TriageJson = match serde_json::from_slice(&raw) {
-        Ok(parsed) => parsed,
-        Err(error) => return Attempt::Retry(format!("triage_decision.json malformed: {error}")),
-    };
-    let mut decision = match parsed.into_decision() {
+    let mut decision = match decision_from_artifact(&raw) {
         Ok(decision) => decision,
-        Err(error) => return Attempt::Retry(format!("decision rejected: {error}")),
+        Err(error) => return Attempt::Retry(format!("triage_decision.json rejected: {error}")),
     };
 
     // For Enqueued, splice in the inbox_summary.md if present.
@@ -353,11 +321,13 @@ pub async fn dispatch_triage(
 mod tests {
     use super::*;
 
+    fn decide(raw: &str) -> Result<TriageDecision, String> {
+        decision_from_artifact(raw.as_bytes())
+    }
+
     #[test]
     fn parse_enqueued() {
-        let raw = r#"{"decision":"enqueued","priority":"high","priority_reasoning":"prod crash","summary":"Fix panic"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let dec = parsed.into_decision().unwrap();
+        let dec = decide(r#"{"decision":"enqueued","priority":"high","priority_reasoning":"prod crash","summary":"Fix panic"}"#).unwrap();
         match dec {
             TriageDecision::Enqueued { priority, .. } => assert_eq!(priority, Priority::High),
             other => panic!("expected Enqueued, got {other:?}"),
@@ -366,33 +336,31 @@ mod tests {
 
     #[test]
     fn parse_duplicate_requires_duplicate_of() {
-        let raw = r#"{"decision":"duplicate"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let err = parsed.into_decision().unwrap_err();
-        assert!(err.contains("duplicate_of"));
+        assert!(
+            decide(r#"{"decision":"duplicate"}"#)
+                .unwrap_err()
+                .contains("duplicate_of")
+        );
     }
 
     #[test]
     fn parse_unknown_priority_errors() {
-        let raw = r#"{"decision":"enqueued","priority":"super-urgent"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let err = parsed.into_decision().unwrap_err();
-        assert!(err.contains("unknown priority"));
+        let err = decide(r#"{"decision":"enqueued","priority":"super-urgent"}"#).unwrap_err();
+        assert!(err.contains("super-urgent"), "{err}");
     }
 
     #[test]
     fn parse_out_of_scope() {
-        let raw = r#"{"decision":"out_of_scope","priority":"low","priority_reasoning":"not a coding task"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let dec = parsed.into_decision().unwrap();
+        let dec = decide(r#"{"decision":"out_of_scope","priority":"low","priority_reasoning":"not a coding task"}"#).unwrap();
         assert!(matches!(dec, TriageDecision::OutOfScope { .. }));
     }
 
     #[test]
     fn parse_unclear() {
-        let raw = r#"{"decision":"unclear","priority":"medium","question":"What does this mean?"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let dec = parsed.into_decision().unwrap();
+        let dec = decide(
+            r#"{"decision":"unclear","priority":"medium","question":"What does this mean?"}"#,
+        )
+        .unwrap();
         match dec {
             TriageDecision::Unclear { question } => assert_eq!(question, "What does this mean?"),
             other => panic!("expected Unclear, got {other:?}"),
@@ -400,11 +368,18 @@ mod tests {
     }
 
     #[test]
+    fn unclear_requires_a_question() {
+        assert!(
+            decide(r#"{"decision":"unclear"}"#)
+                .unwrap_err()
+                .contains("question")
+        );
+    }
+
+    #[test]
     fn parse_unknown_decision_errors() {
-        let raw = r#"{"decision":"meow","priority":"medium"}"#;
-        let parsed: TriageJson = serde_json::from_str(raw).unwrap();
-        let err = parsed.into_decision().unwrap_err();
-        assert!(err.contains("unknown decision"));
+        let err = decide(r#"{"decision":"meow","priority":"medium"}"#).unwrap_err();
+        assert!(err.contains("meow"), "{err}");
     }
 
     /// Render the bundled profile's prompt with triage's bindings, exactly

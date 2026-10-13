@@ -55,7 +55,8 @@ pub const fn markdown_outline(kind: ArtifactKind) -> Option<&'static [&'static s
         | ArtifactKind::DiscoveredTasks
         | ArtifactKind::VerificationReport
         | ArtifactKind::Spec
-        | ArtifactKind::Flow => None,
+        | ArtifactKind::Flow
+        | ArtifactKind::TriageDecision => None,
     }
 }
 
@@ -69,7 +70,8 @@ const SCHEMA_ID_PREFIX: &str = "https://surge.dev/schema/v1";
 /// plus an inline schema for the ADR TOML frontmatter. Returns `None` for
 /// markdown-only kinds (`description`, `requirements`, `story`, `plan`) and
 /// for `flow` — the latter is currently described by [`crate::graph::Graph`]
-/// in Rust and tracked separately for schema export.
+/// in Rust and tracked separately for schema export. `triage-decision` is
+/// JSON without a `schema_version` field, which every exported schema requires.
 #[must_use]
 pub fn json_schema_for(kind: ArtifactKind) -> Option<serde_json::Value> {
     match kind {
@@ -87,7 +89,8 @@ pub fn json_schema_for(kind: ArtifactKind) -> Option<serde_json::Value> {
         | ArtifactKind::Description
         | ArtifactKind::Requirements
         | ArtifactKind::Story
-        | ArtifactKind::Plan => None,
+        | ArtifactKind::Plan
+        | ArtifactKind::TriageDecision => None,
     }
 }
 

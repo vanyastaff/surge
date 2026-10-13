@@ -532,3 +532,111 @@ async fn a_failed_send_closes_the_triage_session() {
         .count();
     assert_eq!(closes, 1);
 }
+
+/// #119: the profile's `triage-decision` contract rejects an incomplete
+/// decision when the outcome is reported, and the agent corrects it in the
+/// same session — one attempt, one session, two prompts.
+#[tokio::test]
+async fn an_incomplete_decision_is_corrected_in_the_same_session() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let session = SessionId::new();
+    bridge.pin_next_session_id(session).await;
+
+    let tmp = TempDir::new().unwrap();
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
+    opts.attempt_timeout = Duration::from_secs(5);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
+
+    let sends = |bridge: &fixtures::mock_bridge::MockBridge| {
+        let calls = bridge.recorded_calls.try_lock().map(|calls| {
+            calls
+                .iter()
+                .filter(|call| {
+                    matches!(
+                        call,
+                        fixtures::mock_bridge::RecordedCall::SendMessage { .. }
+                    )
+                })
+                .count()
+        });
+        calls.unwrap_or(0)
+    };
+    let agent = {
+        let bridge = Arc::clone(&bridge);
+        let scratch_root = tmp.path().to_path_buf();
+        tokio::spawn(async move {
+            bridge.wait_for_subscribe_count(1).await;
+            while sends(&bridge) < 1 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let scratch = std::fs::read_dir(&scratch_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .unwrap()
+                .path();
+            let report = |bridge: Arc<fixtures::mock_bridge::MockBridge>| async move {
+                bridge
+                    .enqueue_event(BridgeEvent::OutcomeReported {
+                        session,
+                        outcome: OutcomeKey::from_str("duplicate").unwrap(),
+                        summary: "duplicate".into(),
+                        artifacts_produced: vec!["triage_decision.json".into()],
+                        verification_report: None,
+                    })
+                    .await;
+                bridge.pump_scripted_events().await;
+            };
+            // First report: a duplicate that names nothing.
+            std::fs::write(
+                scratch.join("triage_decision.json"),
+                r#"{"decision":"duplicate"}"#,
+            )
+            .unwrap();
+            report(Arc::clone(&bridge)).await;
+            // The contract rejection comes back as a second prompt in the same session.
+            while sends(&bridge) < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            std::fs::write(
+                scratch.join("triage_decision.json"),
+                r#"{"decision":"duplicate","duplicate_of":"mock:t#42"}"#,
+            )
+            .unwrap();
+            report(Arc::clone(&bridge)).await;
+        })
+    };
+
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .unwrap();
+    agent.await.unwrap();
+
+    match result {
+        TriageDecision::Duplicate { of, .. } => assert_eq!(of.as_str(), "mock:t#42"),
+        other => panic!("expected the corrected Duplicate, got {other:?}"),
+    }
+    let calls = bridge.recorded_calls.lock().await;
+    let opened = calls
+        .iter()
+        .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession))
+        .count();
+    assert_eq!(opened, 1, "the correction happens in the same session");
+    let prompts = calls
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                fixtures::mock_bridge::RecordedCall::SendMessage { .. }
+            )
+        })
+        .count();
+    assert_eq!(prompts, 2);
+    drop(calls);
+    let retry = bridge.last_prompt().await.unwrap();
+    assert!(
+        retry.contains("duplicate_of"),
+        "the retry names the missing field: {retry}"
+    );
+}
