@@ -3231,14 +3231,20 @@ impl RoadmapAmendmentQueue<'_> {
 }
 
 /// Fold events appended during live execution into memory, through the one
-/// shared clock-free conversion (#100).
+/// shared clock-free conversion (#100). All or nothing (#120): every event
+/// is converted before any is folded, so a corrupt timestamp leaves memory
+/// exactly as it was and a later catch-up never folds an event twice.
 fn apply_read_events(
     run_id: RunId,
     events: &[surge_persistence::runs::ReadEvent],
     memory: &mut RunMemory,
 ) -> Result<AppliedEventBatch, surge_persistence::runs::StorageError> {
-    for event in events {
-        memory.apply_event(&event.to_run_event(run_id)?);
+    let converted = events
+        .iter()
+        .map(|event| event.to_run_event(run_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    for event in &converted {
+        memory.apply_event(event);
     }
     Ok(AppliedEventBatch {
         graph_revisions: crate::engine::execution_state::pending_revisions(events, 0),
@@ -3419,6 +3425,47 @@ mod tests {
     use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
     use surge_core::keys::ProfileKey;
     use surge_core::node::{Node, OutcomeDecl, Position};
+
+    /// #120: a batch with a corrupt timestamp anywhere folds nothing, so the
+    /// memory never holds half a batch that a later catch-up would refold.
+    #[test]
+    fn a_batch_with_a_corrupt_timestamp_folds_nothing() {
+        let run = RunId::new();
+        let read = |seq: u64, timestamp_ms: i64, node: &str| surge_persistence::runs::ReadEvent {
+            seq: surge_persistence::runs::EventSeq(seq),
+            timestamp_ms,
+            kind: "StageEntered".into(),
+            payload: surge_core::run_event::VersionedEventPayload::new(
+                surge_core::run_event::EventPayload::StageEntered {
+                    node: surge_core::keys::NodeKey::try_from(node).unwrap(),
+                    attempt: 1,
+                },
+            ),
+        };
+        let mut memory = RunMemory::default();
+        let before = format!("{memory:?}");
+        let refused = apply_read_events(
+            run,
+            &[
+                read(1, 1_760_000_000_000, "first"),
+                read(2, i64::MAX, "second"),
+            ],
+            &mut memory,
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(surge_persistence::runs::StorageError::CorruptTimestamp(corrupt))
+                    if corrupt.seq == 2
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            format!("{memory:?}"),
+            before,
+            "the valid first event was not folded"
+        );
+    }
 
     #[test]
     fn checkpoint_exit_matches_only_named_node() {

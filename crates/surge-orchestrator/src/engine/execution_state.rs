@@ -32,6 +32,7 @@ use std::collections::HashMap;
 
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
+use surge_core::id::RunId;
 use surge_core::keys::EdgeKey;
 use surge_core::roadmap_patch::{ActivePickupPolicy, RoadmapPatchId, RoadmapPatchTarget};
 use surge_core::run_event::{EventPayload, RunConfig};
@@ -118,6 +119,7 @@ pub struct ExecutionState {
 }
 
 /// Why the execution state could not be rebuilt.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ExecutionStateError {
     /// Reading the run's log or checkpoints failed.
@@ -187,11 +189,32 @@ impl From<surge_persistence::runs::CorruptTimestamp> for ExecutionStateError {
     }
 }
 
-impl From<ExecutionStateError> for EngineError {
-    fn from(error: ExecutionStateError) -> Self {
-        match error {
-            ExecutionStateError::Storage(message) => Self::Storage(message),
-            other => Self::Internal(other.to_string()),
+/// Why a run's execution state could not be loaded, naming the run (#120).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("execution state of run {run_id}: {error}")]
+pub struct ExecutionStateLoadError {
+    /// The run whose state was asked for.
+    pub run_id: RunId,
+    /// What went wrong.
+    #[source]
+    pub error: ExecutionStateError,
+}
+
+impl ExecutionStateLoadError {
+    /// Whether reading storage failed (transient), rather than the log
+    /// being unusable as it stands.
+    #[must_use]
+    pub fn is_storage(&self) -> bool {
+        matches!(self.error, ExecutionStateError::Storage(_))
+    }
+}
+
+impl From<ExecutionStateLoadError> for EngineError {
+    fn from(error: ExecutionStateLoadError) -> Self {
+        if error.is_storage() {
+            Self::Storage(error.to_string())
+        } else {
+            Self::Internal(error.to_string())
         }
     }
 }
@@ -203,9 +226,20 @@ fn storage(error: impl std::fmt::Display) -> ExecutionStateError {
 /// Rebuild the execution state of `reader`'s run at `position`.
 ///
 /// # Errors
-/// A typed [`ExecutionStateError`]; see the module doc.
+/// An [`ExecutionStateLoadError`] naming the run, with a typed
+/// [`ExecutionStateError`]; see the module doc.
 #[must_use = "the execution state is the input to fresh start, resume and fork"]
 pub async fn load(
+    reader: &RunReader,
+    position: Position,
+) -> Result<ExecutionState, ExecutionStateLoadError> {
+    let run_id = *reader.run_id();
+    load_unscoped(reader, position)
+        .await
+        .map_err(|error| ExecutionStateLoadError { run_id, error })
+}
+
+async fn load_unscoped(
     reader: &RunReader,
     position: Position,
 ) -> Result<ExecutionState, ExecutionStateError> {
@@ -310,18 +344,24 @@ pub async fn load(
 /// validation (the MCP cleanup check needs memory alone).
 ///
 /// # Errors
-/// Storage, position or corrupt-timestamp errors.
+/// Storage, position or corrupt-timestamp errors, naming the run.
 #[must_use = "the folded memory is the result"]
 pub async fn load_memory(
     reader: &RunReader,
     position: Position,
-) -> Result<RunMemory, ExecutionStateError> {
-    let n = resolve_position(reader, position).await?;
-    let events = reader
-        .read_events(EventSeq(1)..EventSeq(n).next())
+) -> Result<RunMemory, ExecutionStateLoadError> {
+    let run_id = *reader.run_id();
+    let unscoped = async {
+        let n = resolve_position(reader, position).await?;
+        let events = reader
+            .read_events(EventSeq(1)..EventSeq(n).next())
+            .await
+            .map_err(storage)?;
+        fold(run_id, &events)
+    };
+    unscoped
         .await
-        .map_err(storage)?;
-    fold(*reader.run_id(), &events)
+        .map_err(|error| ExecutionStateLoadError { run_id, error })
 }
 
 /// The graph in force over `events`: the first `PipelineMaterialized`, then

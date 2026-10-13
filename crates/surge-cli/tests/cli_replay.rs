@@ -132,3 +132,86 @@ async fn engine_replay_json_emits_enriched_view() {
     }
     tmp.close().unwrap();
 }
+
+/// A graph whose single terminal node is `node`.
+fn graph_with_node(node: &str) -> Graph {
+    let mut graph = minimal_graph();
+    let key = NodeKey::try_from(node).unwrap();
+    let mut end = graph.nodes.remove(&graph.start).unwrap();
+    end.id = key.clone();
+    graph.nodes = BTreeMap::from([(key.clone(), end)]);
+    graph.start = key;
+    graph
+}
+
+/// A bootstrap run appends its generated follow-up flow as a second
+/// `PipelineMaterialized`; replay at any seq draws the run's own graph (#120).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_at_seq_of_a_bootstrap_run_draws_its_own_graph() {
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(tmp.path()).await.unwrap();
+        let run = RunId::new();
+        let writer = storage.create_run(run, tmp.path(), None).await.unwrap();
+        let materialized = |graph: Graph| {
+            let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph),
+                graph_hash,
+            })
+        };
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: tmp.path().to_path_buf(),
+                    initial_prompt: "bootstrap".into(),
+                    config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        budget: Default::default(),
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                    },
+                }),
+                materialized(graph_with_node("bootstrap_end")),
+                materialized(graph_with_node("generated_flow_end")),
+            ])
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args([
+                "engine",
+                "replay",
+                &run.to_string(),
+                "--seq",
+                "3",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
+        let nodes: Vec<&str> = json["view"]["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .iter()
+            .filter_map(|node| node["node"].as_str())
+            .collect();
+        assert_eq!(nodes, ["bootstrap_end"], "{stdout}");
+        let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+        assert!(
+            !stderr.contains("could not be rebuilt"),
+            "no fallback: {stderr}"
+        );
+    }
+    tmp.close().unwrap();
+}

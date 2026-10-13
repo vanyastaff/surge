@@ -159,7 +159,11 @@ impl Fixture {
 
     async fn load(&self, position: Position) -> Result<ExecutionState, ExecutionStateError> {
         let reader = self.storage.open_run_reader(self.run).await.unwrap();
-        load(&reader, position).await
+        load(&reader, position).await.map_err(|scoped| {
+            assert_eq!(scoped.run_id, self.run, "the error names the run");
+            assert!(scoped.to_string().contains(&self.run.to_string()));
+            scoped.error
+        })
     }
 
     async fn close(self) {
@@ -502,5 +506,182 @@ async fn a_corrupt_timestamp_is_refused_deterministically() {
             }
         );
     }
+    // Display readers get the same typed refusal, never a 1970 timestamp.
+    let reader = fx.storage.open_run_reader(fx.run).await.unwrap();
+    let read = reader.read_run_events().await;
+    drop(reader);
+    assert!(
+        matches!(
+            read,
+            Err(surge_persistence::runs::StorageError::CorruptTimestamp(corrupt))
+                if corrupt.seq == seqs[0]
+        ),
+        "{read:?}"
+    );
     fx.close().await;
+}
+
+/// A two-node graph: `work` routes to `end`.
+fn work_graph() -> Graph {
+    let mut graph = graph_with_start("work");
+    let end = NodeKey::try_from("end").unwrap();
+    graph.nodes.insert(
+        end.clone(),
+        Node {
+            id: end,
+            position: NodePosition::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        },
+    );
+    graph
+}
+
+/// A run that committed `work`'s outcome and consumed its route to `end`.
+/// Returns the route's seq.
+async fn consumed_route(fx: &Fixture) -> u64 {
+    use surge_core::execution_recovery::commit::StageOutcomeCommit;
+    let graph = work_graph();
+    fx.append(started(&graph, run_config(vec![]))).await;
+    let work = NodeKey::try_from("work").unwrap();
+    let invocation = surge_core::id::StageInvocationId::new();
+    let commit = StageOutcomeCommit::new(
+        surge_core::stage_tool::StageToolContext {
+            run: fx.run,
+            node: work.clone(),
+            session: surge_core::SessionId::new(),
+            generation: surge_core::id::StageGenerationId::new(),
+        },
+        surge_core::SessionId::new(),
+        invocation,
+        surge_core::keys::OutcomeKey::try_from("done").unwrap(),
+        1,
+        ContentHash::compute(b"effects"),
+    )
+    .unwrap();
+    let seqs = fx
+        .append(vec![
+            VersionedEventPayload::new(EventPayload::StageEntered {
+                node: work.clone(),
+                attempt: 1,
+            }),
+            VersionedEventPayload::new(EventPayload::StageOutcomeCommitted { commit }),
+        ])
+        .await;
+    let commit_seq = seqs[1];
+    let route = fx
+        .append(vec![
+            VersionedEventPayload::new(EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("work_to_end").unwrap(),
+                from: work,
+                to: NodeKey::try_from("end").unwrap(),
+                kind: surge_core::edge::EdgeKind::Forward,
+            }),
+            note("between the edge and the route commit"),
+            VersionedEventPayload::new(EventPayload::StageRouteCommitted {
+                invocation,
+                outcome_commit_seq: commit_seq,
+            }),
+        ])
+        .await;
+    route[2]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_consumed_route_with_its_checkpoint_resumes_at_the_routed_target() {
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    fx.checkpoint(&EngineSnapshot::new(&cursor("end"), route, route))
+        .await;
+    let state = fx.load(Position::Latest).await.unwrap();
+    assert_eq!(state.cursor.node.as_str(), "end");
+    assert_eq!(state.cursor_source, CursorSource::Checkpoint { seq: route });
+    fx.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_consumed_route_without_its_checkpoint_is_refused() {
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    assert_eq!(
+        fx.load(Position::Latest).await.unwrap_err(),
+        ExecutionStateError::ConsumedRouteWithoutCheckpoint { route_seq: route }
+    );
+    fx.close().await;
+    // An older checkpoint does not stand in for the route's own.
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    fx.checkpoint(&EngineSnapshot::new(&cursor("work"), route - 2, route - 2))
+        .await;
+    assert_eq!(
+        fx.load(Position::Latest).await.unwrap_err(),
+        ExecutionStateError::ConsumedRouteWithoutCheckpoint { route_seq: route }
+    );
+    fx.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_checkpoint_that_contradicts_the_consumed_route_is_refused() {
+    // The cursor is not on the routed target.
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    fx.checkpoint(&EngineSnapshot::new(&cursor("work"), route, route))
+        .await;
+    assert_eq!(
+        fx.load(Position::Latest).await.unwrap_err(),
+        ExecutionStateError::ConsumedRouteContradicted { route_seq: route }
+    );
+    fx.close().await;
+    // The checkpoint's stage boundary is not the route.
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    fx.checkpoint(&EngineSnapshot::new(&cursor("end"), route, route - 1))
+        .await;
+    assert_eq!(
+        fx.load(Position::Latest).await.unwrap_err(),
+        ExecutionStateError::ConsumedRouteContradicted { route_seq: route }
+    );
+    fx.close().await;
+}
+
+/// Fork reads the parent's state at N through the same rule: a prefix whose
+/// consumed route lacks its checkpoint is refused, naming the parent; the
+/// prefix before the route forks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_refuses_a_prefix_whose_consumed_route_lacks_its_checkpoint() {
+    use crate::engine::fork::{ForkRequest, fork};
+    let fx = Fixture::new().await;
+    let route = consumed_route(&fx).await;
+    let refused = fork(&fx.storage, ForkRequest::new(fx.run, RunId::new(), route)).await;
+    assert!(
+        matches!(&refused, Err(EngineError::ForkInvalid(reason))
+            if reason.contains("lacks its durable execution checkpoint")
+                && reason.contains(&fx.run.to_string())),
+        "{refused:?}"
+    );
+    let Fixture {
+        home,
+        storage,
+        run,
+        writer,
+    } = fx;
+    writer.close().await.unwrap();
+    let child = RunId::new();
+    fork(&storage, ForkRequest::new(run, child, route - 1))
+        .await
+        .expect("the prefix before the route forks");
+    for run in [run, child] {
+        storage
+            .open_run_writer(run)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
+    drop(storage);
+    home.close().unwrap();
 }

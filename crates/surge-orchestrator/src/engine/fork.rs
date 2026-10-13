@@ -260,7 +260,14 @@ async fn forkable_cursor_source(
         crate::engine::execution_state::Position::AtSeq(at_seq),
     )
     .await
-    .map_err(|error| EngineError::ForkInvalid(format!("parent state at seq {at_seq}: {error}")))?;
+    .map_err(|error| {
+        // A storage failure is transient, not the operator's fork request.
+        if error.is_storage() {
+            EngineError::Storage(error.to_string())
+        } else {
+            EngineError::ForkInvalid(format!("parent state at seq {at_seq}: {error}"))
+        }
+    })?;
     match &parent_state.terminal_verdict {
         surge_core::run_verdict::TerminalVerdict::Open => {},
         surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
