@@ -3668,7 +3668,7 @@ mod tests {
             &mut applied_seq,
         );
         assert_eq!(active_graph, revised_graph);
-        assert!(pending.is_empty());
+        assert_eq!(pending.len(), 0);
         assert_eq!(processed_seq, 7);
         assert_eq!(applied_seq, 7);
     }
@@ -3700,7 +3700,7 @@ mod tests {
         );
 
         assert_eq!(active_graph, original_graph);
-        assert!(pending.is_empty());
+        assert_eq!(pending.len(), 0);
         assert_eq!(processed_seq, 7);
         assert_eq!(applied_seq, 0);
     }

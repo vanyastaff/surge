@@ -187,7 +187,7 @@ async fn a_fresh_prefix_starts_at_the_graph_start_and_says_so() {
     assert_eq!(state.cursor_source, CursorSource::GraphStart);
     assert_eq!(state.position, 2);
     assert_eq!(state.memory_applied_seq, 2);
-    assert!(state.frames.is_empty() && state.root_traversal_counts.is_empty());
+    assert_eq!((state.frames.len(), state.root_traversal_counts.len()), (0, 0));
     assert_eq!(state.graph, graph);
     assert_eq!(state.terminal_verdict, TerminalVerdict::Open);
     fx.close().await;
@@ -326,7 +326,7 @@ async fn state_at_n_never_reads_later_events_or_checkpoints() {
     let at = fx.load(Position::AtSeq(seqs[2])).await.unwrap();
     assert_eq!(at.position, seqs[2]);
     assert_eq!(at.cursor_source, CursorSource::GraphStart);
-    assert!(at.pending_graph_revisions.is_empty());
+    assert_eq!(at.pending_graph_revisions.len(), 0);
     let latest = fx.load(Position::Latest).await.unwrap();
     assert_eq!(
         latest.cursor_source,
