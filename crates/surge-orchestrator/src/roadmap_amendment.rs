@@ -12,9 +12,9 @@ use surge_core::approvals::{ApprovalChannel, ApprovalChannelKind};
 use surge_core::keys::NodeKey;
 use surge_core::roadmap_patch::{
     ActivePickupPolicy, InsertionPoint, OperatorConflictChoice, RoadmapItemRef,
-    RoadmapPatchApplyConflict, RoadmapPatchApplyResult, RoadmapPatchApprovalDecision,
-    RoadmapPatchConflict, RoadmapPatchDependency, RoadmapPatchId, RoadmapPatchItem,
-    RoadmapPatchOperation, RoadmapPatchStatus, RoadmapPatchTarget,
+    RoadmapPatchApplyResult, RoadmapPatchApprovalDecision, RoadmapPatchConflict,
+    RoadmapPatchDependency, RoadmapPatchId, RoadmapPatchItem, RoadmapPatchOperation,
+    RoadmapPatchStatus, RoadmapPatchTarget,
 };
 use surge_core::run_event::{EscalationCause, EventPayload, VersionedEventPayload};
 use surge_core::{
@@ -31,6 +31,15 @@ use crate::engine::facade::EngineFacade;
 use crate::engine::handle::RunHandle;
 use crate::flow_amendment::{
     FlowAmendmentError, amend_active_flow, create_follow_up_flow, graph_content_hash,
+};
+
+mod apply;
+mod deferral;
+
+pub use apply::{
+    EngineSource, NotAppliedReason, PatchApplyError, PatchApplyOutcome, PatchApplyPorts,
+    PatchApplyRefusal, PatchApplyTarget, PatchApproval, PatchAssessment, apply_approved_patch,
+    assess_patch, reject_patch,
 };
 
 const ROADMAP_PATCH_ARTIFACT_NAME: &str = "roadmap-patch.toml";
@@ -161,6 +170,23 @@ impl RoadmapPatchApprovalLoop {
         self.max_edit_rounds
     }
 
+    /// Store a drafted patch and append `RoadmapPatchDrafted`: the start of a
+    /// patch's lifecycle on the owning run's log.
+    ///
+    /// # Errors
+    /// Returns [`RoadmapAmendmentError`] when artifact storage or the event
+    /// append fails.
+    #[must_use = "await the store operation and handle failures"]
+    pub async fn store_draft(
+        artifact_store: &ArtifactStore,
+        writer: &RunWriter,
+        run_id: RunId,
+        patch: &RoadmapPatch,
+        patch_bytes: &[u8],
+    ) -> Result<surge_core::run_state::ArtifactRef, RoadmapAmendmentError> {
+        store_patch_draft(artifact_store, writer, run_id, patch, patch_bytes).await
+    }
+
     /// Append an approval-request event and return the prompt payload that a
     /// CLI, UI, or notification channel can render.
     ///
@@ -245,9 +271,37 @@ pub enum RoadmapAmendmentError {
     /// Flow generation failed.
     #[error("flow amendment failed: {0}")]
     Flow(#[from] FlowAmendmentError),
-    /// Engine start failed.
-    #[error("engine failed to start follow-up run: {0}")]
+    /// An engine call (follow-up start or active-run submission) failed.
+    #[error("engine call failed: {0}")]
     Engine(#[from] crate::engine::error::EngineError),
+    /// The roadmap document could not be parsed or rendered.
+    #[error("roadmap document: {0}")]
+    RoadmapDocument(#[from] crate::roadmap_document::RoadmapDocumentError),
+    /// The amended roadmap file could not be written.
+    #[error("write roadmap {}: {source}", path.display())]
+    RoadmapFile {
+        /// The roadmap file.
+        path: std::path::PathBuf,
+        /// The I/O failure.
+        source: std::io::Error,
+    },
+    /// The patch could not be hashed for the index.
+    #[error("hash roadmap patch: {0}")]
+    PatchHash(String),
+    /// The patch index has no such patch.
+    #[error("roadmap patch not found: {0}")]
+    UnknownPatch(RoadmapPatchId),
+    /// The patch has no run whose log records its lifecycle.
+    #[error("roadmap patch {0} has no owning run event log")]
+    NoOwningRun(RoadmapPatchId),
+    /// The owning run's log could not be opened.
+    #[error("open owning run {run_id}: {reason}")]
+    OpenOwningRun {
+        /// The owning run.
+        run_id: RunId,
+        /// Why it could not be opened.
+        reason: String,
+    },
     /// Generated key was not valid.
     #[error("invalid generated key: {0}")]
     Key(#[from] surge_core::keys::KeyParseError),
@@ -275,7 +329,7 @@ pub enum RoadmapAmendmentError {
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] if follow-up graph generation fails or
 /// the synthetic seed producer key is invalid.
-pub fn build_follow_up_run_request(
+fn build_follow_up_run_request(
     patch_id: &RoadmapPatchId,
     target: &RoadmapPatchTarget,
     patch_result: &RoadmapPatchApplyResult,
@@ -324,7 +378,7 @@ pub fn build_follow_up_run_request(
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] when the engine facade rejects the run.
 #[must_use = "await the follow-up run start and handle failures"]
-pub async fn start_follow_up_run(
+async fn start_follow_up_run(
     engine: &dyn EngineFacade,
     request: FollowUpRunRequest,
 ) -> Result<RunHandle, RoadmapAmendmentError> {
@@ -364,7 +418,7 @@ pub async fn start_follow_up_run(
 /// Returns [`RoadmapAmendmentError`] when graph amendment, artifact storage, or
 /// event appends fail.
 #[must_use = "await active run amendment application and handle failures"]
-pub async fn apply_active_run_patch(
+pub(crate) async fn apply_active_run_patch(
     artifact_store: &ArtifactStore,
     writer: &RunWriter,
     run_id: RunId,
@@ -427,24 +481,13 @@ pub async fn apply_active_run_patch(
     })
 }
 
-/// Convert apply-time conflicts into operator-facing patch conflicts.
-#[must_use]
-pub fn apply_conflicts_as_patch_conflicts(
-    conflicts: &[RoadmapPatchApplyConflict],
-) -> Vec<RoadmapPatchConflict> {
-    conflicts
-        .iter()
-        .map(RoadmapPatchApplyConflict::to_patch_conflict)
-        .collect()
-}
-
 /// Build a standalone follow-up roadmap result directly from patch operations.
 ///
 /// This is used when an operator resolves a running/completed-roadmap conflict
 /// by choosing a follow-up run. The original roadmap is intentionally not
 /// mutated; the follow-up seed contains only the new or replacement work.
 #[must_use]
-pub fn follow_up_result_from_patch(patch: &RoadmapPatch) -> RoadmapPatchApplyResult {
+fn follow_up_result_from_patch(patch: &RoadmapPatch) -> RoadmapPatchApplyResult {
     let mut roadmap = RoadmapArtifact::default();
     let mut used_milestone_ids = BTreeSet::new();
     let mut inserted_milestones = Vec::new();
@@ -683,7 +726,7 @@ pub fn patch_rejected_notification(
 /// Returns [`RoadmapAmendmentError`] when artifact storage or event append
 /// fails.
 #[must_use = "await the store operation and handle failures"]
-pub async fn store_patch_draft(
+async fn store_patch_draft(
     artifact_store: &ArtifactStore,
     writer: &RunWriter,
     run_id: RunId,
@@ -720,7 +763,7 @@ pub async fn store_patch_draft(
 /// Returns [`RoadmapAmendmentError`] when artifact storage or event append
 /// fails.
 #[must_use = "await the store operation and handle failures"]
-pub async fn store_applied_artifacts(
+async fn store_applied_artifacts(
     artifact_store: &ArtifactStore,
     writer: &RunWriter,
     run_id: RunId,
@@ -768,7 +811,7 @@ pub async fn store_applied_artifacts(
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] when the event append fails.
 #[must_use = "await the update record and handle failures"]
-pub async fn record_roadmap_updated(
+async fn record_roadmap_updated(
     writer: &RunWriter,
     patch_id: &RoadmapPatchId,
     target: &RoadmapPatchTarget,
@@ -797,7 +840,7 @@ pub async fn record_roadmap_updated(
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] when the event append fails.
 #[must_use = "await the graph revision record and handle failures"]
-pub async fn record_graph_revision_accepted(
+async fn record_graph_revision_accepted(
     writer: &RunWriter,
     patch_id: &RoadmapPatchId,
     target: &RoadmapPatchTarget,
@@ -833,7 +876,7 @@ pub async fn record_graph_revision_accepted(
 ///
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] when the event append fails.
-pub async fn request_patch_approval(
+async fn request_patch_approval(
     writer: &RunWriter,
     patch: &RoadmapPatch,
     channel: ApprovalChannel,
@@ -870,7 +913,7 @@ pub async fn request_patch_approval(
 ///
 /// # Errors
 /// Returns [`RoadmapAmendmentError`] when the event append fails.
-pub async fn record_patch_approval_decision(
+async fn record_patch_approval_decision(
     writer: &RunWriter,
     patch_id: &RoadmapPatchId,
     channel_used: ApprovalChannelKind,
@@ -1251,16 +1294,33 @@ fn insertion_label(insertion: Option<&InsertionPoint>) -> String {
     }
 }
 
-fn item_ref_label(reference: &RoadmapItemRef) -> String {
-    match reference {
-        RoadmapItemRef::Milestone { milestone_id } => format!("milestone {milestone_id}"),
+/// How a roadmap item is named in text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItemLabel {
+    /// Approval summaries and seeds: "milestone m1", "task m1/t1".
+    Summary,
+    /// Generated stage specs: "m1", "m1/t1".
+    StageSpec,
+}
+
+/// The one rendering of a roadmap item reference, per purpose.
+pub(crate) fn item_label(reference: &RoadmapItemRef, style: ItemLabel) -> String {
+    let path = match reference {
+        RoadmapItemRef::Milestone { milestone_id } => milestone_id.to_string(),
         RoadmapItemRef::Task {
             milestone_id,
             task_id,
-        } => {
-            format!("task {milestone_id}/{task_id}")
-        },
+        } => format!("{milestone_id}/{task_id}"),
+    };
+    match (style, reference) {
+        (ItemLabel::StageSpec, _) => path,
+        (ItemLabel::Summary, RoadmapItemRef::Milestone { .. }) => format!("milestone {path}"),
+        (ItemLabel::Summary, RoadmapItemRef::Task { .. }) => format!("task {path}"),
     }
+}
+
+fn item_ref_label(reference: &RoadmapItemRef) -> String {
+    item_label(reference, ItemLabel::Summary)
 }
 
 fn replacement_label(replacement: &RoadmapPatchItem) -> String {
@@ -1296,3 +1356,6 @@ const fn pickup_label(policy: ActivePickupPolicy) -> &'static str {
         ActivePickupPolicy::Disabled => "disabled",
     }
 }
+
+#[cfg(test)]
+mod tests;

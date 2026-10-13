@@ -13,7 +13,7 @@ use surge_core::roadmap_patch::{
 };
 use surge_orchestrator::roadmap_amendment::{
     RoadmapAmendmentError, RoadmapPatchApprovalAction, RoadmapPatchApprovalLoop,
-    RoadmapPatchApprovalResolution, patch_approval_requested_notification, store_patch_draft,
+    RoadmapPatchApprovalResolution, patch_approval_requested_notification,
 };
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::{EventSeq, Storage};
@@ -62,7 +62,7 @@ async fn create_drafted_patch(
 ) -> surge_persistence::runs::RunWriter {
     let writer = storage.create_run(run_id, tmp.path(), None).await.unwrap();
     let artifact_store = ArtifactStore::new(tmp.path().join("runs"));
-    store_patch_draft(
+    RoadmapPatchApprovalLoop::store_draft(
         &artifact_store,
         &writer,
         run_id,
