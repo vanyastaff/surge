@@ -21,6 +21,7 @@ use surge_core::id::RunId;
 use surge_notify::telegram::InboxKeyboardButton;
 use surge_orchestrator::engine::RunEventTap;
 use surge_orchestrator::engine::facade::EngineFacade;
+use surge_orchestrator::operator::{FoldStatus, PendingDecisions};
 use surge_persistence::runs::RunStatusSnapshot;
 use surge_persistence::runs::storage::Storage;
 use surge_persistence::telegram::cards::Card;
@@ -335,7 +336,27 @@ impl RunSnapshotProvider for PersistenceSnapshots {
     }
 }
 
+/// Fold a snapshot of durable events into the run's pending decisions.
+fn fold_decisions(
+    run_id: RunId,
+    events: &[surge_persistence::runs::ReadEvent],
+) -> PendingDecisions {
+    let log: Vec<_> = events
+        .iter()
+        .map(|event| surge_core::run_event::RunEvent {
+            run_id,
+            seq: event.seq.0,
+            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
+                .unwrap_or_default(),
+            payload: event.payload.payload.clone(),
+        })
+        .collect();
+    PendingDecisions::from_events(run_id, &log)
+}
+
 /// A newer request alone is never evidence that the card's request was settled.
+/// The decision opened at the card's sequence must have retired, and that
+/// source event must be a gate request for the card's own node.
 fn exact_request_settled(card: &Card, events: &[surge_persistence::runs::ReadEvent]) -> bool {
     use surge_core::EventPayload;
     let Some(source) = events
@@ -358,22 +379,12 @@ fn exact_request_settled(card: &Card, events: &[surge_persistence::runs::ReadEve
     {
         return false;
     }
-    events
-        .iter()
-        .filter(|event| event.seq.0 > source.seq.0)
-        .any(|event| match &event.payload.payload {
-            EventPayload::HumanInputResolved {
-                node: resolved_node,
-                call_id,
-                ..
-            }
-            | EventPayload::HumanInputTimedOut {
-                node: resolved_node,
-                call_id,
-                ..
-            } => resolved_node == node && call_id.as_ref() == Some(request),
-            _ => false,
-        })
+    let Ok(run_id) = card.run_id.parse::<RunId>() else {
+        return false;
+    };
+    fold_decisions(run_id, events)
+        .retirement_of(source.seq.0)
+        .is_some()
 }
 
 /// Fold one read-only snapshot. A request is actionable only at the current node.
@@ -381,44 +392,46 @@ fn pending_request(
     run_id: RunId,
     events: &[surge_persistence::runs::ReadEvent],
 ) -> Result<Option<RunEventTap>> {
-    let log: Vec<_> = events
-        .iter()
-        .map(|event| surge_core::run_event::RunEvent {
-            run_id,
-            seq: event.seq.0,
-            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
-                .unwrap_or_default(),
-            payload: event.payload.payload.clone(),
-        })
-        .collect();
-    let state = surge_core::run_state::fold(&log)
-        .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))?;
-    let surge_core::run_state::RunState::Pipeline {
-        cursor,
-        graph,
-        pending_human_input: Some(pending),
-        parked: None,
-        ..
-    } = state
-    else {
+    let decisions = fold_decisions(run_id, events);
+    if let FoldStatus::Incomplete(reason) = decisions.status() {
+        return Err(TelegramCockpitError::Persistence(format!(
+            "run events cannot be folded: {reason:?}"
+        )));
+    }
+    let Some(current) = decisions.current_request() else {
         return Ok(None);
     };
-    if cursor.node != pending.node || graph.find_node(&pending.node).is_none() {
+    // Legacy unbound requests are readable, never actionable.
+    // Bootstrap and skill approvals are gate requests too: what matters is a
+    // namespaced gate request id to answer under.
+    let answerable = current
+        .kind
+        .call_id()
+        .is_some_and(|id| surge_core::id::GateRequestId::from_event_call_id(id).is_some());
+    if !current.actionable || !answerable {
+        return Ok(None);
+    }
+    let surge_core::run_state::RunState::Pipeline { graph, .. } = decisions.run_state() else {
+        return Ok(None);
+    };
+    if current
+        .node
+        .as_ref()
+        .is_none_or(|node| graph.find_node(node).is_none())
+    {
         return Ok(None);
     }
     let Some(event) = events
         .iter()
-        .find(|event| event.seq.0 == pending.requested_seq)
+        .find(|event| event.seq.0 == current.id.request_seq)
     else {
         return Ok(None);
     };
-    match &event.payload.payload {
-        surge_core::EventPayload::HumanInputRequested {
-            session: None,
-            call_id: Some(id),
-            ..
-        } if surge_core::id::GateRequestId::from_event_call_id(id).is_some() => {},
-        _ => return Ok(None), // Legacy unbound requests are readable, never actionable.
+    if !matches!(
+        event.payload.payload,
+        surge_core::EventPayload::HumanInputRequested { session: None, .. }
+    ) {
+        return Ok(None);
     }
     Ok(Some(RunEventTap {
         run_id,
