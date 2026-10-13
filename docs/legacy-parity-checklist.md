@@ -19,7 +19,7 @@ This checklist enumerates every legacy module, names its replacement in the engi
 |---|---|---|---|---|---|
 | 1 | `pipeline.rs` | 865 | `engine/engine.rs::Engine::start_run` (new) / `Engine::resume_run` (replay) | `tests/engine_e2e_linear_pipeline.rs` | ✅ verified |
 | 2 | `qa.rs` | 905 | `engine/hooks/mod.rs` (`on_outcome`) + Verifier profile | `tests/on_outcome_retry_test.rs` | ✅ verified |
-| 3 | `gates.rs` | 746 | `engine/stage/human_gate.rs` | `tests/engine_human_input_resolved.rs`, `engine_human_input_timeout.rs`, `engine_human_input_unit.rs` | ✅ verified |
+| 3 | `gates.rs` | 746 | `engine/stage/human_gate.rs` | `engine/human_decision/tests.rs`, `engine_gate_cancellation.rs`, `engine_human_input_unit.rs` | ✅ verified |
 | 4 | `planner.rs` | 674 | `engine/bootstrap.rs` + planner profiles | `tests/bootstrap_archetypes_test.rs`, `bootstrap_linear_3_test.rs`, `bootstrap_validation_retry_test.rs` | ✅ verified |
 | 5 | `executor.rs` | 338 | `engine/run_task.rs` + `engine/stage/agent.rs` | `tests/engine_agent_stage_unit.rs` | ✅ verified |
 | 6 | `context.rs` | 336 | `engine/frames.rs` + `engine/stage/bindings.rs` | `tests/engine_agent_artifact_emission_test.rs` | ✅ verified |

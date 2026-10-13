@@ -58,3 +58,13 @@ This ADR explicitly does NOT promise:
 - A `Registry` provider gains a real configured root and a distribution story — the resolution gap noted above becomes load-bearing rather than theoretical.
 - Operators report that re-approving an unpinned skill on every run of an unchanged graph is friction rather than safety — at that point, writing an approved hash back as a pin (and where that pin should live) becomes its own decision.
 - `custom_fields` stops being a reasonable home for `skills` (e.g. it grows enough sibling capabilities that `AgentConfig`'s call sites are worth updating in one pass) — promote it to a typed field then, not as a side effect of an unrelated task.
+
+## Addendum 2026-10-12 — the skill-trust prompt waits through the shared human decision wait (#96)
+
+The skill-trust prompt no longer has its own wait loop. It waits through `engine::human_decision`, the single await side shared with `HumanGate` nodes and agent request-human-input tool calls. The resolve side (`Engine::resolve_human_input` / `resolve_gate_input`, ADR-0009) is unchanged. So is everything above: the `HumanInputRequested` / `HumanInputResolved` / `HumanInputTimedOut` triple, registering the sender only immediately before the request becomes durable, and fail-closed trust.
+
+Three behaviours change:
+
+- **Run cancellation is observed.** Stopping a run while the prompt is pending ends the wait at once as `StageError::Cancelled`. The run records exactly one `RunAborted` and no `HumanInputTimedOut`. Before this change the wait ignored the run's cancellation token. A stopped run then waited out the human-input timeout and ended `Failed`, with an invented timeout in its log.
+- **The request carries its deadline contract.** The request's schema now records `x-surge-timeout-ms`, as a gate's does, so a future restore can resume or expire the wait from the log. Restoring skill prompts after a restart is still out of scope.
+- **Deregistration is identity-checked.** The wait removes the registry entry only while it still belongs to this request. An older wait can therefore never deregister a newer request on the same node.
