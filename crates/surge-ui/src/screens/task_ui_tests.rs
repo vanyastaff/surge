@@ -82,10 +82,8 @@ fn parked_owner_close_retains_decision_but_final_owner_close_retires_it() {
         },
     });
     assert_eq!(stream.pending.len(), 1);
-    let crate::run_stream::DecisionKind::HumanInput { call_id, .. } = &stream.pending[0].kind
-    else {
-        panic!("human input");
-    };
+    assert!(stream.pending[0].kind().is_human_input(), "human input");
+    let call_id = stream.pending[0].call_id();
     assert_eq!(call_id.as_ref(), Some(&request));
     stream.apply(&EngineRunEvent::Terminal {
         outcome: RunOutcome::Completed {
@@ -106,10 +104,8 @@ fn question_rehydration_preserves_identity_and_refuses_lower_or_gapped_prefix() 
     replay_question(&mut stream, run, &events);
     assert_eq!(stream.pending.len(), 1);
     assert_eq!(stream.pending[0].seq, 3);
-    let crate::run_stream::DecisionKind::HumanInput { call_id, .. } = &stream.pending[0].kind
-    else {
-        panic!("human input");
-    };
+    assert!(stream.pending[0].kind().is_human_input(), "human input");
+    let call_id = stream.pending[0].call_id();
     assert_eq!(call_id.as_ref(), Some(&request));
     replay_question(&mut stream, run, &events);
     assert_eq!(
@@ -1477,10 +1473,11 @@ fn newly_admitted_suspend_cannot_use_old_executing_detail(cx: &mut TestAppContex
         "trusted hydration restores the question independently of old stream watermark"
     );
     assert_eq!(gate_stream.pending[0].seq, requests[0].0);
-    let crate::run_stream::DecisionKind::HumanInput { call_id, .. } = &gate_stream.pending[0].kind
-    else {
-        panic!("original human input");
-    };
+    assert!(
+        gate_stream.pending[0].kind().is_human_input(),
+        "original human input"
+    );
+    let call_id = gate_stream.pending[0].call_id();
     assert_eq!(call_id.as_ref(), Some(&requests[0].1));
     let paused_detail = runtime.block_on(show_task(&facade, item));
     runtime

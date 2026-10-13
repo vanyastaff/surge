@@ -225,14 +225,16 @@ impl Fixture {
         })
         .await
         .unwrap();
-        let EventPayload::HumanInputRequested {
-            schema: Some(schema),
-            ..
-        } = &event.event.payload.payload
-        else {
-            panic!("missing gate schema")
-        };
-        assert_eq!(schema["x-surge-bootstrap-stage"], "description");
+        let opening =
+            surge_orchestrator::operator::classify_opening(event.event.payload.payload(), None)
+                .expect("gate request opens a decision");
+        assert!(matches!(
+            opening.kind,
+            surge_orchestrator::operator::DecisionKind::BootstrapApproval {
+                stage: surge_core::run_event::BootstrapStage::Description,
+                ..
+            }
+        ));
         let id = self
             .routes
             .store

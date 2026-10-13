@@ -560,7 +560,7 @@ impl AppState {
         // iteration order into the Inbox — while the Inbox selects by
         // index, so a between-frame reorder could retarget a decision.
         all.sort_by(|(ra, pa), (rb, pb)| {
-            (pa.kind.rank(), pa.seq, ra.to_string()).cmp(&(pb.kind.rank(), pb.seq, rb.to_string()))
+            (pa.rank(), pa.seq, ra.to_string()).cmp(&(pb.rank(), pb.seq, rb.to_string()))
         });
         all
     }
