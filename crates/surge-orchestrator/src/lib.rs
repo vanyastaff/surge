@@ -58,6 +58,7 @@
 // or integration tests — none of them is engine-only. Folding them under
 // `engine/` would force every consumer to add an `engine::` prefix without
 // any architectural benefit, so they stay at the crate root.
+pub mod agent_invocation;
 pub mod archetype_registry;
 pub mod bootstrap;
 pub mod bootstrap_driver;

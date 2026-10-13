@@ -2741,11 +2741,61 @@ fn derive_agent_kind(profile_str: &str) -> AgentKind {
 /// process environment at stage time. A required-but-unset source variable
 /// fails the stage with a typed, actionable `StageError::Internal` — the run
 /// never spawns an agent with a silently absent credential.
+/// Why a profile's runtime cannot be launched (#99): typed, so a standalone
+/// invocation can name the agent id and the known ids, or the missing
+/// environment variable (never its value).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AgentLaunchError {
+    /// The profile declares no `runtime.agent_id`.
+    #[error("profile {profile:?} has empty runtime.agent_id")]
+    EmptyAgentId {
+        /// The profile reference.
+        profile: String,
+    },
+    /// The agent id is not in the agent registry.
+    #[error(
+        "profile {profile:?} references agent_id {agent_id:?} not present in the agent registry. Known ids and aliases: {known}"
+    )]
+    UnknownAgent {
+        /// The profile reference.
+        profile: String,
+        /// The unknown agent id.
+        agent_id: String,
+        /// The known ids and aliases, comma-separated.
+        known: String,
+    },
+    /// The registry entry's environment cannot be resolved.
+    #[error("profile {profile:?} runtime {agent_id:?} cannot resolve its environment: {source}")]
+    Environment {
+        /// The profile reference.
+        profile: String,
+        /// The agent id.
+        agent_id: String,
+        /// The missing variable (name only).
+        source: surge_acp::agent_env::AgentEnvError,
+    },
+}
+
+impl From<AgentLaunchError> for StageError {
+    fn from(error: AgentLaunchError) -> Self {
+        Self::Internal(error.to_string())
+    }
+}
+
+/// [`resolve_agent_launch`] in stage terms.
 pub(crate) fn derive_agent_kind_from_id(
     profile_str: &str,
     agent_id: &str,
     registry: Option<&surge_acp::Registry>,
 ) -> Result<AgentLaunch, StageError> {
+    resolve_agent_launch(profile_str, agent_id, registry).map_err(StageError::from)
+}
+
+pub(crate) fn resolve_agent_launch(
+    profile_str: &str,
+    agent_id: &str,
+    registry: Option<&surge_acp::Registry>,
+) -> Result<AgentLaunch, AgentLaunchError> {
     // Debug-only test seam: force the in-process mock agent regardless of the
     // profile's runtime, so CLI/plumbing smoke tests can start runs without
     // spawning (and then having to tear down) a real ACP subprocess. Gated on
@@ -2759,9 +2809,9 @@ pub(crate) fn derive_agent_kind_from_id(
         return Ok(AgentLaunch::mock());
     }
     if agent_id.is_empty() {
-        return Err(StageError::Internal(format!(
-            "profile {profile_str:?} has empty runtime.agent_id"
-        )));
+        return Err(AgentLaunchError::EmptyAgentId {
+            profile: profile_str.to_owned(),
+        });
     }
     if agent_id == "mock" {
         return Ok(AgentLaunch::mock());
@@ -2776,14 +2826,18 @@ pub(crate) fn derive_agent_kind_from_id(
             known = %known,
             "unknown profile runtime agent id"
         );
-        StageError::Internal(format!(
-            "profile {profile_str:?} references agent_id {agent_id:?} not present in the agent registry. Known ids and aliases: {known}"
-        ))
+        AgentLaunchError::UnknownAgent {
+            profile: profile_str.to_owned(),
+            agent_id: agent_id.to_owned(),
+            known,
+        }
     })?;
     let entry = agent_registry.find(&normalized_agent_id).ok_or_else(|| {
-        StageError::Internal(format!(
-            "normalized agent_id {normalized_agent_id:?} missing from the agent registry"
-        ))
+        AgentLaunchError::UnknownAgent {
+            profile: profile_str.to_owned(),
+            agent_id: normalized_agent_id.clone(),
+            known: agent_registry.known_ids_and_aliases().join(", "),
+        }
     })?;
     let binary = std::path::PathBuf::from(&entry.command);
     let extra_args = entry.default_args.clone();
@@ -2823,9 +2877,11 @@ pub(crate) fn derive_agent_kind_from_id(
             error = %e,
             "agent env resolution failed"
         );
-        StageError::Internal(format!(
-            "profile {profile_str:?} runtime {agent_id:?} cannot resolve its environment: {e}"
-        ))
+        AgentLaunchError::Environment {
+            profile: profile_str.to_owned(),
+            agent_id: agent_id.to_owned(),
+            source: e,
+        }
     })?;
     tracing::debug!(
         target: "engine::stage::agent",
@@ -2852,7 +2908,7 @@ pub(crate) fn derive_agent_kind_from_id(
 pub(crate) struct AgentLaunch {
     pub(crate) kind: AgentKind,
     pub(crate) env: BTreeMap<String, String>,
-    settings_files: Vec<surge_core::config::AgentSettingsFile>,
+    pub(crate) settings_files: Vec<surge_core::config::AgentSettingsFile>,
 }
 
 impl AgentLaunch {

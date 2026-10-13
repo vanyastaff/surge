@@ -744,19 +744,19 @@ fn discovered_task_events(
 }
 
 /// Follow-up turn after validation rejected a reported outcome.
-fn validation_retry_prompt(feedback: &str) -> String {
+pub(crate) fn validation_retry_prompt(feedback: &str) -> String {
     format!(
         "Your stage outcome was rejected by validation:\n{feedback}\n\nCorrect the artifacts or outcome, then call report_stage_outcome again with a new unique call_id. The stage is not complete until validation accepts the result."
     )
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ArtifactContractRejection {
-    hook_id: String,
-    reason: String,
+pub(crate) struct ArtifactContractRejection {
+    pub(crate) hook_id: String,
+    pub(crate) reason: String,
 }
 
-pub(super) async fn validate_profile_artifact_contracts(
+pub(crate) async fn validate_profile_artifact_contracts(
     resolved_profile: Option<&ResolvedProfile>,
     profile_ref: &str,
     outcome: &OutcomeKey,
