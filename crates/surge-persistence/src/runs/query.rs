@@ -36,10 +36,14 @@ pub struct RunStatusSnapshot {
     pub last_outcome: Option<String>,
     /// Most-recent stage `attempt` from `StageEntered`, or `None`.
     pub last_attempt: Option<u32>,
-    /// `true` once a terminal event (`RunCompleted`, `RunFailed` or `RunAborted`) lands.
+    /// The run's terminal verdict over the log (#95): the one rule every
+    /// reader of this snapshot uses for "did the run end, and how".
+    pub verdict: surge_core::run_verdict::TerminalVerdict,
+    /// Derived from [`Self::verdict`]: `true` once the log is no longer
+    /// open (a single terminal event, or a conflict).
     pub terminal: bool,
-    /// `true` only for `RunFailed`. Distinguishes failed-terminal from
-    /// success-terminal for card rendering.
+    /// Derived from [`Self::verdict`]: `true` for a `RunFailed` verdict and
+    /// for a conflict, so a conflicted run never renders as a success.
     pub failed: bool,
     /// Unix epoch ms of the `RunStarted` event, or `None` if not yet started.
     pub started_at_ms: Option<i64>,
@@ -90,6 +94,7 @@ impl RunStatusSnapshot {
             active_node: None,
             last_outcome: None,
             last_attempt: None,
+            verdict: surge_core::run_verdict::TerminalVerdict::Open,
             terminal: false,
             failed: false,
             started_at_ms: None,
@@ -136,13 +141,6 @@ pub fn aggregate_status_with_registry(
             EventPayload::OutcomeReported { outcome, .. } => {
                 snap.last_outcome = Some(outcome.as_str().to_owned());
             },
-            EventPayload::RunCompleted { .. } | EventPayload::RunAborted { .. } => {
-                snap.terminal = true;
-            },
-            EventPayload::RunFailed { .. } => {
-                snap.terminal = true;
-                snap.failed = true;
-            },
             EventPayload::RunParked {
                 worktree, basis, ..
             } => {
@@ -167,6 +165,15 @@ pub fn aggregate_status_with_registry(
             _ => {},
         }
     }
+    snap.verdict = ReadEvent::terminal_verdict(events);
+    snap.terminal = !matches!(snap.verdict, surge_core::run_verdict::TerminalVerdict::Open);
+    snap.failed = match &snap.verdict {
+        surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+            claim.outcome.kind() == surge_core::run_verdict::TerminalKind::Failed
+        },
+        surge_core::run_verdict::TerminalVerdict::Conflict { .. } => true,
+        surge_core::run_verdict::TerminalVerdict::Open => false,
+    };
 
     if let (Some(start), Some(end)) = (snap.started_at_ms, snap.last_event_at_ms) {
         snap.elapsed_ms = Some(end.saturating_sub(start));
@@ -174,7 +181,16 @@ pub fn aggregate_status_with_registry(
     let state = (!events.is_empty())
         .then(|| fold_read_events(run_id, events).ok())
         .flatten();
-    snap.display = RunDisplayState::from_state(state.as_ref(), registry);
+    // A conflicting terminal history is unconfirmed: never Done, whatever
+    // the fold's own first-terminal state says (#95).
+    snap.display = if matches!(
+        snap.verdict,
+        surge_core::run_verdict::TerminalVerdict::Conflict { .. }
+    ) {
+        RunDisplayState::Waiting(surge_core::run_display::WaitingReason::RecoveryRequired)
+    } else {
+        RunDisplayState::from_state(state.as_ref(), registry)
+    };
     snap
 }
 
@@ -496,6 +512,46 @@ mod tests {
         assert!(snap.terminal);
         assert!(!snap.failed);
         assert_eq!(snap.active_node.as_deref(), Some("gate"));
+    }
+
+    #[test]
+    fn conflicting_terminal_history_is_unconfirmed_never_done() {
+        let run_id = RunId::new();
+        let events = [
+            event(
+                1,
+                1_000,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/p"),
+                    initial_prompt: String::new(),
+                    config: run_config(),
+                },
+            ),
+            event(
+                2,
+                1_100,
+                EventPayload::RunCompleted {
+                    terminal_node: node("end"),
+                },
+            ),
+            event(
+                3,
+                1_200,
+                EventPayload::RunFailed {
+                    error: "second writer".into(),
+                },
+            ),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.verdict.conflicting_seqs(), vec![2, 3]);
+        assert!(snap.terminal);
+        assert!(snap.failed, "a conflict never renders as a success");
+        assert_eq!(
+            snap.display,
+            RunDisplayState::Waiting(surge_core::run_display::WaitingReason::RecoveryRequired),
+            "the fold's first-terminal Done must not leak through"
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@
 use std::time::Duration;
 
 use surge_core::RunStatus;
+use surge_core::run_verdict::{TerminalKind, TerminalVerdict};
 
 /// What recovery decided to do with a single run.
 ///
@@ -29,15 +30,21 @@ pub enum RecoveryAction {
     /// Run is non-terminal, its worktree is present, and it is not stuck:
     /// resume execution from the last persisted cursor.
     Resume,
-    /// The event log already reached a terminal event (`RunCompleted` /
-    /// `RunFailed`) but the registry never recorded it (the daemon died
-    /// in the window between the terminal event and the status write).
-    /// Reconcile the registry status to match the log.
+    /// The event log's verdict is a single terminal event but the registry
+    /// never recorded it (the daemon died between the terminal event and
+    /// the status write). Reconcile the registry to exactly that kind.
     ReconcileTerminal {
-        /// `true` if the terminal event was `RunFailed`, `false` for
-        /// `RunCompleted`. Drives whether the registry row becomes
-        /// [`RunStatus::Failed`] or [`RunStatus::Completed`].
-        failed: bool,
+        /// The log's terminal kind; see [`reconciled_status`].
+        kind: TerminalKind,
+    },
+    /// The event log holds conflicting terminal claims (#95). Unconfirmed:
+    /// never resumed, never reconciled, nothing appended; an operator is
+    /// flagged. Carries the first two conflicting sequence numbers.
+    FlagTerminalConflict {
+        /// Sequence of the first terminal claim.
+        first_seq: u64,
+        /// Sequence of the second terminal claim.
+        second_seq: u64,
     },
     /// The run's git worktree directory is gone, so resume is impossible.
     /// Mark the run [`RunStatus::Failed`] with a clear reason.
@@ -82,12 +89,8 @@ pub struct RunRecoveryFacts {
     /// list-time stale-pid detection in
     /// [`surge_persistence::runs::Storage::list_runs`] has run).
     pub registry_status: RunStatus,
-    /// `true` if folding the event log shows a terminal event
-    /// (`RunCompleted` / `RunFailed`).
-    pub log_terminal: bool,
-    /// `true` if the terminal event observed in the log was `RunFailed`.
-    /// Meaningful only when `log_terminal` is `true`.
-    pub log_failed: bool,
+    /// The event log's terminal verdict (#95).
+    pub log_verdict: TerminalVerdict,
     /// `true` if the run's worktree directory exists on disk.
     pub worktree_exists: bool,
     /// Unix epoch ms of the most recent event in the log, or `None` if
@@ -112,6 +115,18 @@ pub struct RunRecoveryFacts {
     pub parked_wake_at_ms: Option<i64>,
 }
 
+/// The registry status a reconciled terminal kind projects to: the one
+/// mapping recovery and `surge daemon recover` share, so an aborted log
+/// never becomes `Completed` (#95).
+#[must_use]
+pub fn reconciled_status(kind: TerminalKind) -> RunStatus {
+    match kind {
+        TerminalKind::Completed => RunStatus::Completed,
+        TerminalKind::Failed => RunStatus::Failed,
+        TerminalKind::Aborted => RunStatus::Aborted,
+    }
+}
+
 /// Decide what to do with a single run, given the gathered facts and the
 /// stuck threshold. Pure — no I/O, no clock access — so the policy is
 /// exhaustively unit-testable.
@@ -119,7 +134,9 @@ pub struct RunRecoveryFacts {
 /// Decision order (first match wins):
 /// 1. already active in-process → [`RecoveryAction::SkipAlreadyActive`]
 /// 2. registry status truly terminal → [`RecoveryAction::SkipTerminal`]
-/// 3. event log reached terminal → [`RecoveryAction::ReconcileTerminal`]
+/// 3. event log verdict is a conflict → [`RecoveryAction::FlagTerminalConflict`];
+///    a single terminal event → [`RecoveryAction::ReconcileTerminal`] to its
+///    exact kind (Aborted stays Aborted)
 /// 4. worktree missing → [`RecoveryAction::MarkFailedWorktreeLost`]
 /// 5. registry status `Parked` and not yet due → [`RecoveryAction::SkipParked`]
 ///    (Task 12 M3 review, BLOCKING #2); due → falls through to 7 like any
@@ -170,10 +187,19 @@ pub fn decide_action(
     //    recorded it. Reconcile. Checked BEFORE the worktree probe: a
     //    finished run legitimately has its worktree cleaned up, so an
     //    absent worktree here is expected, not a failure.
-    if facts.log_terminal {
-        return RecoveryAction::ReconcileTerminal {
-            failed: facts.log_failed,
-        };
+    match &facts.log_verdict {
+        TerminalVerdict::Conflict { claims } => {
+            return RecoveryAction::FlagTerminalConflict {
+                first_seq: claims.first().map_or(0, |claim| claim.seq),
+                second_seq: claims.get(1).map_or(0, |claim| claim.seq),
+            };
+        },
+        TerminalVerdict::Terminal(claim) => {
+            return RecoveryAction::ReconcileTerminal {
+                kind: claim.outcome.kind(),
+            };
+        },
+        TerminalVerdict::Open => {},
     }
 
     // 4. No worktree → cannot resume.
@@ -333,40 +359,34 @@ pub async fn plan_recovery(
         // a terminal event and when the last event landed. A missing or
         // unreadable per-run DB is tolerated — treat it as an empty log so
         // one corrupt run cannot abort the whole scan.
-        let (log_terminal, log_failed, last_event_ms, active_node) =
-            match storage.open_run_reader(run_id).await {
-                Ok(reader) => match current_status(&reader, run_id).await {
-                    Ok(snap) => (
-                        snap.terminal,
-                        snap.failed,
-                        snap.last_event_at_ms,
-                        snap.active_node,
-                    ),
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "surge.recovery",
-                            run_id = %run_id,
-                            error = %e,
-                            "current_status read failed; treating log as empty"
-                        );
-                        (false, false, None, None)
-                    },
-                },
+        let (log_verdict, last_event_ms, active_node) = match storage.open_run_reader(run_id).await
+        {
+            Ok(reader) => match current_status(&reader, run_id).await {
+                Ok(snap) => (snap.verdict, snap.last_event_at_ms, snap.active_node),
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::warn!(
                         target: "surge.recovery",
                         run_id = %run_id,
                         error = %e,
-                        "open_run_reader failed; treating log as empty"
+                        "current_status read failed; treating log as empty"
                     );
-                    (false, false, None, None)
+                    (TerminalVerdict::Open, None, None)
                 },
-            };
+            },
+            Err(e) => {
+                tracing::debug!(
+                    target: "surge.recovery",
+                    run_id = %run_id,
+                    error = %e,
+                    "open_run_reader failed; treating log as empty"
+                );
+                (TerminalVerdict::Open, None, None)
+            },
+        };
 
         let facts = RunRecoveryFacts {
             registry_status: summary.status,
-            log_terminal,
-            log_failed,
+            log_verdict,
             worktree_exists,
             last_event_ms,
             already_active: active_run_ids.contains(&run_id),
@@ -412,12 +432,21 @@ pub trait RecoveryEffects: Send + Sync {
     async fn mark_failed(&self, run_id: &surge_core::id::RunId, reason: &str)
     -> Result<(), String>;
 
-    /// Reconcile a run whose log reached a terminal event to the matching
-    /// registry status (`Completed` or `Failed`).
+    /// Reconcile a run whose log reached one terminal event to the matching
+    /// registry status ([`reconciled_status`]).
     async fn reconcile_terminal(
         &self,
         run_id: &surge_core::id::RunId,
-        failed: bool,
+        kind: TerminalKind,
+    ) -> Result<(), String>;
+
+    /// Raise a human-attention signal for a run whose log holds conflicting
+    /// terminal claims. Must not append to the log or change the registry.
+    async fn flag_terminal_conflict(
+        &self,
+        run_id: &surge_core::id::RunId,
+        first_seq: u64,
+        second_seq: u64,
     ) -> Result<(), String>;
 
     /// Raise a human-attention signal for a stuck run.
@@ -435,6 +464,8 @@ pub struct RecoveryOutcome {
     pub failed_worktree: usize,
     /// Runs flagged for human attention as stuck.
     pub flagged_stuck: usize,
+    /// Runs flagged for conflicting terminal history.
+    pub flagged_conflict: usize,
     /// Decisions that required no action (already terminal / already active).
     pub skipped: usize,
     /// Runs left parked because their `wake_at` has not passed yet (Task
@@ -490,17 +521,39 @@ pub async fn execute_recovery(
                     }
                 }
             },
-            RecoveryAction::ReconcileTerminal { failed } => {
+            RecoveryAction::FlagTerminalConflict {
+                first_seq,
+                second_seq,
+            } => {
+                tracing::warn!(target: "surge.recovery", run_id = %d.run_id, first_seq,
+                    second_seq, "conflicting terminal history; left untouched for an operator");
+                if dry_run {
+                    out.flagged_conflict += 1;
+                } else {
+                    match effects
+                        .flag_terminal_conflict(&d.run_id, first_seq, second_seq)
+                        .await
+                    {
+                        Ok(()) => out.flagged_conflict += 1,
+                        Err(e) => {
+                            out.errors += 1;
+                            tracing::warn!(target: "surge.recovery", run_id = %d.run_id,
+                                error = %e, "flag-terminal-conflict notify failed");
+                        },
+                    }
+                }
+            },
+            RecoveryAction::ReconcileTerminal { kind } => {
                 if dry_run {
                     out.reconciled += 1;
                 } else {
-                    match effects.reconcile_terminal(&d.run_id, failed).await {
+                    match effects.reconcile_terminal(&d.run_id, kind).await {
                         Ok(()) => {
                             out.reconciled += 1;
                             tracing::info!(
                                 target: "surge.recovery",
                                 run_id = %d.run_id,
-                                failed,
+                                ?kind,
                                 "reconciled registry to terminal log state"
                             );
                         },
@@ -594,6 +647,7 @@ pub async fn execute_recovery(
         reconciled = out.reconciled,
         failed_worktree = out.failed_worktree,
         flagged_stuck = out.flagged_stuck,
+        flagged_conflict = out.flagged_conflict,
         skipped = out.skipped,
         parked = out.parked,
         errors = out.errors,
@@ -654,31 +708,63 @@ impl RecoveryEffects for DaemonRecoveryEffects {
     async fn reconcile_terminal(
         &self,
         run_id: &surge_core::id::RunId,
-        failed: bool,
+        kind: TerminalKind,
     ) -> Result<(), String> {
-        let status = if failed {
-            RunStatus::Failed
-        } else {
-            RunStatus::Completed
-        };
         self.storage
-            .set_run_status(run_id, status, Some(self.now_ms))
+            .set_run_status(run_id, reconciled_status(kind), Some(self.now_ms))
             .await
             .map_err(|e| e.to_string())
     }
 
+    async fn flag_terminal_conflict(
+        &self,
+        run_id: &surge_core::id::RunId,
+        first_seq: u64,
+        second_seq: u64,
+    ) -> Result<(), String> {
+        self.notify_operator(
+            run_id,
+            format!("Run {run_id} has conflicting terminal history"),
+            format!(
+                "Its event log claims termination more than once (seq {first_seq} and \
+                 {second_seq}), so its outcome is unconfirmed. Recovery left it untouched; \
+                 inspect with `surge engine replay {run_id}`."
+            ),
+        )
+        .await
+    }
+
     async fn flag_stuck(&self, run_id: &surge_core::id::RunId, idle_ms: i64) -> Result<(), String> {
-        let node = surge_core::keys::NodeKey::try_new("recovery")
-            .map_err(|e| format!("bad recovery node key: {e}"))?;
         let idle_hours = idle_ms / 3_600_000;
-        let rendered = surge_notify::RenderedNotification {
-            severity: surge_core::notify_config::NotifySeverity::Warn,
-            title: format!("Run {run_id} may be stuck"),
-            body: format!(
+        self.notify_operator(
+            run_id,
+            format!("Run {run_id} may be stuck"),
+            format!(
                 "No new events for ~{idle_hours}h after a daemon restart. \
                  Recovery left it untouched; inspect with `surge engine watch {run_id}` \
                  or abort with `surge run abort {run_id}`."
             ),
+        )
+        .await
+    }
+}
+
+impl DaemonRecoveryEffects {
+    /// Desktop human-attention notice for a run recovery left untouched.
+    /// No desktop channel configured is tolerated: the executor already
+    /// logged the decision at WARN.
+    async fn notify_operator(
+        &self,
+        run_id: &surge_core::id::RunId,
+        title: String,
+        body: String,
+    ) -> Result<(), String> {
+        let node = surge_core::keys::NodeKey::try_new("recovery")
+            .map_err(|e| format!("bad recovery node key: {e}"))?;
+        let rendered = surge_notify::RenderedNotification {
+            severity: surge_core::notify_config::NotifySeverity::Warn,
+            title,
+            body,
             artifact_paths: vec![],
         };
         let ctx = surge_notify::NotifyDeliveryContext {
@@ -694,8 +780,6 @@ impl RecoveryEffects for DaemonRecoveryEffects {
             )
             .await
         {
-            // Success, or no desktop channel configured (the stuck run is
-            // still logged at WARN by the executor) — both are tolerated.
             Ok(()) | Err(surge_notify::NotifyError::ChannelNotConfigured) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
@@ -845,8 +929,17 @@ mod execute_recovery_tests {
             self.mark_failed_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-        async fn reconcile_terminal(&self, _r: &RunId, _failed: bool) -> Result<(), String> {
+        async fn reconcile_terminal(&self, _r: &RunId, _kind: TerminalKind) -> Result<(), String> {
             self.reconcile_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn flag_terminal_conflict(
+            &self,
+            _r: &RunId,
+            _first_seq: u64,
+            _second_seq: u64,
+        ) -> Result<(), String> {
             Ok(())
         }
         async fn flag_stuck(&self, _r: &RunId, _idle_ms: i64) -> Result<(), String> {
@@ -869,7 +962,9 @@ mod execute_recovery_tests {
         RecoveryReport {
             decisions: vec![
                 decision(RecoveryAction::Resume),
-                decision(RecoveryAction::ReconcileTerminal { failed: true }),
+                decision(RecoveryAction::ReconcileTerminal {
+                    kind: TerminalKind::Failed,
+                }),
                 decision(RecoveryAction::MarkFailedWorktreeLost),
                 decision(RecoveryAction::FlagStuck { idle_ms: 99 }),
                 decision(RecoveryAction::SkipTerminal),
@@ -895,6 +990,7 @@ mod execute_recovery_tests {
                 reconciled: 1,
                 failed_worktree: 1,
                 flagged_stuck: 1,
+                flagged_conflict: 0,
                 skipped: 2,
                 parked: 0,
                 errors: 0,
@@ -1128,8 +1224,7 @@ mod decide_action_tests {
     fn healthy_crashed() -> RunRecoveryFacts {
         RunRecoveryFacts {
             registry_status: RunStatus::Crashed,
-            log_terminal: false,
-            log_failed: false,
+            log_verdict: TerminalVerdict::Open,
             worktree_exists: true,
             last_event_ms: Some(NOW - HOUR_MS),
             already_active: false,
@@ -1165,32 +1260,74 @@ mod decide_action_tests {
         }
     }
 
-    #[test]
-    fn log_terminal_completed_reconciles_without_failure() {
-        let facts = RunRecoveryFacts {
-            log_terminal: true,
-            log_failed: false,
-            // Worktree already cleaned up after completion — must NOT be
-            // misread as worktree-lost.
-            worktree_exists: false,
-            ..healthy_crashed()
+    fn terminal(kind: TerminalKind) -> TerminalVerdict {
+        use surge_core::run_verdict::{TerminalClaim, TerminalOutcome};
+        let outcome = match kind {
+            TerminalKind::Completed => TerminalOutcome::Completed {
+                terminal_node: "end".try_into().unwrap(),
+            },
+            TerminalKind::Failed => TerminalOutcome::Failed {
+                error: "boom".into(),
+            },
+            TerminalKind::Aborted => TerminalOutcome::Aborted {
+                reason: "stopped".into(),
+            },
         };
-        assert_eq!(
-            decide_action(&facts, NOW, STUCK),
-            RecoveryAction::ReconcileTerminal { failed: false }
-        );
+        TerminalVerdict::Terminal(TerminalClaim { seq: 9, outcome })
     }
 
     #[test]
-    fn log_terminal_failed_reconciles_with_failure() {
+    fn a_terminal_log_reconciles_to_its_exact_kind() {
+        for kind in [
+            TerminalKind::Completed,
+            TerminalKind::Failed,
+            TerminalKind::Aborted,
+        ] {
+            let facts = RunRecoveryFacts {
+                log_verdict: terminal(kind),
+                // A finished run's worktree may be cleaned up: never read as
+                // worktree-lost.
+                worktree_exists: false,
+                ..healthy_crashed()
+            };
+            assert_eq!(
+                decide_action(&facts, NOW, STUCK),
+                RecoveryAction::ReconcileTerminal { kind }
+            );
+        }
+    }
+
+    #[test]
+    fn an_aborted_log_reconciles_to_aborted_not_completed() {
+        assert_eq!(reconciled_status(TerminalKind::Aborted), RunStatus::Aborted);
+        assert_eq!(
+            reconciled_status(TerminalKind::Completed),
+            RunStatus::Completed
+        );
+        assert_eq!(reconciled_status(TerminalKind::Failed), RunStatus::Failed);
+    }
+
+    #[test]
+    fn a_conflicting_log_is_flagged_before_worktree_and_stuck_checks() {
+        use surge_core::run_verdict::{TerminalClaim, TerminalOutcome};
+        let claim = |seq| TerminalClaim {
+            seq,
+            outcome: TerminalOutcome::Aborted { reason: "x".into() },
+        };
         let facts = RunRecoveryFacts {
-            log_terminal: true,
-            log_failed: true,
+            log_verdict: TerminalVerdict::Conflict {
+                claims: vec![claim(4), claim(7)],
+            },
+            worktree_exists: false,
+            last_event_ms: Some(0),
             ..healthy_crashed()
         };
         assert_eq!(
             decide_action(&facts, NOW, STUCK),
-            RecoveryAction::ReconcileTerminal { failed: true }
+            RecoveryAction::FlagTerminalConflict {
+                first_seq: 4,
+                second_seq: 7
+            }
         );
     }
 

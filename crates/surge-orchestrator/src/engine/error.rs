@@ -21,6 +21,19 @@ pub enum EngineError {
     #[error("run is already active in this process: {0}")]
     RunAlreadyActive(RunId),
 
+    /// The run's log claims termination more than once (#95): its outcome
+    /// is unconfirmed, so resume refuses without side effects — it neither
+    /// picks a claim nor re-executes (which would append another).
+    #[error(
+        "run {run_id} has conflicting terminal history (seq {seqs:?}); completion is unconfirmed; inspect `surge engine replay {run_id}`"
+    )]
+    TerminalHistoryConflict {
+        /// The run.
+        run_id: RunId,
+        /// Sequence numbers of the conflicting terminal claims.
+        seqs: Vec<u64>,
+    },
+
     /// The submitted graph failed structural validation.
     #[error("graph validation failed: {0}")]
     GraphInvalid(String),

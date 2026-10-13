@@ -209,6 +209,9 @@ impl RunReport {
         // duplicate. `report.nodes` itself stays in first-seen (execution)
         // order — a `HashMap` alone would not preserve that.
         let mut node_positions: HashMap<NodeKey, usize> = HashMap::new();
+        // The latest park while the run's terminal verdict is still open:
+        // a definitive terminal event outranks any park/wake (#95).
+        let mut parked: Option<RunCompletion> = None;
         // Every task id the ledger ever tracked (`TaskDiscovered`,
         // `TaskVerified`, `TaskStatusChanged` alike), mapped to its
         // `{status, verified}` pair — spec §10's "same fact on every
@@ -298,21 +301,10 @@ impl RunReport {
                         revised_tasks.insert(task_id.clone());
                     }
                 },
-                EventPayload::RunCompleted { terminal_node } => {
-                    report.completion = RunCompletion::Completed {
-                        terminal_node: terminal_node.clone(),
-                    };
-                },
-                EventPayload::RunFailed { error } => {
-                    report.completion = RunCompletion::Failed {
-                        error: error.clone(),
-                    };
-                },
-                EventPayload::RunAborted { reason } => {
-                    report.completion = RunCompletion::Aborted {
-                        reason: reason.clone(),
-                    };
-                },
+                // Termination is the shared verdict, read after the fold.
+                EventPayload::RunCompleted { .. }
+                | EventPayload::RunFailed { .. }
+                | EventPayload::RunAborted { .. } => {},
                 EventPayload::RunParked {
                     wake_at,
                     runtime,
@@ -320,17 +312,16 @@ impl RunReport {
                     reason,
                     ..
                 } => {
-                    report.completion = RunCompletion::Parked {
+                    parked = Some(RunCompletion::Parked {
                         wake_at: *wake_at,
                         runtime: runtime.clone(),
                         basis: *basis,
                         reason: reason.clone(),
-                    };
+                    });
                 },
                 EventPayload::RunWokeFromPark {} => {
-                    // No longer parked; not yet known to be finished either
-                    // — a later terminal event (if any) will overwrite this.
-                    report.completion = RunCompletion::Incomplete;
+                    // No longer parked; not yet known to be finished either.
+                    parked = None;
                 },
                 EventPayload::EscalationRequested {
                     stage,
@@ -790,6 +781,37 @@ impl RunReport {
         // vacuously `true`, and a `Completed` run with no ledger activity at
         // all (never ran a verifier) is exactly the "success without proof"
         // case this field exists to flag, not a free pass.
+        let history = crate::run_verdict::TerminalHistory::of(
+            events.iter().map(|event| (event.seq, &event.payload)),
+        );
+        report.completion = match history.verdict() {
+            crate::run_verdict::TerminalVerdict::Terminal(claim) => match &claim.outcome {
+                crate::run_verdict::TerminalOutcome::Completed { terminal_node } => {
+                    RunCompletion::Completed {
+                        terminal_node: terminal_node.clone(),
+                    }
+                },
+                crate::run_verdict::TerminalOutcome::Failed { error } => RunCompletion::Failed {
+                    error: error.clone(),
+                },
+                crate::run_verdict::TerminalOutcome::Aborted { reason } => RunCompletion::Aborted {
+                    reason: reason.clone(),
+                },
+            },
+            crate::run_verdict::TerminalVerdict::Conflict { claims } => RunCompletion::Conflicted {
+                claims: claims.clone(),
+            },
+            crate::run_verdict::TerminalVerdict::Open => {
+                parked.unwrap_or(RunCompletion::Incomplete)
+            },
+        };
+        if !history.post_terminal_activity().is_empty() {
+            report.caveats.push(format!(
+                "execution activity was recorded after the run's terminal event (seq {:?}); \
+                 this is writer-bug evidence, not a second outcome.",
+                history.post_terminal_activity()
+            ));
+        }
         report.evidence_backed = match &report.completion {
             RunCompletion::Completed { .. } => Some(
                 !ledger_task_ids.is_empty()
@@ -800,6 +822,7 @@ impl RunReport {
             RunCompletion::Failed { .. }
             | RunCompletion::Aborted { .. }
             | RunCompletion::Parked { .. }
+            | RunCompletion::Conflicted { .. }
             | RunCompletion::Incomplete => None,
         };
 
@@ -971,6 +994,12 @@ pub enum RunCompletion {
     /// No terminal lifecycle event was found in the events given to
     /// `compile`, and the run is not currently parked either.
     Incomplete,
+    /// The log claims termination more than once (#95): the outcome is
+    /// unconfirmed. Never reviewable as finished, never evidence-backed.
+    Conflicted {
+        /// Every terminal claim, in sequence order.
+        claims: Vec<crate::run_verdict::TerminalClaim>,
+    },
 }
 
 impl RunCompletion {
@@ -981,7 +1010,10 @@ impl RunCompletion {
     /// reportable again.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        !matches!(self, Self::Incomplete | Self::Parked { .. })
+        !matches!(
+            self,
+            Self::Incomplete | Self::Parked { .. } | Self::Conflicted { .. }
+        )
     }
 }
 

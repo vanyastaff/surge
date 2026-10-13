@@ -9,6 +9,7 @@ use surge_core::{
     graph::Graph,
     run_event::EventPayload,
     run_state::ArtifactRef,
+    run_verdict::{TerminalClaim, TerminalOutcome, TerminalVerdict},
 };
 use surge_orchestrator::{
     bootstrap_driver::materialized_run_from_completed,
@@ -52,13 +53,17 @@ pub(crate) async fn prepare_child(
     else {
         return Err(ContinuationError::Unconfirmed);
     };
-    let terminal = events
-        .iter()
-        .find_map(|event| match &event.payload.payload {
-            EventPayload::RunCompleted { terminal_node } => Some(terminal_node.clone()),
-            _ => None,
-        })
-        .ok_or(ContinuationError::Unconfirmed)?;
+    // The shared terminal verdict (#95): only a single `RunCompleted`
+    // continues; a conflict or any other outcome is unconfirmed.
+    let TerminalVerdict::Terminal(TerminalClaim {
+        outcome: TerminalOutcome::Completed {
+            terminal_node: terminal,
+        },
+        ..
+    }) = ReadEvent::terminal_verdict(&events)
+    else {
+        return Err(ContinuationError::Unconfirmed);
+    };
     if !crate::tracked_run::confirms(&events, &RunOutcome::Completed { terminal }) {
         return Err(ContinuationError::Unconfirmed);
     }

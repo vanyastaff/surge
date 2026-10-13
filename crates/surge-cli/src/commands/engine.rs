@@ -362,32 +362,24 @@ fn require_completed_events(
     run_id: RunId,
     events: &[surge_persistence::runs::reader::ReadEvent],
 ) -> Result<()> {
-    use surge_core::run_event::EventPayload;
+    use surge_core::run_verdict::TerminalVerdict;
     use surge_orchestrator::engine::handle::RunOutcome;
-    let mut outcome = None;
-    for event in events {
-        let candidate = match event.payload.payload() {
-            EventPayload::RunCompleted { terminal_node } => RunOutcome::Completed {
-                terminal: terminal_node.clone(),
-            },
-            EventPayload::RunFailed { error } => RunOutcome::Failed {
-                error: error.clone(),
-            },
-            EventPayload::RunAborted { reason } => RunOutcome::Aborted {
-                reason: reason.clone(),
-            },
-            _ => continue,
-        };
-        if outcome.replace(candidate).is_some() {
+    let claim = match surge_persistence::runs::reader::ReadEvent::terminal_verdict(events) {
+        TerminalVerdict::Terminal(claim) => claim,
+        TerminalVerdict::Conflict { claims } => {
+            let seqs: Vec<u64> = claims.iter().map(|claim| claim.seq).collect();
+            tracing::warn!(%run_id, ?seqs, "conflicting terminal history");
             return Err(anyhow!(
-                "run {run_id} has conflicting terminal history; completion is unconfirmed"
+                "run {run_id} has conflicting terminal history (seq {seqs:?}); completion is unconfirmed"
             ));
-        }
-    }
-    let outcome = outcome.ok_or_else(|| anyhow!(
-        "run {run_id} has no durable terminal outcome; completion is unconfirmed; inspect `surge engine replay {run_id}`"
-    ))?;
-    super::run_lifecycle::require_completed(run_id, outcome)
+        },
+        TerminalVerdict::Open => {
+            return Err(anyhow!(
+                "run {run_id} has no durable terminal outcome; completion is unconfirmed; inspect `surge engine replay {run_id}`"
+            ));
+        },
+    };
+    super::run_lifecycle::require_completed(run_id, RunOutcome::from_terminal(&claim.outcome))
 }
 
 async fn resume_command(run_id: String, daemon: bool) -> Result<()> {

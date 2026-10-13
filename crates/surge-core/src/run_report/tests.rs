@@ -1830,3 +1830,106 @@ fn provider_aggregation_overflow_is_explicit_and_preserves_lower_bound() {
     assert_eq!(report.cost.prompt_tokens, u64::MAX);
     assert!(report.cost.usage_unknown);
 }
+
+fn parked_event(seq: u64) -> RunEvent {
+    event(
+        seq,
+        EventPayload::RunParked {
+            wake_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            runtime: Some("claude-acp".into()),
+            worktree: "/tmp/w".into(),
+            basis: crate::capacity::WakeBasis::ObservedReset,
+            reason: "limit".into(),
+        },
+    )
+}
+
+/// #95: a stray park after a definitive terminal event never reopens it.
+#[test]
+fn a_park_after_a_terminal_event_leaves_the_run_completed() {
+    let report = RunReport::compile(
+        RunId::new(),
+        &[
+            event(
+                1,
+                EventPayload::RunCompleted {
+                    terminal_node: node_key("end"),
+                },
+            ),
+            parked_event(2),
+        ],
+    );
+    assert!(
+        matches!(report.completion, RunCompletion::Completed { .. }),
+        "{:?}",
+        report.completion
+    );
+}
+
+/// #95: two terminal claims are unconfirmed — not finished, not
+/// evidence-backed, and rendered with every claim.
+#[test]
+fn conflicting_terminal_claims_compile_to_conflicted() {
+    let report = RunReport::compile(
+        RunId::new(),
+        &[
+            event(
+                1,
+                EventPayload::RunCompleted {
+                    terminal_node: node_key("end"),
+                },
+            ),
+            event(
+                2,
+                EventPayload::RunFailed {
+                    error: "second owner".into(),
+                },
+            ),
+        ],
+    );
+    let RunCompletion::Conflicted { claims } = &report.completion else {
+        panic!("expected Conflicted, got {:?}", report.completion);
+    };
+    assert_eq!(claims.iter().map(|c| c.seq).collect::<Vec<_>>(), vec![1, 2]);
+    assert!(!report.completion.is_terminal());
+    assert_eq!(report.evidence_backed, None);
+    let markdown = super::render::render_markdown(&report);
+    assert!(markdown.contains("CONFLICTED"), "{markdown}");
+    assert!(
+        markdown.contains("seq 1") && markdown.contains("seq 2"),
+        "{markdown}"
+    );
+}
+
+/// #95: execution activity after the terminal event is a caveat, never a
+/// second outcome.
+#[test]
+fn activity_after_the_terminal_event_is_a_caveat() {
+    let report = RunReport::compile(
+        RunId::new(),
+        &[
+            event(
+                1,
+                EventPayload::RunCompleted {
+                    terminal_node: node_key("end"),
+                },
+            ),
+            event(
+                2,
+                EventPayload::StageEntered {
+                    node: node_key("impl"),
+                    attempt: 1,
+                },
+            ),
+        ],
+    );
+    assert!(matches!(report.completion, RunCompletion::Completed { .. }));
+    assert!(
+        report
+            .caveats
+            .iter()
+            .any(|caveat| caveat.contains("after the run's terminal event")),
+        "{:?}",
+        report.caveats
+    );
+}

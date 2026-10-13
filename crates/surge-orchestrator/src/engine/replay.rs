@@ -25,10 +25,11 @@ pub struct ReplayedState {
     /// Latest graph revision sequence known to have been applied to the
     /// active graph at a persisted stage boundary.
     pub applied_graph_revision_seq: u64,
-    /// Set when the event log already contains a terminal event
-    /// (`RunCompleted`, `RunFailed`, or `RunAborted`). When `Some`, the
-    /// caller should return this outcome immediately without re-executing.
+    /// Set when the log's terminal verdict is a single terminal event. When
+    /// `Some`, the caller returns this outcome without re-executing.
     pub already_terminal: Option<RunOutcome>,
+    /// The log's terminal verdict (#95). A conflict is never `already_terminal`.
+    pub terminal_verdict: surge_core::run_verdict::TerminalVerdict,
     /// The persisted `RunConfig` from the `RunStarted` event, if present.
     /// `None` for old runs whose event log predates the `mcp_servers` field.
     /// Used by `Engine::resume_run` to reconstruct the per-run MCP registry.
@@ -125,19 +126,12 @@ pub async fn replay(
 
     validate_consumed_route(reader, &all_events, &memory, snapshot_seq).await?;
 
-    // Detect whether the run already reached a terminal state.
-    let already_terminal = all_events.iter().find_map(|e| match &e.payload.payload {
-        EventPayload::RunCompleted { terminal_node } => Some(RunOutcome::Completed {
-            terminal: terminal_node.clone(),
-        }),
-        EventPayload::RunFailed { error } => Some(RunOutcome::Failed {
-            error: error.clone(),
-        }),
-        EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
-            reason: reason.clone(),
-        }),
-        _ => None,
-    });
+    // Whether the run already reached a terminal state: the shared verdict
+    // (#95). A conflicting history is never settled on one of its claims.
+    let terminal_verdict = surge_persistence::runs::ReadEvent::terminal_verdict(&all_events);
+    let already_terminal = terminal_verdict
+        .terminal()
+        .map(|claim| RunOutcome::from_terminal(&claim.outcome));
 
     // Cursor: snapshot's, or graph.start if no snapshot.
     let cursor = snap_cursor.unwrap_or_else(|| Cursor {
@@ -154,6 +148,7 @@ pub async fn replay(
         graph,
         applied_graph_revision_seq,
         already_terminal,
+        terminal_verdict,
         run_config: persisted_run_config,
     })
 }

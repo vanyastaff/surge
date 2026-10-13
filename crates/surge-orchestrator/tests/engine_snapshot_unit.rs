@@ -359,6 +359,219 @@ async fn resume_after_completion_is_idempotent() {
     dir.close().unwrap();
 }
 
+/// #95: a log that claims termination twice is unconfirmed. Resume refuses
+/// with a typed error before any side effect: nothing is appended and a
+/// Parked registry row is not cleared.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_refuses_conflicting_terminal_history_without_side_effects() {
+    use surge_core::run_event::{EventPayload, VersionedEventPayload};
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+        let end = NodeKey::try_from("end").unwrap();
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "conflict".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: end.clone(),
+            nodes: BTreeMap::from([(
+                end.clone(),
+                Node {
+                    id: end,
+                    position: Position::default(),
+                    declared_outcomes: vec![],
+                    config: NodeConfig::Terminal(TerminalConfig {
+                        kind: TerminalKind::Success,
+                        message: None,
+                    }),
+                },
+            )]),
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+        let run_id = RunId::new();
+        let completed = engine
+            .start_run(
+                run_id,
+                graph,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap()
+            .await_completion()
+            .await
+            .unwrap();
+        assert!(matches!(completed, RunOutcome::Completed { .. }));
+
+        // A second writer's terminal claim: the log now conflicts.
+        let writer = storage.open_run_writer(run_id).await.unwrap();
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::RunFailed {
+                error: "second owner".into(),
+            }))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        storage
+            .set_run_parked(&run_id, chrono::Utc::now().timestamp_millis())
+            .await
+            .unwrap();
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let before = reader.current_seq().await.unwrap();
+        drop(reader);
+
+        let refused = engine.resume_run(run_id, dir.path().to_path_buf()).await;
+        match refused {
+            Err(surge_orchestrator::engine::EngineError::TerminalHistoryConflict {
+                run_id: refused_run,
+                seqs,
+            }) => {
+                assert_eq!(refused_run, run_id);
+                assert_eq!(seqs.len(), 2);
+            },
+            Err(other) => panic!("expected TerminalHistoryConflict, got {other:?}"),
+            Ok(_) => panic!("expected TerminalHistoryConflict, resume was admitted"),
+        }
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        assert_eq!(
+            reader.current_seq().await.unwrap(),
+            before,
+            "nothing is appended to a conflicting log"
+        );
+        assert_eq!(
+            storage.get_run(&run_id).await.unwrap().unwrap().status,
+            surge_core::RunStatus::Parked,
+            "the Parked registry row is not cleared"
+        );
+    }
+    dir.close().unwrap();
+}
+
+fn single_terminal_graph(name: &str) -> Graph {
+    let end = NodeKey::try_from("end").unwrap();
+    Graph {
+        schema_version: SCHEMA_VERSION,
+        metadata: GraphMetadata {
+            name: name.into(),
+            description: None,
+            template_origin: None,
+            created_at: chrono::Utc::now(),
+            author: None,
+            archetype: None,
+        },
+        start: end.clone(),
+        nodes: BTreeMap::from([(
+            end.clone(),
+            Node {
+                id: end,
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        )]),
+        edges: vec![],
+        subgraphs: BTreeMap::new(),
+    }
+}
+
+/// #95: the registry already holds the final status when `Terminal` is
+/// published, so a subscriber that reacts and reads the registry never sees
+/// `running`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registry_status_is_final_when_terminal_is_published() {
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let run_id = RunId::new();
+        let mut handle = engine
+            .start_run(
+                run_id,
+                single_terminal_graph("publish-order"),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        loop {
+            match handle.events.recv().await.unwrap() {
+                surge_orchestrator::engine::handle::EngineRunEvent::Terminal { .. } => break,
+                _ => continue,
+            }
+        }
+        assert_eq!(
+            storage.get_run(&run_id).await.unwrap().unwrap().status,
+            surge_core::RunStatus::Completed,
+            "the registry is projected before Terminal is published"
+        );
+        handle.await_completion().await.unwrap();
+    }
+    dir.close().unwrap();
+}
+
+/// #95: a replayed-terminal resume repairs a stale registry row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_resume_repairs_a_stale_registry_row() {
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let run_id = RunId::new();
+        engine
+            .start_run(
+                run_id,
+                single_terminal_graph("stale-row"),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap()
+            .await_completion()
+            .await
+            .unwrap();
+        storage
+            .set_run_status(&run_id, surge_core::RunStatus::Crashed, None)
+            .await
+            .unwrap();
+        let resumed = engine
+            .resume_run(run_id, dir.path().to_path_buf())
+            .await
+            .unwrap()
+            .await_completion()
+            .await
+            .unwrap();
+        assert!(matches!(resumed, RunOutcome::Completed { .. }));
+        assert_eq!(
+            storage.get_run(&run_id).await.unwrap().unwrap().status,
+            surge_core::RunStatus::Completed,
+            "the stale Crashed row is repaired from the log"
+        );
+    }
+    dir.close().unwrap();
+}
+
 /// Count how many graph snapshots were written for a completed run.
 async fn count_snapshots(storage: &Arc<Storage>, run_id: RunId) -> usize {
     let reader = storage
