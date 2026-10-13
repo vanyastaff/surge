@@ -443,7 +443,7 @@ async fn restore_rejects_a_contradicting_contract() {
         );
         assert!(registry.lock().await.is_empty());
     }
-    assert!(fx.kinds().await.is_empty());
+    assert_eq!(fx.kinds().await, Vec::<&str>::new());
     fx.close().await;
 }
 
