@@ -815,14 +815,12 @@ async fn execute_agent_attempt(
         .as_ref()
         .is_some_and(|a| a.elevation && !a.elevation_channels.is_empty());
 
-    // Cap bindings at 8 entries × 64 bytes (SessionConfig::validate limit).
     // Use the resolved binding values for correlation in BridgeEvent::SessionEstablished.
-    let session_bindings: BTreeMap<String, String> = resolved_bindings
-        .iter()
-        .take(8)
-        .filter(|(k, v)| k.0.len() <= 64 && v.len() <= 64)
-        .map(|(k, v)| (k.0.clone(), v.clone()))
-        .collect();
+    let session_bindings = SessionConfig::correlation_bindings(
+        resolved_bindings
+            .iter()
+            .map(|(key, value)| (key.0.as_str(), value.as_str())),
+    );
 
     // Build the effective sandbox config (needed both for session creation and
     // for the MCP sandbox heuristic below).
@@ -2723,24 +2721,6 @@ fn derive_agent_kind(profile_str: &str) -> AgentKind {
     AgentKind::Mock { args: vec![] }
 }
 
-/// Map an `agent_id` string to an `AgentKind` via the agent registry,
-/// together with the agent's resolved spawn environment and the settings
-/// files its entry declares.
-///
-/// Pulled out so [`execute_agent_stage`] can call it directly when the
-/// caller already resolved the profile and just needs the id translated.
-///
-/// `registry` is the merged catalog (user `[agents.*]` over builtins). The
-/// launch contract is the entry itself — `command`, `default_args`, `env`,
-/// `settings_files` — and nothing in this function branches on a vendor:
-/// adding a provider is adding a registry entry.
-///
-/// Environment resolution happens here (not in `surge-core`, which is
-/// I/O-free): the entry's `env` spec is turned into concrete `(name, value)`
-/// pairs through [`surge_acp::agent_env::resolve`], reading the operator's
-/// process environment at stage time. A required-but-unset source variable
-/// fails the stage with a typed, actionable `StageError::Internal` — the run
-/// never spawns an agent with a silently absent credential.
 /// Why a profile's runtime cannot be launched (#99): typed, so a standalone
 /// invocation can name the agent id and the known ids, or the missing
 /// environment variable (never its value).
@@ -2791,6 +2771,24 @@ pub(crate) fn derive_agent_kind_from_id(
     resolve_agent_launch(profile_str, agent_id, registry).map_err(StageError::from)
 }
 
+/// Map an `agent_id` string to an `AgentKind` via the agent registry,
+/// together with the agent's resolved spawn environment and the settings
+/// files its entry declares.
+///
+/// Pulled out so [`execute_agent_stage`] can call it directly when the
+/// caller already resolved the profile and just needs the id translated.
+///
+/// `registry` is the merged catalog (user `[agents.*]` over builtins). The
+/// launch contract is the entry itself — `command`, `default_args`, `env`,
+/// `settings_files` — and nothing in this function branches on a vendor:
+/// adding a provider is adding a registry entry.
+///
+/// Environment resolution happens here (not in `surge-core`, which is
+/// I/O-free): the entry's `env` spec is turned into concrete `(name, value)`
+/// pairs through [`surge_acp::agent_env::resolve`], reading the operator's
+/// process environment at stage time. A required-but-unset source variable
+/// fails with a typed [`AgentLaunchError::Environment`] naming the variable,
+/// never its value — no agent spawns with a silently absent credential.
 pub(crate) fn resolve_agent_launch(
     profile_str: &str,
     agent_id: &str,

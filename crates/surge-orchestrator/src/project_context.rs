@@ -302,6 +302,7 @@ async fn invoke_project_context_author(
             profiles: &profiles,
             agents: options.agents.as_deref(),
             max_contract_rejections: crate::agent_invocation::DEFAULT_MAX_CONTRACT_REJECTIONS,
+            seed_agent_settings: false,
         },
     )
     .await?;

@@ -160,11 +160,14 @@ impl Fixture {
                 None => cancel.cancel(),
             }
         };
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.home.path().join("runs"));
         let planner = run_feature_planner(FeaturePlannerParams {
             request: "Add driver test".into(),
             roadmap: "## Milestones\n- m1".into(),
             bridge: &self.bridge,
             writer: &writer,
+            artifact_store: &artifact_store,
             worktree_path: self.home.path(),
             run_id: self.run_id,
             profile_registry: self.registry.clone(),

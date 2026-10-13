@@ -38,7 +38,6 @@
 //! declares hooks, MCP servers or skills is refused with
 //! [`InvocationFailure::Unsupported`]: never run with them silently skipped.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,6 +74,10 @@ pub struct InvocationRecorder<'a> {
     pub writer: &'a RunWriter,
     /// The node the events belong to.
     pub node: &'a NodeKey,
+    /// Where produced artifact bytes are stored before they are recorded.
+    pub artifact_store: &'a surge_persistence::artifacts::ArtifactStore,
+    /// The run the writer and the stored artifacts belong to.
+    pub run_id: surge_core::RunId,
 }
 
 /// One standalone invocation.
@@ -97,6 +100,11 @@ pub struct InvocationRequest<'a> {
     pub agents: Option<&'a surge_acp::Registry>,
     /// How many contract rejections the agent may correct in-session.
     pub max_contract_rejections: u32,
+    /// Whether the agent's registry entry may write its settings files (e.g.
+    /// `.claude/settings.json` with a non-interactive permission mode) into
+    /// `working_dir`. Only for a directory Surge owns (scratch, a run
+    /// worktree), never the operator's own checkout.
+    pub seed_agent_settings: bool,
 }
 
 /// One produced artifact, read after the outcome was accepted.
@@ -174,6 +182,13 @@ pub enum InvocationFailure {
         /// Why.
         reason: String,
     },
+    /// The agent process could not be started (e.g. its binary is not
+    /// installed): an operator configuration problem, not a retry.
+    #[error("agent could not be started: {0}")]
+    AgentNotStarted(String),
+    /// The agent did not finish its handshake in time; another attempt may.
+    #[error("session handshake timed out: {0}")]
+    HandshakeTimedOut(String),
     /// The session could not be opened.
     #[error("session open failed: {0}")]
     SessionOpen(String),
@@ -225,6 +240,7 @@ impl InvocationFailure {
         matches!(
             self,
             Self::DeadlineElapsed(_)
+                | Self::HandshakeTimedOut(_)
                 | Self::AgentCrashed(_)
                 | Self::SessionEnded(_)
                 | Self::EventsLost(_)
@@ -233,6 +249,21 @@ impl InvocationFailure {
                 | Self::ArtifactOutsideWorkingDir(_)
                 | Self::ArtifactContract(_)
         )
+    }
+}
+
+/// Classify a bridge open failure: a process that cannot start is
+/// configuration, a slow handshake is transient, the rest is terminal.
+fn open_failure(error: surge_acp::bridge::error::OpenSessionError) -> InvocationFailure {
+    use surge_acp::bridge::error::OpenSessionError;
+    match &error {
+        OpenSessionError::AgentSpawnFailed { .. } => {
+            InvocationFailure::AgentNotStarted(error.to_string())
+        },
+        OpenSessionError::HandshakeTimedOut { .. } => {
+            InvocationFailure::HandshakeTimedOut(error.to_string())
+        },
+        _ => InvocationFailure::SessionOpen(error.to_string()),
     }
 }
 
@@ -274,7 +305,7 @@ pub async fn invoke(
     let session = bridge
         .open_session(config)
         .await
-        .map_err(|error| InvocationFailure::SessionOpen(error.to_string()))?
+        .map_err(open_failure)?
         .session;
     tracing::debug!(target: "agent_invocation", profile = request.profile, %session, "session opened");
 
@@ -327,7 +358,7 @@ fn session_config(
         &profile.profile.runtime.agent_id,
         request.agents,
     )?;
-    if !launch.settings_files.is_empty() {
+    if request.seed_agent_settings && !launch.settings_files.is_empty() {
         surge_acp::settings_seed::seed_settings_files(&launch.settings_files, request.working_dir);
     }
     let runtime = crate::engine::capacity::run_agent_registry_or_builtin(request.agents)
@@ -350,7 +381,19 @@ fn session_config(
         invocation: surge_core::id::StageInvocationId::new(),
         runtime,
         opening: Default::default(),
-        config_selections: Vec::new(),
+        // The profile's effort floor, best-effort as in the engine when no
+        // node sets one: an agent without that level still runs.
+        config_selections: profile
+            .profile
+            .role
+            .min_effort
+            .iter()
+            .map(|level| surge_acp::bridge::session::ConfigSelection {
+                category: surge_acp::bridge::session::ConfigCategory::ThoughtLevel,
+                value: level.clone(),
+                best_effort: true,
+            })
+            .collect(),
         stage_mcp: None,
         agent_kind: launch.kind,
         working_dir: request.working_dir.to_path_buf(),
@@ -367,7 +410,14 @@ fn session_config(
         // profile's mode is advisory to it.
         sandbox: Box::new(surge_acp::bridge::sandbox::AlwaysAllowSandbox),
         permission_policy: surge_acp::client::PermissionPolicy::default(),
-        bindings: request.bindings.iter().cloned().collect::<BTreeMap<_, _>>(),
+        // Content reaches the agent through the rendered prompt; bindings only
+        // correlate the session, within the bridge's cap.
+        bindings: SessionConfig::correlation_bindings(
+            request
+                .bindings
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        ),
         env: launch.env,
     })
 }
@@ -386,49 +436,56 @@ async fn drive(
     let mut rejections = 0_u32;
     let mut message = prompt;
     loop {
-        tokio::select! {
-            biased;
-            () = request.cancel.cancelled() => return Err(InvocationFailure::Cancelled),
-            () = &mut deadline => return Err(InvocationFailure::DeadlineElapsed(request.deadline)),
-            sent = bridge.send_message(session, MessageContent::Text(message.clone())) => {
-                sent.map_err(|error| InvocationFailure::Send(error.to_string()))?;
-            },
-        }
-        let (outcome, summary, produced) = loop {
-            let event = tokio::select! {
-                biased;
-                () = request.cancel.cancelled() => return Err(InvocationFailure::Cancelled),
-                () = &mut deadline => return Err(InvocationFailure::DeadlineElapsed(request.deadline)),
-                event = events.recv() => match event {
-                    Ok(event) => event,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        return Err(InvocationFailure::EventsLost(skipped));
+        // Read events while the turn runs: the bridge's broadcast is shared
+        // by every session, so a long turn that read nothing until it ended
+        // would lag behind other runs' traffic. An outcome reported before
+        // the send returns waits for the turn to complete.
+        let (outcome, summary, produced) = {
+            let send = bridge.send_message(session, MessageContent::Text(message.clone()));
+            tokio::pin!(send);
+            let mut sent = false;
+            let mut reported = None;
+            loop {
+                if sent && let Some(reported) = reported.take() {
+                    break reported;
+                }
+                tokio::select! {
+                    biased;
+                    () = request.cancel.cancelled() => return Err(InvocationFailure::Cancelled),
+                    () = &mut deadline => {
+                        return Err(InvocationFailure::DeadlineElapsed(request.deadline));
                     },
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        return Err(InvocationFailure::StreamClosed);
+                    result = &mut send, if !sent => {
+                        result.map_err(|error| InvocationFailure::Send(error.to_string()))?;
+                        sent = true;
                     },
-                },
-            };
-            match event {
-                BridgeEvent::OutcomeReported {
-                    session: of,
-                    outcome,
-                    summary,
-                    artifacts_produced,
-                    ..
-                } if of == session => break (outcome, summary, artifacts_produced),
-                BridgeEvent::SessionEnded {
-                    session: of,
-                    reason,
-                } if of == session => {
-                    return Err(match reason {
-                        SessionEndReason::AgentCrashed { .. } => {
-                            InvocationFailure::AgentCrashed(format!("{reason:?}"))
+                    event = events.recv() => match event {
+                        Ok(BridgeEvent::OutcomeReported {
+                            session: of,
+                            outcome,
+                            summary,
+                            artifacts_produced,
+                            ..
+                        }) if of == session => {
+                            reported.get_or_insert((outcome, summary, artifacts_produced));
                         },
-                        other => InvocationFailure::SessionEnded(format!("{other:?}")),
-                    });
-                },
-                _ => {},
+                        Ok(BridgeEvent::SessionEnded { session: of, reason }) if of == session => {
+                            return Err(match reason {
+                                SessionEndReason::AgentCrashed { .. } => {
+                                    InvocationFailure::AgentCrashed(format!("{reason:?}"))
+                                },
+                                other => InvocationFailure::SessionEnded(format!("{other:?}")),
+                            });
+                        },
+                        Ok(_) => {},
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            return Err(InvocationFailure::EventsLost(skipped));
+                        },
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err(InvocationFailure::StreamClosed);
+                        },
+                    },
+                }
             }
         };
         if !profile
@@ -512,23 +569,29 @@ async fn record(
     let Some(recorder) = request.recorder else {
         return Ok(());
     };
-    let mut events: Vec<VersionedEventPayload> = artifacts
-        .iter()
-        .map(|artifact| {
-            VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: recorder.node.clone(),
-                artifact: artifact.hash,
-                path: artifact.path.clone(),
-                name: artifact
-                    .path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or_default()
-                    .to_owned(),
-                source_path: None,
-            })
-        })
-        .collect();
+    // As the engine does: the event's path is the stored, immutable bytes;
+    // the working-directory path is only their source.
+    let mut events: Vec<VersionedEventPayload> = Vec::with_capacity(artifacts.len() + 1);
+    for artifact in artifacts {
+        let name = artifact
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let stored = recorder
+            .artifact_store
+            .put(recorder.run_id, &name, &artifact.bytes)
+            .await
+            .map_err(|error| InvocationFailure::Record(error.to_string()))?;
+        events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+            node: recorder.node.clone(),
+            artifact: stored.hash,
+            path: stored.path,
+            name,
+            source_path: Some(artifact.path.clone()),
+        }));
+    }
     events.push(VersionedEventPayload::new(EventPayload::OutcomeReported {
         node: recorder.node.clone(),
         outcome: outcome.clone(),

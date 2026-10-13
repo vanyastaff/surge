@@ -123,10 +123,16 @@ async fn describe_with_mode(
 ) -> Result<surge_orchestrator::project_context::ProjectContextOutcome> {
     match mode {
         ProjectDescribeAuthorMode::Deterministic => describe_project(options).map_err(Into::into),
-        ProjectDescribeAuthorMode::Agent => describe_with_agent(options).await,
+        ProjectDescribeAuthorMode::Agent => {
+            let cancel = super::common::cancel_on_ctrl_c();
+            describe_with_agent(options, cancel.token()).await
+        },
         ProjectDescribeAuthorMode::Auto if project_context_author_runtime_available() => {
-            match describe_with_agent(options.clone()).await {
+            let cancel = super::common::cancel_on_ctrl_c();
+            match describe_with_agent(options.clone(), cancel.token()).await {
                 Ok(outcome) => Ok(outcome),
+                // The operator stopped the command: no fallback write.
+                Err(e) if cancel.token().is_cancelled() => Err(e),
                 Err(e) => {
                     warn!(
                         error = %e,
@@ -145,6 +151,7 @@ async fn describe_with_mode(
 
 async fn describe_with_agent(
     options: ProjectContextOptions,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<surge_orchestrator::project_context::ProjectContextOutcome> {
     let bridge =
         Arc::new(surge_acp::bridge::AcpBridge::with_defaults().context("start ACP bridge")?);
@@ -155,8 +162,7 @@ async fn describe_with_agent(
             storage.work_items(),
         ),
     );
-    let cancel = super::common::cancel_on_ctrl_c();
-    let result = describe_project_with_bridge(options, facade, &cancel).await;
+    let result = describe_project_with_bridge(options, facade, cancel).await;
     if let Ok(bridge) = Arc::try_unwrap(bridge)
         && let Err(e) = bridge.shutdown().await
     {

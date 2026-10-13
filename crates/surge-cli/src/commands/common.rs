@@ -11,24 +11,52 @@ use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::operator::{self, OperatorError};
 use surge_persistence::runs::Storage;
 
+/// Ctrl-C while a standalone agent invocation runs: the first press cancels
+/// the agent (its session closes), a second exits. Once the guard drops,
+/// Ctrl-C exits the process as the default handler would; tokio never
+/// restores default SIGINT handling once a listener exists, so the listener
+/// stays and emulates it.
+pub(crate) struct CtrlCCancel {
+    token: tokio_util::sync::CancellationToken,
+    active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CtrlCCancel {
+    /// The token the invocation watches.
+    pub(crate) fn token(&self) -> &tokio_util::sync::CancellationToken {
+        &self.token
+    }
+}
+
+impl Drop for CtrlCCancel {
+    fn drop(&mut self) {
+        self.active
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Start cancelling the agent on Ctrl-C for as long as the guard lives.
+pub(crate) fn cancel_on_ctrl_c() -> CtrlCCancel {
+    let token = tokio_util::sync::CancellationToken::new();
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let trigger = token.clone();
+    let scoped = std::sync::Arc::clone(&active);
+    tokio::spawn(async move {
+        while tokio::signal::ctrl_c().await.is_ok() {
+            if !scoped.load(std::sync::atomic::Ordering::SeqCst) || trigger.is_cancelled() {
+                std::process::exit(130);
+            }
+            eprintln!("\nCancelling the agent… (Ctrl-C again to exit)");
+            trigger.cancel();
+        }
+    });
+    CtrlCCancel { token, active }
+}
+
 /// Resolve `~/.surge` (honoring `SURGE_HOME`). Delegates to
 /// [`surge_core::home::surge_home_dir`], the canonical resolver shared
 /// with the daemon's `pidfile::daemon_dir` and the persistence layer's
 /// memory store.
-/// A cancellation token fired by Ctrl-C, so a standalone agent invocation
-/// stops its agent and closes its session instead of outliving the command.
-pub(crate) fn cancel_on_ctrl_c() -> tokio_util::sync::CancellationToken {
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let trigger = cancel.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\nCancelling the agent…");
-            trigger.cancel();
-        }
-    });
-    cancel
-}
-
 pub(crate) fn surge_home_dir() -> Result<PathBuf> {
     surge_core::home::surge_home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))
 }

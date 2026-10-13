@@ -262,6 +262,29 @@ impl SessionConfig {
         visible
     }
 
+    /// Most correlation bindings a session accepts.
+    pub const MAX_BINDINGS: usize = 8;
+    /// Longest binding key or value, in bytes.
+    pub const MAX_BINDING_BYTES: usize = 64;
+
+    /// The correlation bindings [`Self::validate`] accepts, from arbitrary
+    /// pairs: at most [`Self::MAX_BINDINGS`] entries, dropping any whose key
+    /// or value exceeds [`Self::MAX_BINDING_BYTES`]. Bindings only correlate
+    /// `SessionEstablished`; content reaches the agent through the prompt.
+    #[must_use]
+    pub fn correlation_bindings<'a>(
+        pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> BTreeMap<String, String> {
+        pairs
+            .into_iter()
+            .take(Self::MAX_BINDINGS)
+            .filter(|(key, value)| {
+                key.len() <= Self::MAX_BINDING_BYTES && value.len() <= Self::MAX_BINDING_BYTES
+            })
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect()
+    }
+
     /// Validate the config before subprocess spawn. Returns the same error
     /// types as `OpenSessionError` so the bridge can `?`-propagate.
     pub fn validate(&self) -> Result<(), super::error::OpenSessionError> {
@@ -269,14 +292,14 @@ impl SessionConfig {
             return Err(super::error::OpenSessionError::NoDeclaredOutcomes);
         }
         // Cap bindings (per spec §4.3): 8 entries × 64 bytes each.
-        if self.bindings.len() > 8 {
+        if self.bindings.len() > Self::MAX_BINDINGS {
             return Err(super::error::OpenSessionError::InvalidBindings(format!(
                 "bindings has {} entries (max 8)",
                 self.bindings.len()
             )));
         }
         for (k, v) in &self.bindings {
-            if k.len() > 64 || v.len() > 64 {
+            if k.len() > Self::MAX_BINDING_BYTES || v.len() > Self::MAX_BINDING_BYTES {
                 return Err(super::error::OpenSessionError::InvalidBindings(format!(
                     "binding {k}=... exceeds 64-byte limit"
                 )));

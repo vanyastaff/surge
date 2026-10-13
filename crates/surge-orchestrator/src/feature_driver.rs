@@ -43,9 +43,11 @@ pub struct FeaturePlannerParams<'a> {
     pub bridge: &'a Arc<dyn BridgeFacade>,
     /// The planner run's writer: the outcome and patch are recorded there.
     pub writer: &'a RunWriter,
+    /// The planner run's artifact store: produced bytes are stored there.
+    pub artifact_store: &'a surge_persistence::artifacts::ArtifactStore,
     /// Worktree where `roadmap-patch.toml` is produced.
     pub worktree_path: &'a Path,
-    /// Current run id (for logs).
+    /// The planner run.
     pub run_id: RunId,
     /// Profile registry used to resolve Feature Planner.
     pub profile_registry: Arc<ProfileRegistry>,
@@ -133,10 +135,13 @@ pub async fn run_feature_planner(
             recorder: Some(InvocationRecorder {
                 writer: params.writer,
                 node: &node,
+                artifact_store: params.artifact_store,
+                run_id: params.run_id,
             }),
             profiles: &params.profile_registry,
             agents: params.agent_registry.as_deref(),
             max_contract_rejections: DEFAULT_MAX_CONTRACT_REJECTIONS,
+            seed_agent_settings: true,
         },
     )
     .await?;

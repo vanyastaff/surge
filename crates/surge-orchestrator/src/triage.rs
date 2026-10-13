@@ -201,6 +201,11 @@ async fn try_one_attempt(
     scratch_dir: &std::path::Path,
     feedback: Option<&str>,
 ) -> Attempt {
+    // Every attempt writes its own decision: never read one a previous,
+    // rejected attempt left in the shared scratch directory.
+    for stale in ["triage_decision.json", "inbox_summary.md"] {
+        let _ = std::fs::remove_file(scratch_dir.join(stale));
+    }
     let cancel = tokio_util::sync::CancellationToken::new();
     let invoked = invoke(
         bridge,
@@ -214,6 +219,7 @@ async fn try_one_attempt(
             profiles: &opts.profiles,
             agents: opts.agents.as_deref(),
             max_contract_rejections: DEFAULT_MAX_CONTRACT_REJECTIONS,
+            seed_agent_settings: true,
         },
     )
     .await;
@@ -225,7 +231,8 @@ async fn try_one_attempt(
             | InvocationFailure::ProviderUnknown { .. }
             | InvocationFailure::ProviderEnvironment { .. }
             | InvocationFailure::Unsupported { .. }
-            | InvocationFailure::PromptRender { .. }),
+            | InvocationFailure::PromptRender { .. }
+            | InvocationFailure::AgentNotStarted(_)),
         ) => {
             // Same operator signal as before: an `Unclear` card naming the
             // configuration problem, never a retry.

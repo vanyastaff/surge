@@ -128,6 +128,7 @@ impl Fixture {
             profiles: &self.registry,
             agents,
             max_contract_rejections: DEFAULT_MAX_CONTRACT_REJECTIONS,
+            seed_agent_settings: true,
         }
     }
 
@@ -222,6 +223,26 @@ async fn a_declared_outcome_returns_its_validated_artifacts_and_closes_once() {
             .unwrap()
             .contains("Write the description of the app.")
     );
+}
+
+/// A binding the bridge could not carry (a whole ticket, a roadmap) still
+/// reaches the agent through the prompt; the session opens anyway.
+#[tokio::test]
+async fn an_oversized_binding_reaches_the_prompt_and_the_session_still_opens() {
+    let fx = &Fixture::new();
+    fx.write("description.md", DESCRIPTION);
+    let long = "a long topic ".repeat(40);
+    let mut request = fx.request("invoker@1.0", None);
+    request.bindings = vec![("topic".into(), long.clone())];
+    let outcome = fx
+        .run(request, |session| async move {
+            fx.emit(reported(session, "done", &["description.md"]))
+                .await;
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.outcome.as_str(), "done");
+    assert!(fx.mock.last_prompt().await.unwrap().contains(long.trim()));
 }
 
 /// (reported outcome, reported artifacts, file to write, expected failure).
@@ -509,9 +530,46 @@ async fn a_custom_registry_entry_is_launched_by_its_shape() {
     assert_eq!(fx.closes().await, 1);
 }
 
+/// Settings files are seeded only where the request allows it: never into
+/// a caller-owned checkout.
+#[tokio::test]
+async fn agent_settings_are_seeded_only_when_the_request_allows_it() {
+    for seed in [false, true] {
+        let fx = &Fixture::new();
+        let custom = registry_with_settings(
+            "my-provider",
+            BTreeMap::new(),
+            vec![surge_core::config::AgentSettingsFile::new(
+                ".agent/settings.json",
+                "{}",
+            )],
+        );
+        let mut request = fx.request("custom-agent@1.0", Some(&custom));
+        request.seed_agent_settings = seed;
+        fx.run(request, |session| async move {
+            fx.emit(reported(session, "skipped", &[])).await;
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            fx.work.path().join(".agent/settings.json").exists(),
+            seed,
+            "seed_agent_settings = {seed}"
+        );
+    }
+}
+
 fn registry_with(
     id: &str,
     env: BTreeMap<String, surge_core::config::AgentEnvValue>,
+) -> surge_acp::Registry {
+    registry_with_settings(id, env, Vec::new())
+}
+
+fn registry_with_settings(
+    id: &str,
+    env: BTreeMap<String, surge_core::config::AgentEnvValue>,
+    settings_files: Vec<surge_core::config::AgentSettingsFile>,
 ) -> surge_acp::Registry {
     let mut agents = HashMap::new();
     agents.insert(
@@ -524,7 +582,7 @@ fn registry_with(
             capabilities: vec![],
             env,
             capacity_route: None,
-            settings_files: vec![],
+            settings_files,
         },
     );
     surge_acp::Registry::from_config(agents)
