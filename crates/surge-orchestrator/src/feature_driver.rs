@@ -1,32 +1,27 @@
 //! Feature Planner driver for `surge feature describe`.
 //!
-//! The driver intentionally delegates execution to the normal Agent stage so
-//! profile resolution, sandbox selection, hooks, produced artifact declarations,
-//! and artifact contract validation stay on the same path as graph execution.
+//! Runs the bundled `feature-planner@1.0` profile through the standalone
+//! agent invocation (`crate::agent_invocation`, #99): registry-resolved
+//! provider, the declared roadmap-patch contract checked (and corrected
+//! in-session) by the #94 outcome-acceptance rule, cancellation that closes
+//! the session, and the planner run's log as the recorder. The driver keeps
+//! only the domain: the request/roadmap bindings and the patch's shape
+//! validation.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_core::agent_config::{AgentConfig, ArtifactSource, Binding, TemplateVar};
-use surge_core::keys::{NodeKey, ProfileKey};
-use surge_core::node::OutcomeDecl;
-use surge_core::profile::keyref::parse_key_ref;
-use surge_core::run_state::RunMemory;
-use surge_core::{
-    McpServerRef, ROADMAP_PATCH_SCHEMA_VERSION, RoadmapPatch, RoadmapPatchValidationIssue, RunId,
-};
-use surge_mcp::McpRegistry;
-use surge_persistence::artifacts::ArtifactStore;
+use surge_core::keys::NodeKey;
+use surge_core::{ROADMAP_PATCH_SCHEMA_VERSION, RoadmapPatch, RoadmapPatchValidationIssue, RunId};
 use surge_persistence::runs::RunWriter;
-use tokio::sync::{Mutex, oneshot};
+use tokio_util::sync::CancellationToken;
 
-use crate::engine::hooks::HookExecutor;
-use crate::engine::stage::StageError;
-use crate::engine::stage::agent::{AgentStageParams, execute_agent_stage};
-use crate::engine::tools::ToolDispatcher;
+use crate::agent_invocation::{
+    DEFAULT_MAX_CONTRACT_REJECTIONS, InvocationFailure, InvocationRecorder, InvocationRequest,
+    invoke,
+};
 use crate::profile_loader::ProfileRegistry;
 
 const FEATURE_PLANNER_PROFILE: &str = "feature-planner@1.0";
@@ -35,8 +30,8 @@ const PATCHED_OUTCOME: &str = "patched";
 const OUT_OF_SCOPE_OUTCOME: &str = "out_of_scope";
 const ROADMAP_PATCH_PATH: &str = "roadmap-patch.toml";
 
-/// Shared map used by injected human-input tool calls.
-pub type ToolResolutionMap = Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>;
+/// How long the planner may take, from the first send to an accepted patch.
+pub const FEATURE_PLANNER_DEADLINE: Duration = Duration::from_secs(30 * 60);
 
 /// Parameters for one Feature Planner run.
 pub struct FeaturePlannerParams<'a> {
@@ -46,30 +41,20 @@ pub struct FeaturePlannerParams<'a> {
     pub roadmap: String,
     /// Bridge facade for ACP session lifecycle.
     pub bridge: &'a Arc<dyn BridgeFacade>,
-    /// Run writer for stage events.
+    /// The planner run's writer: the outcome and patch are recorded there.
     pub writer: &'a RunWriter,
-    /// Content-addressed artifact store.
-    pub artifact_store: &'a ArtifactStore,
     /// Worktree where `roadmap-patch.toml` is produced.
     pub worktree_path: &'a Path,
-    /// Dispatcher for non-injected tools.
-    pub tool_dispatcher: &'a Arc<dyn ToolDispatcher>,
-    /// Current run memory for binding/tool context.
-    pub run_memory: &'a RunMemory,
-    /// Current run id.
+    /// Current run id (for logs).
     pub run_id: RunId,
-    /// Human-input tool resolution map.
-    pub tool_resolutions: &'a ToolResolutionMap,
-    /// Timeout for human-input tool calls.
-    pub human_input_timeout: Duration,
-    /// Optional MCP registry.
-    pub mcp_registry: Option<Arc<McpRegistry>>,
-    /// Run-level MCP server refs.
-    pub mcp_servers: Vec<McpServerRef>,
     /// Profile registry used to resolve Feature Planner.
     pub profile_registry: Arc<ProfileRegistry>,
-    /// Hook executor used by the underlying agent stage.
-    pub hook_executor: &'a HookExecutor,
+    /// The operator's merged agent registry; `None` uses the builtins.
+    pub agent_registry: Option<Arc<surge_acp::Registry>>,
+    /// Stops the planner and closes its session (the CLI wires Ctrl-C).
+    pub cancel: &'a CancellationToken,
+    /// From the first send to an accepted patch.
+    pub deadline: Duration,
 }
 
 /// Result of a Feature Planner run.
@@ -89,15 +74,19 @@ pub enum FeaturePlannerResult {
 /// Errors from the Feature Planner driver.
 #[derive(Debug, thiserror::Error)]
 pub enum FeaturePlannerError {
-    /// Profile reference failed to parse or resolve.
-    #[error("feature planner profile error: {0}")]
-    Profile(String),
-    /// Underlying agent stage failed.
-    #[error("feature planner stage failed: {0}")]
-    Stage(#[from] StageError),
-    /// Patch artifact could not be read from the worktree.
-    #[error("read roadmap patch artifact failed: {0}")]
-    Io(#[from] std::io::Error),
+    /// The planner invocation failed (provider, session, deadline,
+    /// cancellation, or an artifact that stayed invalid).
+    #[error("feature planner failed: {0}")]
+    Invocation(#[from] InvocationFailure),
+    /// Node key construction failed.
+    #[error("feature planner node error: {0}")]
+    Node(String),
+    /// The accepted outcome lacks its patch artifact.
+    #[error("feature planner reported {PATCHED_OUTCOME} without {ROADMAP_PATCH_PATH}")]
+    MissingPatch,
+    /// Patch artifact is not UTF-8.
+    #[error("roadmap patch artifact is not UTF-8")]
+    NotUtf8,
     /// Patch artifact did not parse as typed TOML.
     #[error("parse roadmap patch artifact failed: {0}")]
     Toml(#[from] toml::de::Error),
@@ -117,8 +106,8 @@ pub enum FeaturePlannerError {
 /// Run Feature Planner and return a typed patch result.
 ///
 /// # Errors
-/// Returns [`FeaturePlannerError`] if the profile cannot resolve, the agent
-/// stage fails, the produced patch is missing, or the patch does not parse.
+/// Returns [`FeaturePlannerError`] if the invocation fails, the patch is
+/// missing, or the patch does not parse or validate.
 #[must_use = "await the driver result and handle failures"]
 pub async fn run_feature_planner(
     params: FeaturePlannerParams<'_>,
@@ -128,56 +117,39 @@ pub async fn run_feature_planner(
         run_id = %params.run_id,
         "feature_planner_start"
     );
-
-    let resolved_profile = resolve_feature_planner_profile(&params.profile_registry)?;
-    let declared_outcomes = declared_outcomes(&resolved_profile.profile.outcomes);
     let node = NodeKey::try_from(FEATURE_PLANNER_NODE)
-        .map_err(|error| FeaturePlannerError::Profile(error.to_string()))?;
-    let agent_config = feature_planner_agent_config(params.request, params.roadmap)?;
-
-    let outcome = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &agent_config,
-        bound_skills: &[],
-        declared_outcomes: &declared_outcomes,
-        bridge: params.bridge,
-        writer: params.writer,
-        artifact_store: params.artifact_store,
-        worktree_path: params.worktree_path,
-        tool_dispatcher: params.tool_dispatcher,
-        run_memory: params.run_memory,
-        run_id: params.run_id,
-        tool_resolutions: params.tool_resolutions,
-        human_input_timeout: params.human_input_timeout,
-        mcp_registry: params.mcp_registry,
-        mcp_servers: params.mcp_servers,
-        // The Feature Planner driver runs standalone (see module doc) and
-        // has no `SurgeConfig` of its own to read a `surge.toml` override
-        // from; the engine's conservative defaults still apply the guard
-        // and spill policy to this node rather than leaving it unguarded.
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(params.profile_registry.clone()),
-        // The standalone Feature Planner driver has no engine config to read
-        // a merged agent registry from; builtins are the legacy fallback.
-        agent_registry: None,
-        hook_executor: params.hook_executor,
-        pending_elevations: crate::engine::elevation::PendingElevations::new(),
-        // The feature planner runs standalone, not inside a task loop.
-        active_task_id: None,
-    })
+        .map_err(|error| FeaturePlannerError::Node(error.to_string()))?;
+    let outcome = invoke(
+        params.bridge,
+        InvocationRequest {
+            profile: FEATURE_PLANNER_PROFILE,
+            bindings: vec![
+                ("request".into(), params.request),
+                ("roadmap".into(), params.roadmap),
+            ],
+            working_dir: params.worktree_path,
+            deadline: params.deadline,
+            cancel: params.cancel,
+            recorder: Some(InvocationRecorder {
+                writer: params.writer,
+                node: &node,
+            }),
+            profiles: &params.profile_registry,
+            agents: params.agent_registry.as_deref(),
+            max_contract_rejections: DEFAULT_MAX_CONTRACT_REJECTIONS,
+        },
+    )
     .await?;
 
-    match outcome.as_ref() {
-        PATCHED_OUTCOME => read_validated_patch(params.worktree_path).await,
+    match outcome.outcome.as_str() {
+        PATCHED_OUTCOME => {
+            let artifact = outcome
+                .artifact(ROADMAP_PATCH_PATH)
+                .ok_or(FeaturePlannerError::MissingPatch)?;
+            let content =
+                std::str::from_utf8(&artifact.bytes).map_err(|_| FeaturePlannerError::NotUtf8)?;
+            validated_patch(content, params.worktree_path.join(ROADMAP_PATCH_PATH))
+        },
         OUT_OF_SCOPE_OUTCOME => {
             tracing::warn!(
                 target: "feature_driver",
@@ -190,65 +162,11 @@ pub async fn run_feature_planner(
     }
 }
 
-fn resolve_feature_planner_profile(
-    registry: &ProfileRegistry,
-) -> Result<surge_core::profile::registry::ResolvedProfile, FeaturePlannerError> {
-    let key_ref = parse_key_ref(FEATURE_PLANNER_PROFILE)
-        .map_err(|error| FeaturePlannerError::Profile(error.to_string()))?;
-    registry
-        .resolve(&key_ref)
-        .map_err(|error| FeaturePlannerError::Profile(error.to_string()))
-}
-
-fn declared_outcomes(outcomes: &[surge_core::ProfileOutcome]) -> Vec<OutcomeDecl> {
-    outcomes
-        .iter()
-        .map(|outcome| OutcomeDecl {
-            id: outcome.id.clone(),
-            description: outcome.description.clone(),
-            edge_kind_hint: outcome.edge_kind_hint,
-            is_terminal: false,
-            ledger_effect: Default::default(),
-        })
-        .collect()
-}
-
-fn feature_planner_agent_config(
-    request: String,
-    roadmap: String,
-) -> Result<AgentConfig, FeaturePlannerError> {
-    Ok(AgentConfig {
-        profile: ProfileKey::try_from(FEATURE_PLANNER_PROFILE)
-            .map_err(|error| FeaturePlannerError::Profile(error.to_string()))?,
-        prompt_overrides: None,
-        tool_overrides: None,
-        sandbox_override: None,
-        approvals_override: None,
-        bindings: vec![
-            Binding {
-                source: ArtifactSource::Static { content: request },
-                target: TemplateVar("request".into()),
-                optional: false,
-            },
-            Binding {
-                source: ArtifactSource::Static { content: roadmap },
-                target: TemplateVar("roadmap".into()),
-                optional: false,
-            },
-        ],
-        rules_overrides: None,
-        limits: Default::default(),
-        hooks: Vec::new(),
-        custom_fields: Default::default(),
-    })
-}
-
-async fn read_validated_patch(
-    worktree_path: &Path,
+fn validated_patch(
+    content: &str,
+    patch_path: PathBuf,
 ) -> Result<FeaturePlannerResult, FeaturePlannerError> {
-    let patch_path = worktree_path.join(ROADMAP_PATCH_PATH);
-    let content = tokio::fs::read_to_string(&patch_path).await?;
-    let patch: RoadmapPatch = toml::from_str(&content)?;
+    let patch: RoadmapPatch = toml::from_str(content)?;
     let issues = patch.validate_shape();
     if !issues.is_empty() {
         return Err(FeaturePlannerError::InvalidPatch {
