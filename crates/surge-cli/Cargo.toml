@@ -9,6 +9,7 @@ name = "surge"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 surge-process = { workspace = true }
 surge-core = { workspace = true }
 surge-mcp = { workspace = true }
@@ -47,7 +48,6 @@ nix = { workspace = true, features = ["signal"] }
 interprocess.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 surge-orchestrator = { workspace = true, features = ["test-support"] }
 interprocess = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
