@@ -77,7 +77,7 @@ impl Fixture {
             .admission()
             .admit(self.fresh(run_id, graph("implementer@1.0"), config))
             .await);
-        admitted.writer.close().await.unwrap();
+        release(admitted).await;
         run_id
     }
 
@@ -106,6 +106,15 @@ impl Fixture {
         drop(self.storage);
         self.home.close().unwrap();
     }
+}
+
+/// Close an admitted run's writer and drop everything else it holds (its
+/// work estimator keeps a run reader open). An open handle keeps the run
+/// database locked on Windows, so the fixture's directory could not be
+/// removed.
+async fn release(admitted: AdmittedRun) {
+    let AdmittedRun { writer, .. } = admitted;
+    writer.close().await.unwrap();
 }
 
 fn run(result: Result<Admitted, AdmissionRejection>) -> AdmittedRun {
@@ -322,7 +331,7 @@ async fn resuming_a_parked_run_clears_the_row_records_the_wake_and_carries_the_e
         .expect("a resume carries replayed state");
     assert!(resumed.evidence.was_parked);
     assert!(resumed.evidence.bypasses_precheck());
-    admitted.writer.close().await.unwrap();
+    release(admitted).await;
 
     let summary = fx.storage.get_run(&run_id).await.unwrap().unwrap();
     assert_eq!(summary.status, surge_core::RunStatus::Running);
@@ -357,7 +366,7 @@ async fn resume_re_arms_the_frozen_limits_and_resolves_the_memory_store() {
     let resumed = admitted.resume.as_ref().unwrap();
     assert!(!resumed.evidence.was_parked);
     assert!(!resumed.evidence.bypasses_precheck());
-    admitted.writer.close().await.unwrap();
+    release(admitted).await;
     fx.close();
 }
 
@@ -436,7 +445,7 @@ async fn resume_after_a_profile_was_removed_is_refused_before_any_mutation() {
             EngineRunConfig::default(),
         ))
         .await);
-    admitted.writer.close().await.unwrap();
+    release(admitted).await;
     fx.storage.set_run_parked(&run_id, 1).await.unwrap();
     let before = fx.kinds(run_id).await;
     fx.config.profile_registry = Some(registry());
@@ -611,7 +620,7 @@ async fn task_start_trusts_its_frozen_reservation_and_refuses_a_used_journal() {
     assert_eq!(admitted.run_id, run_id);
     assert!(admitted.claim.is_some());
     assert!(admitted.resume.is_none());
-    admitted.writer.close().await.unwrap();
+    release(admitted).await;
     assert_eq!(fx.kinds(run_id).await.first(), Some(&"RunStarted"));
 
     let rejection = fx
