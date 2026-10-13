@@ -31,8 +31,13 @@ impl FixtureHome {
         &self.path
     }
 
-    // Call only after writers, tasks, stores and pools have actually settled.
+    // Call only after writers, tasks, stores and pools have been dropped.
     // TempDir's implicit destructor is just a panic-unwind fallback.
+    //
+    // Windows releases a dropped SQLite pool's file handles on background
+    // threads, after the last owner is gone, so removal can briefly hit a
+    // sharing violation (os error 32). Retry that, and only that, for a
+    // bounded time: a handle that is genuinely leaked still fails the test.
     pub fn close(self) -> std::io::Result<()> {
         let Self {
             #[cfg(windows)]
@@ -41,7 +46,25 @@ impl FixtureHome {
             outer,
         } = self;
         #[cfg(windows)]
-        drop(owner);
+        {
+            drop(owner);
+            const SHARING_VIOLATION: i32 = 32;
+            let path = outer.keep();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => return Ok(()),
+                    Err(error)
+                        if error.raw_os_error() == Some(SHARING_VIOLATION)
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    },
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        #[cfg(not(windows))]
         outer.close()
     }
 }
