@@ -22,9 +22,7 @@ use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::OutcomeDecl;
 use surge_core::profile::registry::ResolvedProfile;
 use surge_core::roadmap::RoadmapTaskId;
-use surge_core::run_event::{
-    EscalationCause, EventPayload, SessionDisposition, VersionedEventPayload,
-};
+use surge_core::run_event::{EscalationCause, EventPayload, VersionedEventPayload};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
 
@@ -1165,10 +1163,6 @@ async fn execute_agent_attempt(
     let (stage_endpoint, mut stage_requests, mut stage_calls) =
         super::stage_tools::prepare(&mut session_config, stage_context)?;
 
-    // Subscribe to events BEFORE opening the session, so we don't miss the
-    // SessionEstablished event (or earlier ToolCall events).
-    let mut events = p.bridge.subscribe();
-
     // Track outcomes rejected by `on_outcome` hooks within THIS session so we
     // can surface `StageFailed` once the agent burns its retry budget.
     let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
@@ -1223,36 +1217,28 @@ async fn execute_agent_attempt(
         session_config.opening,
         surge_core::execution_recovery::SessionOpening::New
     );
-    let opened = match p.bridge.open_session(session_config).await {
-        Ok(session) => session,
-        Err(error) => {
-            let cleanup = stage_endpoint.close().await;
-            let diagnostic = format!("open_session: {error}; stage endpoint cleanup: {cleanup:?}");
-            return Err(if p.continuation.as_ref().is_some_and(|control|control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved) {
-                StageError::RecoveryRequired(diagnostic)
-            } else { StageError::Bridge(diagnostic) });
-        },
+    // The lease opens the session, checks the provider writer against its
+    // durable intent and records `SessionOpened`; from here every exit settles
+    // it (#101).
+    let open_failure = if p.continuation.as_ref().is_some_and(|control| {
+        control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+    }) {
+        super::session_lease::OpenFailure::RecoveryRequired
+    } else {
+        super::session_lease::OpenFailure::Bridge
     };
-
-    if opened
-        .execution_writer
-        .as_ref()
-        .is_some_and(|observed| observed.writer() != execution_writer)
-    {
-        let endpoint_cleanup = stage_endpoint.close().await;
-        let cleanup = p.bridge.close_session(opened.session).await;
-        return Err(StageError::Bridge(format!(
-            "provider writer identity mismatched its durable intent; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-        )));
-    }
-    let session_id = opened.session;
-    let opened = p
-        .writer
-        .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
+    let super::session_lease::OpenedLease {
+        mut lease,
+        mut events,
+        opened_seq,
+    } = super::session_lease::SessionLease::open(super::session_lease::LeaseRequest {
+        bridge: p.bridge,
+        writer: p.writer,
+        endpoint: stage_endpoint,
+        config: session_config,
+        opened: super::session_lease::SessionOpenedFacts {
             handoff: quota_handoff,
-            opened: Some(opened),
             node: p.node.clone(),
-            session: session_id,
             agent: p.agent_config.profile.to_string(),
             // The actual runtime identity, not the role/profile above —
             // `None` **only** via the no-profile-registry legacy path (see
@@ -1305,37 +1291,25 @@ async fn execute_agent_attempt(
                         .into_string()
                 })
             },
-        }))
-        .await;
-    if let Err(error) = opened {
-        let endpoint_cleanup = stage_endpoint.close().await;
-        let cleanup = p.bridge.close_session(session_id).await;
-        return Err(StageError::Storage(format!(
-            "SessionOpened: {error}; cleanup: {cleanup:?}; stage endpoint: {endpoint_cleanup:?}"
-        )));
-    }
-
+        },
+        open_failure,
+    })
+    .await?;
+    let session_id = lease.session();
+    let mut deferred_events = std::collections::VecDeque::new();
     let mut task_quota_cycle = p.quota_cycle.take();
+    let stage_result = async {
     if let Some(operation) = quota_handoff {
-        let sequence = opened.as_ref().map_err(|error| {
-            StageError::Storage(format!("quota opening sequence unavailable: {error}"))
-        })?;
         let Some(owner) = &p.quota_owner else {
-            let endpoint_cleanup = stage_endpoint.close().await;
-            let cleanup = p.bridge.close_session(session_id).await;
-            return Err(StageError::RecoveryRequired(format!(
-                "quota opening has no task owner; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-            )));
+            return Err(StageError::RecoveryRequired(
+                "quota opening has no task owner".into(),
+            ));
         };
-        if let Err(error) = owner.confirm_open(operation, sequence.0) {
-            let endpoint_cleanup = stage_endpoint.close().await;
-            let cleanup = p.bridge.close_session(session_id).await;
-            return Err(StageError::RecoveryRequired(format!(
-                "quota opening confirmation failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-            )));
-        }
+        owner.confirm_open(operation, opened_seq).map_err(|error| {
+            StageError::RecoveryRequired(format!("quota opening confirmation failed: {error}"))
+        })?;
         if let Some(quota) = &mut task_quota_cycle {
-            quota.opening_seq = sequence.0;
+            quota.opening_seq = opened_seq;
         }
     }
 
@@ -1348,66 +1322,38 @@ async fn execute_agent_attempt(
         && task_quota_cycle.is_none()
         && let Some(owner) = &p.quota_owner
     {
-        let sequence = opened.as_ref().map_err(|error| {
-            StageError::Storage(format!("quota opening sequence unavailable: {error}"))
-        })?;
         let control_generation = p
             .continuation
             .as_ref()
             .map_or(0, |control| control.generation);
-        match owner.begin(logical_invocation, sequence.0, control_generation) {
-            Ok(cycle) => task_quota_cycle = Some(cycle),
-            Err(error) => {
-                let endpoint_cleanup = stage_endpoint.close().await;
-                let cleanup = p.bridge.close_session(session_id).await;
-                return Err(StageError::RecoveryRequired(format!(
-                    "task quota cycle initialization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                )));
-            },
-        }
+        let cycle = owner
+            .begin(logical_invocation, opened_seq, control_generation)
+            .map_err(|error| {
+                StageError::RecoveryRequired(format!(
+                    "task quota cycle initialization failed: {error}"
+                ))
+            })?;
+        task_quota_cycle = Some(cycle);
     }
 
     let mut continued_seq = None;
     if let Some(control) = &p.continuation
         && control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
     {
-        let sequence = match p
+        let sequence = p
             .writer
             .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
                 control_generation: control.generation,
             }))
             .await
-        {
-            Ok(sequence) => sequence.0,
-            Err(error) => {
-                let endpoint_cleanup = stage_endpoint.close().await;
-                let cleanup = p.bridge.close_session(session_id).await;
-                return Err(StageError::RecoveryRequired(format!(
-                    "RunContinued: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                )));
-            },
-        };
-        continued_seq = Some(sequence);
+            .map_err(|error| StageError::RecoveryRequired(format!("RunContinued: {error}")))?;
+        continued_seq = Some(sequence.0);
     }
 
     if let (Some(operation), Some(owner)) = (quota_handoff, &p.quota_owner) {
-        let opened_seq = match opened.as_ref() {
-            Ok(sequence) => sequence.0,
-            Err(error) => {
-                let endpoint_cleanup = stage_endpoint.close().await;
-                let cleanup = p.bridge.close_session(session_id).await;
-                return Err(StageError::Storage(format!(
-                    "quota opening sequence unavailable: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                )));
-            },
-        };
-        if let Err(reason) = owner.authorize_prompt(operation, opened_seq, continued_seq) {
-            let endpoint_cleanup = stage_endpoint.close().await;
-            let cleanup = p.bridge.close_session(session_id).await;
-            return Err(StageError::RecoveryRequired(format!(
-                "{reason}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-            )));
-        }
+        owner
+            .authorize_prompt(operation, opened_seq, continued_seq)
+            .map_err(StageError::RecoveryRequired)?;
     }
 
     let prompt_text = match previous_attempt_feedback(p).await {
@@ -1446,18 +1392,7 @@ async fn execute_agent_attempt(
         );
     }
     let prompt_text = prepend_interrupted_mcp_calls(prompt_text, interrupted);
-    let prompt_msg = MessageContent::Text(prompt_text);
-    let mut prompt_finished = tokio_util::sync::CancellationToken::new();
-    let prompt_signal = prompt_finished.clone();
-    let prompt_bridge = Arc::clone(p.bridge);
-    let mut prompt_task = tokio::spawn(async move {
-        let _finished = prompt_signal.drop_guard();
-        prompt_bridge.send_message(session_id, prompt_msg).await
-    });
-    let mut prompt_joined = false;
-    let mut session_disposition = None;
-    let mut deferred_events = std::collections::VecDeque::new();
-    let stage_result = async {
+    lease.start_turn(MessageContent::Text(prompt_text))?;
     let mut prompt_success = false;
     let mut candidates = std::collections::VecDeque::new();
     let mut retry_feedback: Option<String> = None;
@@ -1491,14 +1426,7 @@ async fn execute_agent_attempt(
             // Validation runs only after a complete provider turn. Start a new
             // turn asynchronously so this loop can continue servicing MCP calls.
             // The rejection counter was checked before scheduling this retry.
-            prompt_finished = tokio_util::sync::CancellationToken::new();
-            let signal = prompt_finished.clone();
-            let bridge = Arc::clone(p.bridge);
-            prompt_task = tokio::spawn(async move {
-                let _finished = signal.drop_guard();
-                bridge.send_message(session_id, MessageContent::Text(feedback)).await
-            });
-            prompt_joined = false;
+            lease.start_turn(MessageContent::Text(feedback))?;
             prompt_success = false;
         }
         let event = if prompt_success && !candidates.is_empty() {
@@ -1512,7 +1440,7 @@ async fn execute_agent_attempt(
                     if is_legacy_stage_control(&event) && !p.bridge.legacy_stage_event_adapter() { continue; }
                     event
                 },
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => return Err(record_usage_stream_lag(p.writer, session_id, skipped).await?),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => return Err(super::session_lease::record_usage_stream_lag(p.writer, session_id, skipped).await?),
                 Err(_) if missing_outcome_reminders < MAX_MISSING_OUTCOME_REMINDERS => {
                     // Agents routinely finish real work and then end the turn
                     // without calling the stage tool. Failing the run there
@@ -1558,9 +1486,8 @@ async fn execute_agent_attempt(
                     None => continue,
                 }
             },
-            joined = &mut prompt_task, if !prompt_joined => {
-                prompt_joined = true;
-                persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
+            joined = lease.join_turn(), if !lease.turn_joined() => {
+                super::session_lease::persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
                 let sent = joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?;
                 if let Err(error @ surge_acp::bridge::error::SendMessageError::RateLimited { .. }) = &sent
                     && let (Some(owner), Some(quota)) = (&p.quota_owner, &mut task_quota_cycle)
@@ -1638,7 +1565,7 @@ async fn execute_agent_attempt(
                     if is_legacy_stage_control(&ev) && !p.bridge.legacy_stage_event_adapter() { continue; }
                     ev
                 },
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => return Err(record_usage_stream_lag(p.writer, session_id, skipped).await?),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => return Err(super::session_lease::record_usage_stream_lag(p.writer, session_id, skipped).await?),
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(StageError::Bridge(
                         "event stream closed unexpectedly".into(),
@@ -1710,28 +1637,14 @@ async fn execute_agent_attempt(
                 handle_permission_request(
                     p,
                     &effective_approval_cfg,
-                    &prompt_finished,
+                    lease.turn_finished(),
                     session_id,
                     PermissionRequest { request_id, tool, capability, options },
                 )
                 .await?;
             },
             BridgeEvent::SessionEnded { reason, .. } => {
-                let disposition = match &reason {
-                    surge_acp::bridge::event::SessionEndReason::Normal => {
-                        SessionDisposition::Normal
-                    },
-                    surge_acp::bridge::event::SessionEndReason::AgentCrashed { .. } => {
-                        SessionDisposition::AgentCrashed
-                    },
-                    surge_acp::bridge::event::SessionEndReason::Timeout { .. } => {
-                        SessionDisposition::Timeout
-                    },
-                    surge_acp::bridge::event::SessionEndReason::ForcedClose => {
-                        SessionDisposition::ForcedClose
-                    },
-                };
-                session_disposition = Some(disposition);
+                lease.note_session_ended(&reason);
                 return Err(StageError::AgentCrashed(format!(
                     "session ended before OutcomeReported: {reason:?}"
                 )));
@@ -1982,7 +1895,7 @@ async fn execute_agent_attempt(
                         abandon: vec![
                             (
                                 crate::engine::human_decision::AbandonReason::PromptFinished,
-                                Box::pin(prompt_finished.cancelled()),
+                                Box::pin(lease.turn_finished().cancelled()),
                             ),
                             (
                                 crate::engine::human_decision::AbandonReason::CallerDisconnected,
@@ -2036,60 +1949,15 @@ async fn execute_agent_attempt(
 
     Ok(outcome)
     }.await;
-    let endpoint_closed = stage_endpoint.close().await;
-    let closed = p.bridge.close_session(session_id).await;
-    if !prompt_joined {
-        // A failed close leaves resource ownership in the bridge. Stop only this
-        // caller task so an unconfirmed cleanup cannot hang the engine driver.
-        if closed.is_err() {
-            prompt_task.abort();
-        }
-        if let Err(error) = prompt_task.await
-            && (!error.is_cancelled() || closed.is_ok())
-        {
-            return Err(StageError::Bridge(format!(
-                "prompt cleanup: {error}; close: {closed:?}; stage: {stage_result:?}"
-            )));
-        }
-    }
-    persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
-    // Outcome validation and artifact persistence already finished above.
-    // Reaped forced cleanup must not discard that result; unconfirmed cleanup
-    // still prevents the next stage from starting.
-    let forced_cleanup = matches!(
-        &closed,
-        Err(surge_acp::bridge::error::CloseSessionError::GracefulTimedOut { killed: true, .. })
-    );
-    if forced_cleanup {
-        tracing::warn!(%session_id, "stage session was forcibly closed and reaped");
-    } else {
-        closed.map_err(|error| match &stage_result {
-            Err(stage_error) => StageError::Bridge(format!(
-                "stage failed: {stage_error}; session cleanup also failed: {error}"
-            )),
-            Ok(outcome) => StageError::Bridge(format!(
-                "session cleanup failed: {error}; stage outcome: {outcome}"
-            )),
-        })?;
-    }
-    p.writer
-        .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
-            session: session_id,
-            disposition: session_disposition.unwrap_or(
-                if stage_result.is_ok() && !forced_cleanup {
-                    SessionDisposition::Normal
-                } else {
-                    SessionDisposition::ForcedClose
-                },
-            ),
-        }))
-        .await
-        .map_err(|error| StageError::Storage(error.to_string()))?;
-    endpoint_closed.map_err(|error| {
-        StageError::Bridge(format!(
-            "stage endpoint cleanup: {error}; stage: {stage_result:?}"
-        ))
-    })?;
+    let stage_result = lease
+        .settle(
+            stage_result,
+            super::session_lease::UsageQueue {
+                events: &mut events,
+                deferred: &mut deferred_events,
+            },
+        )
+        .await;
     if matches!(stage_result, Err(StageError::RateLimited { .. })) {
         *exhausted = task_quota_cycle;
     }
@@ -2420,69 +2288,6 @@ fn resolve_option_id(
         "agent offered no options; replying with desired option_id verbatim — agent may reject"
     );
     desired.to_string()
-}
-
-fn usage_stream_lag(skipped: u64) -> StageError {
-    StageError::Bridge(format!("usage evidence stream lagged by {skipped} events"))
-}
-
-async fn record_usage_stream_lag(
-    writer: &RunWriter,
-    session: surge_core::SessionId,
-    skipped: u64,
-) -> Result<StageError, StageError> {
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::ProviderUsageObserved {
-                session,
-                usage: surge_core::TokenUsageObservation::Unavailable {
-                    reason: surge_core::UsageUnavailableReason::Missing,
-                    reported: None,
-                },
-            },
-        ))
-        .await
-        .map_err(|error| StageError::Storage(error.to_string()))?;
-    Ok(usage_stream_lag(skipped))
-}
-
-/// A successful prompt join is a publication barrier for final provider usage.
-/// Persist those queued observations before accepting a buffered stage outcome.
-/// Other events retain their relative order for the normal stage event loop.
-async fn persist_queued_usage(
-    events: &mut tokio::sync::broadcast::Receiver<BridgeEvent>,
-    deferred: &mut std::collections::VecDeque<BridgeEvent>,
-    session: surge_core::SessionId,
-    writer: &RunWriter,
-) -> Result<(), StageError> {
-    for _ in 0..events.len() {
-        let event = match events.try_recv() {
-            Ok(event) => event,
-            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
-                return Err(record_usage_stream_lag(writer, session, skipped).await?);
-            },
-            Err(_) => break,
-        };
-        let payload = match event {
-            BridgeEvent::ProviderUsageObserved {
-                session: actual,
-                usage,
-            } if actual == session => EventPayload::ProviderUsageObserved { session, usage },
-            BridgeEvent::ContextUsageObserved {
-                session: actual,
-                usage,
-            } if actual == session => EventPayload::ContextUsageObserved { session, usage },
-            other => {
-                deferred.push_back(other);
-                continue;
-            },
-        };
-        writer
-            .append_event(VersionedEventPayload::new(payload))
-            .await
-            .map_err(|error| StageError::Storage(error.to_string()))?;
-    }
-    Ok(())
 }
 
 fn is_legacy_stage_control(event: &BridgeEvent) -> bool {

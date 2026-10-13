@@ -7,6 +7,7 @@ pub mod human_gate;
 pub mod loop_stage;
 pub mod notify;
 mod outcome_acceptance;
+mod session_lease;
 pub mod skill_binding;
 mod stage_tools;
 pub mod subgraph_stage;

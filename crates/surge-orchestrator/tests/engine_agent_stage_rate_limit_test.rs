@@ -97,7 +97,7 @@ system = "test"
 /// that stringified everything via `Display`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
-    let result = rate_limit_stage(None).await;
+    let result = rate_limit_stage().await;
     let Err(StageError::RateLimited {
         runtime,
         retry_after,
@@ -117,64 +117,9 @@ async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rate_limit_does_not_mask_unconfirmed_session_cleanup() {
-    use surge_acp::bridge::error::{BridgeError, CloseSessionError};
-    for error in [
-        CloseSessionError::GracefulTimedOut {
-            session: surge_core::SessionId::new(),
-            killed: false,
-        },
-        CloseSessionError::Bridge(BridgeError::CleanupUnconfirmed),
-    ] {
-        let result = rate_limit_stage(Some(error)).await;
-        assert!(
-            matches!(result, Err(StageError::Bridge(_))),
-            "unconfirmed cleanup must prevent automatic retry: {result:?}"
-        );
-    }
-}
-
-async fn rate_limit_stage(
-    close_error: Option<surge_acp::bridge::error::CloseSessionError>,
-) -> surge_orchestrator::engine::stage::StageResult {
-    stage_with_cleanup(close_error, false).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn successful_outcome_survives_confirmed_forced_cleanup() {
-    let result = stage_with_cleanup(
-        Some(
-            surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
-                session: surge_core::SessionId::new(),
-                killed: true,
-            },
-        ),
-        true,
-    )
-    .await;
-    assert_eq!(result.unwrap().as_str(), "done");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn successful_outcome_does_not_mask_unconfirmed_cleanup() {
-    let result = stage_with_cleanup(
-        Some(
-            surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
-                session: surge_core::SessionId::new(),
-                killed: false,
-            },
-        ),
-        true,
-    )
-    .await;
-    assert!(matches!(result, Err(StageError::Bridge(_))));
-}
-
-async fn stage_with_cleanup(
-    close_error: Option<surge_acp::bridge::error::CloseSessionError>,
-    success: bool,
-) -> surge_orchestrator::engine::stage::StageResult {
+/// Session cleanup (forced reap, unconfirmed close) is the session lease's
+/// contract and is tested there (#101).
+async fn rate_limit_stage() -> surge_orchestrator::engine::stage::StageResult {
     let dir = FixtureHome::new().unwrap();
     let fixture_result = {
         let storage = Storage::open(dir.path()).await.unwrap();
@@ -185,32 +130,11 @@ async fn stage_with_cleanup(
 
         let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
         let bridge: Arc<dyn BridgeFacade> = mock.clone();
-        *mock.next_close_error.lock().await = close_error;
-
-        let pump = if success {
-            let session = surge_core::SessionId::new();
-            mock.pin_session_ids(vec![session]).await;
-            mock.enqueue_event(surge_acp::bridge::BridgeEvent::OutcomeReported {
-                session,
-                outcome: "done".parse().unwrap(),
-                summary: "validated result".into(),
-                artifacts_produced: vec![],
-
-                verification_report: None,
-            })
-            .await;
-            let worker = mock.clone();
-            Some(tokio::spawn(
-                async move { worker.pump_after_subscribe(1).await },
-            ))
-        } else {
-            mock.fail_next_send_message(SendMessageError::RateLimited {
-                retry_after: Some(Duration::from_secs(30)),
-                details: "429 Too Many Requests: Retry-After: 30".into(),
-            })
-            .await;
-            None
-        };
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+            details: "429 Too Many Requests: Retry-After: 30".into(),
+        })
+        .await;
 
         let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
         let memory = surge_core::run_state::RunMemory::default();
@@ -255,9 +179,6 @@ async fn stage_with_cleanup(
         })
         .await;
 
-        if let Some(pump) = pump {
-            pump.await.unwrap();
-        }
         writer.close().await.unwrap();
         result
     };
