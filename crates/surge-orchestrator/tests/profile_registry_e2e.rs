@@ -146,9 +146,12 @@ fn all_bundled_profiles_resolve_and_validator_hooks_are_portable() {
         }
     }
 
+    // The feature planner has no validator hook (#99): it runs through the
+    // standalone invocation, which checks its declared contract and refuses
+    // profiles with hooks.
     assert_eq!(
-        validator_hook_count, 6,
-        "description, roadmap, feature-planner, and spec profiles should register artifact validators"
+        validator_hook_count, 5,
+        "description, roadmap and spec profiles should register artifact validators"
     );
 }
 
