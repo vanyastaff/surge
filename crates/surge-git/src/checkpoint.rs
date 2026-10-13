@@ -59,6 +59,12 @@ pub fn capture_record(
 /// Returns `None` for a directory that is not itself a Git worktree root.
 /// Nested repositories and submodules require a separate ownership model and
 /// are rejected instead of producing an incomplete checkpoint.
+///
+/// The caller must hold the run's exclusive writer lease: the
+/// `refs/surge/checkpoints/{run}/` namespace is written only by that owner, so
+/// a lockfile left on this exact reference belongs to a dead predecessor (an
+/// owner killed between creating `<ref>.lock` and renaming it into place) and
+/// is recovered instead of wedging every later recovery of the run.
 pub fn capture(worktree: &Path, run: RunId, seq: u64) -> Result<Option<Oid>, GitError> {
     let repo = match Repository::open(worktree) {
         Ok(repo) => repo,
@@ -104,19 +110,8 @@ pub fn capture(worktree: &Path, run: RunId, seq: u64) -> Result<Option<Oid>, Git
     }
     let tree_id = index.write_tree_to(&repo)?;
     let reference = format!("refs/surge/checkpoints/{run}/{seq}");
-    match repo.find_reference(&reference) {
-        Ok(existing) => {
-            let commit = existing.peel_to_commit()?;
-            if commit.tree_id() != tree_id {
-                return Err(git2::Error::from_str(
-                    "checkpoint sequence already owns different file contents",
-                )
-                .into());
-            }
-            return Ok(Some(commit.id()));
-        },
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {},
-        Err(error) => return Err(error.into()),
+    if let Some(existing) = retained(&repo, &reference, tree_id)? {
+        return Ok(Some(existing));
     }
     let tree = repo.find_tree(tree_id)?;
     let signature = Signature::now("Surge checkpoint", "checkpoint@surge.local")?;
@@ -129,8 +124,65 @@ pub fn capture(worktree: &Path, run: RunId, seq: u64) -> Result<Option<Oid>, Git
         &tree,
         &parents,
     )?;
-    repo.reference(&reference, commit, false, "retain Surge stage checkpoint")?;
+    match repo.reference(&reference, commit, false, "retain Surge stage checkpoint") {
+        Ok(_) => {},
+        Err(error) if error.code() == git2::ErrorCode::Locked => {
+            remove_abandoned_reference_lock(&repo, &reference)?;
+            // The predecessor never renamed its lock into place, so the
+            // sequence still owns no contents; re-check before retaining.
+            if let Some(existing) = retained(&repo, &reference, tree_id)? {
+                return Ok(Some(existing));
+            }
+            repo.reference(&reference, commit, false, "retain Surge stage checkpoint")?;
+        },
+        Err(error) => return Err(error.into()),
+    }
     Ok(Some(commit))
+}
+
+/// The commit already retained for this checkpoint sequence, if any.
+/// A sequence is immutable: different file contents are an error.
+fn retained(repo: &Repository, reference: &str, tree_id: Oid) -> Result<Option<Oid>, GitError> {
+    match repo.find_reference(reference) {
+        Ok(existing) => {
+            let commit = existing.peel_to_commit()?;
+            if commit.tree_id() != tree_id {
+                return Err(git2::Error::from_str(
+                    "checkpoint sequence already owns different file contents",
+                )
+                .into());
+            }
+            Ok(Some(commit.id()))
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Remove the lockfile a dead run owner left on its own checkpoint reference.
+/// Only the exact `<ref>.lock` regular file is removed; anything else is refused.
+fn remove_abandoned_reference_lock(repo: &Repository, reference: &str) -> Result<(), GitError> {
+    let lock = repo.commondir().join(format!("{reference}.lock"));
+    match std::fs::symlink_metadata(&lock) {
+        Ok(metadata) if metadata.file_type().is_file() => {},
+        Ok(_) => {
+            return Err(
+                git2::Error::from_str("checkpoint reference lock is not a regular file").into(),
+            );
+        },
+        // Released between the failed write and now; the retry decides.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    tracing::warn!(
+        reference,
+        lock = %lock.display(),
+        "removing checkpoint reference lock abandoned by a previous run owner"
+    );
+    match std::fs::remove_file(&lock) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Read a retained checkpoint tree without mutating repository state.
@@ -238,6 +290,40 @@ mod tests {
             std::fs::read(destination.join("app.txt")).unwrap(),
             b"child edit"
         );
+    }
+
+    #[test]
+    fn capture_recovers_reference_lock_abandoned_by_dead_owner() {
+        let (_dir, root) = crate::test_helpers::init_test_repo();
+        std::fs::write(root.join("gate.txt"), "committed effects").unwrap();
+        let repo = Repository::open(&root).unwrap();
+        let run = RunId::new();
+        let reference = format!("refs/surge/checkpoints/{run}/26");
+        // An owner killed inside the reference write leaves only its lockfile.
+        let lock = repo.commondir().join(format!("{reference}.lock"));
+        std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        std::fs::write(&lock, "0000000000000000000000000000000000000000\n").unwrap();
+
+        let checkpoint = capture(&root, run, 26).unwrap().unwrap();
+        assert!(!lock.exists());
+        assert_eq!(
+            repo.find_reference(&reference).unwrap().target(),
+            Some(checkpoint)
+        );
+        assert_eq!(capture(&root, run, 26).unwrap(), Some(checkpoint));
+    }
+
+    #[test]
+    fn capture_refuses_non_file_reference_lock() {
+        let (_dir, root) = crate::test_helpers::init_test_repo();
+        let repo = Repository::open(&root).unwrap();
+        let run = RunId::new();
+        let lock = repo
+            .commondir()
+            .join(format!("refs/surge/checkpoints/{run}/3.lock"));
+        std::fs::create_dir_all(&lock).unwrap();
+        assert!(capture(&root, run, 3).is_err());
+        assert!(lock.is_dir());
     }
 
     #[test]

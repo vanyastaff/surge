@@ -4150,20 +4150,34 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
     });
     let (engine, cancel, server, socket) =
         cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    tokio::time::timeout(GATE_CRASH_FIXTURE_WAIT, async {
-        while storage
-            .work_items()
-            .for_run(attempt.run)
-            .unwrap()
-            .unwrap()
-            .state
-            != surge_core::work_item::WorkItemAttemptState::Completed
-        {
+    // Recovery settles the attempt; only `Completed` is success. A settled
+    // `Attention` (e.g. a refused restore) fails now with its diagnostic.
+    let settled = tokio::time::timeout(GATE_CRASH_FIXTURE_WAIT, async {
+        loop {
+            let state = storage
+                .work_items()
+                .for_run(attempt.run)
+                .unwrap()
+                .unwrap()
+                .state;
+            if !matches!(
+                state,
+                surge_core::work_item::WorkItemAttemptState::Reserved
+                    | surge_core::work_item::WorkItemAttemptState::Launched
+            ) {
+                break state;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap_or_else(|error| {
+    .map_err(|error| error.to_string())
+    .and_then(|state| {
+        (state == surge_core::work_item::WorkItemAttemptState::Completed)
+            .then_some(())
+            .ok_or_else(|| format!("settled as {state:?}"))
+    });
+    if let Err(error) = settled {
         let kinds: Vec<String> = conn
             .prepare("SELECT kind FROM events ORDER BY seq")
             .and_then(|mut statement| {
@@ -4181,7 +4195,7 @@ async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bo
             bounded_child_log(&home.path().join("commit-provider-wire.jsonl")),
             bounded_child_log(&socket.with_extension("trace.log"))
         )
-    });
+    }
     assert_eq!(
         request_frame(&socket, serde_json::to_value(&command).unwrap()).await["method"],
         "resolve_human_input_ok"
