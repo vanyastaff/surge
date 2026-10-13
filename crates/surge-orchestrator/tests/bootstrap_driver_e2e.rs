@@ -220,16 +220,13 @@ async fn run_bootstrap_materializes_followup_graph() {
         approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
 
         let materialized = driver.await.unwrap().expect("bootstrap driver succeeds");
-        assert_eq!(materialized.bootstrap_run_id, run_id);
-        assert_eq!(
-            materialized.materialized_graph.metadata.name,
-            "golden_multi_milestone"
-        );
+        assert_eq!(materialized.parent, run_id);
+        assert_eq!(materialized.graph.metadata.name, "golden_multi_milestone");
         assert_eq!(
             materialized
                 .artifacts
                 .iter()
-                .map(|artifact| artifact.name.as_str())
+                .map(|artifact| artifact.name)
                 .collect::<Vec<_>>(),
             vec!["description", "roadmap", "flow"]
         );

@@ -83,6 +83,12 @@ impl BootstrapRuntime {
         })
     }
 
+    /// Profile registry runs of this runtime resolve profiles through.
+    #[must_use]
+    pub fn profiles(&self) -> Arc<ProfileRegistry> {
+        Arc::clone(&self.profiles)
+    }
+
     /// Agent catalog runs of this (project-scoped) runtime launch with.
     #[must_use]
     pub fn agents(&self) -> Arc<surge_acp::Registry> {
@@ -174,10 +180,10 @@ impl BootstrapRuntime {
     ) -> Result<surge_core::bootstrap_operation::BootstrapContentRef, BootstrapRuntimeError> {
         Ok(surge_core::bootstrap_operation::BootstrapContentRef {
             name: "bundled:bootstrap".into(),
-            digest: ContentHash::compute(
-                &serde_json::to_vec(&self.graph)
-                    .map_err(|_| BootstrapRuntimeError::Configuration)?,
-            ),
+            digest: self
+                .graph
+                .identity()
+                .map_err(|_| BootstrapRuntimeError::Configuration)?,
         })
     }
 

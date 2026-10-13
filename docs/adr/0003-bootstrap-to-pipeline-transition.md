@@ -69,3 +69,14 @@ We pick **(3) two-graph follow-up run**.
 
 - Daemon-mode bootstrap (Telegram approvals, async resume) — handled by future `Telegram cockpit` and `Crash recovery` milestones; the events emitted here (`BootstrapApprovalRequested`, `BootstrapEditRequested`) are the contract those milestones consume.
 - Roadmap amendments mutating an active follow-up run — handled by the future `Roadmap amendments via surge feature` milestone.
+
+## Amendment 2026-10-12 — one bootstrap handoff (#98)
+
+The description above is corrected in four places:
+
+- **What is inherited.** A follow-up run inherits `description`, the machine-readable `roadmap` (canonical `roadmap.toml`, not `roadmap.md`) and `flow`. One module, `bootstrap::handoff`, selects them and validates them. It also confirms the parent completed, resolves the roadmap's producer spellings through the core name authority (refusing competing ones), and checks each artifact's contract, that the flow text matches the materialized graph, registry and M6 validation, and the operator's flow-gate plan edits. The CLI, the daemon continuation and `Engine::start_run` with `bootstrap_parent` all call this module and do no checks of their own. Every launch path therefore gives the child the same inputs, and refuses the same plans for the same reasons.
+- **How it reaches the child.** The child is started with `bootstrap_parent` and records each inherited artifact exactly once. Each is seeded at its contract path and attributed to the `bootstrap_parent` producer. Launchers no longer pass bootstrap seeds of their own, so a CLI-launched child no longer records duplicates. The daemon now sets `bootstrap_parent` as well.
+- **Two `PipelineMaterialized` events.** "Each run has exactly one `PipelineMaterialized`" is false for a bootstrap run. Its log carries the bootstrap graph first and the generated follow-up graph later. Replay takes the first; the handoff takes the latest one after the first. The handoff reads the parent log only up to its `RunCompleted`, so nothing appended after completion changes what a child inherits.
+- **Graph identity.** Every graph hash (`PipelineMaterialized`, daemon continuation pins, flow and roadmap amendments) is now `Graph::identity()`: the content hash of the graph's JSON in struct field order. It is byte-identical to the hashes persisted before this change. Amendment hashes previously hashed the TOML text, so an amendment's `previous_graph_hash` can now be compared with the active graph's identity.
+
+Known stale copy: the bundled bootstrap flow's roadmap gate still says "roadmap.md drafted". Correcting it changes the bundled bootstrap graph's identity, which the daemon pins for in-flight operations, so it needs a versioned flow update rather than an in-place edit.

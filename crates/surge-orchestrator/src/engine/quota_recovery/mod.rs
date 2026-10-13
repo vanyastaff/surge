@@ -129,6 +129,48 @@ pub(crate) enum AfterRateLimit {
     Surface,
 }
 
+/// What run admission found when it resumed a run (#97): the facts, not the
+/// bypass decision, which [`ResumeEvidence::bypasses_precheck`] owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResumeEvidence {
+    /// The run's registry row was `Parked` (admission already cleared it).
+    pub was_parked: bool,
+    /// The task run's execution control, read once after its claim was
+    /// validated. `None` for an untracked run or a task without a control.
+    pub continue_control: Option<ContinueEvidence>,
+}
+
+/// One read of a task run's execution control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContinueEvidence {
+    /// The control is in `ContinueReserved`.
+    pub reserved: bool,
+    /// The attempt generation the control belongs to.
+    pub generation: u64,
+    /// The control's suspension fence names a capacity reason.
+    pub capacity_reason: bool,
+    /// The launch claim's attempt generation.
+    pub claim_generation: u64,
+}
+
+impl ResumeEvidence {
+    /// ADR-0016 M3: whether the resumed run's first agent dispatch bypasses
+    /// the capacity precheck once. A run woken from a park does; so does a
+    /// task resumed through a capacity-reasoned Continue reserved for **its
+    /// own** generation. Both the reason and the generation must match: a
+    /// Continue from an earlier attempt grants nothing (#97 closes the gap
+    /// where the generation was ignored).
+    #[must_use]
+    pub(crate) fn bypasses_precheck(&self) -> bool {
+        self.was_parked
+            || self.continue_control.as_ref().is_some_and(|control| {
+                control.reserved
+                    && control.capacity_reason
+                    && control.generation == control.claim_generation
+            })
+    }
+}
+
 /// Per-run ordinary capacity cycle.
 pub(crate) struct RunCapacity {
     ledger: Arc<dyn CapacityLedger>,
@@ -145,8 +187,9 @@ pub(crate) struct RunCapacity {
 }
 
 impl RunCapacity {
-    /// Build the cycle for one run. `resumed_from_park` arms the one-shot
-    /// precheck bypass.
+    /// Build the cycle for one run. A resume whose evidence
+    /// [bypasses the precheck](ResumeEvidence::bypasses_precheck) arms the
+    /// one-shot bypass; a fresh run (`None`) never does.
     #[must_use]
     pub(crate) fn new(
         ledger: Arc<dyn CapacityLedger>,
@@ -154,9 +197,10 @@ impl RunCapacity {
         mut policy: CapacityPolicy,
         fallback_agents: Vec<String>,
         agent_registry: Option<Arc<surge_acp::Registry>>,
-        resumed_from_park: bool,
+        resume: Option<&ResumeEvidence>,
     ) -> Self {
         policy.rotation = RotationPolicy::Disabled;
+        let resumed_from_park = resume.is_some_and(ResumeEvidence::bypasses_precheck);
         Self {
             ledger,
             estimator,
@@ -479,7 +523,12 @@ mod tests {
                 policy(blind_backoff),
                 fallback.iter().map(|id| (*id).to_string()).collect(),
                 Some(registry),
-                resumed_from_park,
+                resumed_from_park
+                    .then_some(ResumeEvidence {
+                        was_parked: true,
+                        continue_control: None,
+                    })
+                    .as_ref(),
             )
         }
 

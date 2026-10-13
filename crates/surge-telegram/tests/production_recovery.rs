@@ -561,3 +561,58 @@ async fn exact_timeout_closes_old_card_but_wrong_identity_never_does() {
     }
     home.close().unwrap();
 }
+
+/// An escalation card closes when the shared fold retires its escalation
+/// (here: a capacity blind-park limit cleared by the next completed stage),
+/// not only when the run ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escalation_card_settles_when_its_cause_clears() {
+    use surge_core::{EventPayload, run_event::VersionedEventPayload};
+    use surge_telegram::{CardStore, cockpit::production::SqliteCardStore};
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        let writer = pending_log(&storage, id).await;
+        let provider = PersistenceSnapshots {
+            storage: storage.clone(),
+        };
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: None,
+                    reason: "blind parks exceeded".into(),
+                    cause: surge_core::run_event::EscalationCause::CapacityBlindParkLimitExceeded,
+                },
+            ))
+            .await
+            .unwrap();
+        let store = SqliteCardStore {
+            storage: storage.clone(),
+        };
+        let card_id = store
+            .upsert(
+                &id.to_string(),
+                "__escalation__",
+                0,
+                "escalation",
+                42,
+                "esc",
+                0,
+            )
+            .await
+            .unwrap();
+        let card = store.find_by_id(&card_id).await.unwrap().unwrap();
+        assert!(!provider.request_settled(&card).await.unwrap());
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
+                node: "gate".try_into().unwrap(),
+                outcome: "approve".try_into().unwrap(),
+            }))
+            .await
+            .unwrap();
+        assert!(provider.request_settled(&card).await.unwrap());
+        writer.close().await.unwrap();
+    }
+    home.close().unwrap();
+}

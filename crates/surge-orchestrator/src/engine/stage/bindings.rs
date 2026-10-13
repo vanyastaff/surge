@@ -57,13 +57,19 @@ pub async fn resolve_bindings(
             },
             ArtifactSource::NodeOutput { node, artifact } => {
                 if let Some(arefs) = memory.artifacts_by_node.get(node) {
-                    let reference =
-                        if matches!(artifact.as_str(), "roadmap" | "roadmap.toml" | "roadmap.md") {
-                            crate::bootstrap_driver::canonical_roadmap_ref(arefs, artifact)
-                                .map_err(|()| BindingError::AmbiguousArtifact(artifact.clone()))?
-                        } else {
-                            arefs.iter().rev().find(|a| &a.name == artifact)
-                        };
+                    // A name the artifact contracts know (`roadmap`,
+                    // `roadmap.toml`, `roadmap.md`, …) resolves through the
+                    // one name authority, which refuses competing spellings
+                    // (#98); any other name is matched exactly.
+                    let reference = match surge_core::artifact_contract::artifact_name(artifact) {
+                        Some(name) => surge_core::artifact_contract::select_canonical(
+                            arefs,
+                            name.kind,
+                            name.format,
+                        )
+                        .map_err(|_| BindingError::AmbiguousArtifact(artifact.clone()))?,
+                        None => arefs.iter().rev().find(|a| &a.name == artifact),
+                    };
                     if let Some(aref) = reference {
                         read_artifact_text(&aref.path, worktree_root, &aref.name).await
                     } else {

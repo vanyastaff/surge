@@ -423,66 +423,23 @@ impl EngineFacade for DaemonEngineFacade {
         worktree_path: PathBuf,
         run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
-        // Reserve completion + per-run channel BEFORE sending Subscribe so
-        // we don't lose early events.
-        let join = self.register_completion(run_id).await;
-        let (event_tx, event_rx) = broadcast::channel(256);
-        self.inner
-            .event_dispatcher
-            .per_run
-            .lock()
-            .await
-            .insert(run_id, event_tx);
-
-        let resp = self
-            .rpc_for_run(run_id, |request_id| DaemonRequest::StartRun {
+        self.launch_then_subscribe(
+            run_id,
+            |request_id| DaemonRequest::StartRun {
                 request_id,
                 run_id,
                 graph: Box::new(graph),
                 worktree_path,
                 run_config: Box::new(run_config),
-            })
-            .await?;
-        match resp {
-            DaemonResponse::StartRunOk { .. } | DaemonResponse::StartRunQueued { .. } => {},
-            DaemonResponse::Error { code, message, .. } => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(map_error(code, &message));
             },
-            other => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(EngineError::Internal(format!(
-                    "unexpected response: {other:?}"
-                )));
+            |response| {
+                matches!(
+                    response,
+                    DaemonResponse::StartRunOk { .. } | DaemonResponse::StartRunQueued { .. }
+                )
             },
-        }
-
-        // Subscribe to per-run events.
-        let sub = self
-            .rpc_for_run(run_id, |request_id| DaemonRequest::Subscribe {
-                request_id,
-                run_id,
-            })
-            .await?;
-        match sub {
-            DaemonResponse::SubscribeOk { .. } => {},
-            DaemonResponse::Error { code, message, .. } => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(map_error(code, &message));
-            },
-            other => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(EngineError::Internal(format!(
-                    "unexpected response to Subscribe: {other:?}"
-                )));
-            },
-        }
-
-        Ok(RunHandle {
-            run_id,
-            events: event_rx,
-            completion: join,
-        })
+        )
+        .await
     }
 
     async fn resume_run(
@@ -490,61 +447,16 @@ impl EngineFacade for DaemonEngineFacade {
         run_id: RunId,
         worktree_path: PathBuf,
     ) -> Result<RunHandle, EngineError> {
-        let join = self.register_completion(run_id).await;
-        let (event_tx, event_rx) = broadcast::channel(256);
-        self.inner
-            .event_dispatcher
-            .per_run
-            .lock()
-            .await
-            .insert(run_id, event_tx);
-
-        let resp = self
-            .rpc_for_run(run_id, |request_id| DaemonRequest::ResumeRun {
+        self.launch_then_subscribe(
+            run_id,
+            |request_id| DaemonRequest::ResumeRun {
                 request_id,
                 run_id,
                 worktree_path,
-            })
-            .await?;
-        match resp {
-            DaemonResponse::ResumeRunOk { .. } => {},
-            DaemonResponse::Error { code, message, .. } => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(map_error(code, &message));
             },
-            other => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(EngineError::Internal(format!(
-                    "unexpected response: {other:?}"
-                )));
-            },
-        }
-
-        let sub = self
-            .rpc_for_run(run_id, |request_id| DaemonRequest::Subscribe {
-                request_id,
-                run_id,
-            })
-            .await?;
-        match sub {
-            DaemonResponse::SubscribeOk { .. } => {},
-            DaemonResponse::Error { code, message, .. } => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(map_error(code, &message));
-            },
-            other => {
-                self.cleanup_run_channels(run_id).await;
-                return Err(EngineError::Internal(format!(
-                    "unexpected response to Subscribe: {other:?}"
-                )));
-            },
-        }
-
-        Ok(RunHandle {
-            run_id,
-            events: event_rx,
-            completion: join,
-        })
+            |response| matches!(response, DaemonResponse::ResumeRunOk { .. }),
+        )
+        .await
     }
 
     async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError> {
@@ -866,6 +778,63 @@ impl DaemonEngineFacade {
                 "unexpected response to Unsubscribe: {other:?}"
             ))),
         }
+    }
+
+    /// The one start/resume routine (#97): reserve the completion and the
+    /// per-run event channel before anything can be lost, send `request`,
+    /// subscribe, and on any refusal clean the channels up and map the error.
+    /// Start and resume differ only in the request and the accepted replies.
+    async fn launch_then_subscribe(
+        &self,
+        run_id: RunId,
+        request: impl FnOnce(RequestId) -> DaemonRequest + Send,
+        accepted: impl Fn(&DaemonResponse) -> bool + Send,
+    ) -> Result<RunHandle, EngineError> {
+        let join = self.register_completion(run_id).await;
+        let (event_tx, event_rx) = broadcast::channel(256);
+        self.inner
+            .event_dispatcher
+            .per_run
+            .lock()
+            .await
+            .insert(run_id, event_tx);
+
+        let response = self.rpc_for_run(run_id, request).await?;
+        self.expect_response(run_id, &response, "launch", accepted)
+            .await?;
+        let subscribed = self
+            .rpc_for_run(run_id, |request_id| DaemonRequest::Subscribe {
+                request_id,
+                run_id,
+            })
+            .await?;
+        self.expect_response(run_id, &subscribed, "Subscribe", |response| {
+            matches!(response, DaemonResponse::SubscribeOk { .. })
+        })
+        .await?;
+        Ok(RunHandle {
+            run_id,
+            events: event_rx,
+            completion: join,
+        })
+    }
+
+    /// Accept `response`, or clean up the run's channels and map it.
+    async fn expect_response(
+        &self,
+        run_id: RunId,
+        response: &DaemonResponse,
+        what: &str,
+        accepted: impl Fn(&DaemonResponse) -> bool + Send,
+    ) -> Result<(), EngineError> {
+        if accepted(response) {
+            return Ok(());
+        }
+        self.cleanup_run_channels(run_id).await;
+        Err(match response {
+            DaemonResponse::Error { code, message, .. } => map_error(*code, message),
+            other => EngineError::Internal(format!("unexpected response to {what}: {other:?}")),
+        })
     }
 
     async fn rpc_for_run(

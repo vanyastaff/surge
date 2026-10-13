@@ -51,8 +51,14 @@ enum Source {
         run_id: RunId,
         seq: u64,
         node: String,
-        kind: DecisionKind,
+        kind: Box<DecisionKind>,
         call_id: Option<String>,
+        /// Outcome keys the decision accepts, from the operator fold.
+        outcomes: Vec<String>,
+        /// Whether the engine would accept an answer now (the operator
+        /// fold's actionability: current request, cursor on its node, run
+        /// not parked).
+        actionable: bool,
     },
     /// A failed or aborted run needing triage.
     FailedRun { run_id: RunId },
@@ -148,10 +154,7 @@ impl InboxScreen {
                 .pending_decisions()
                 .into_iter()
                 .filter_map(|(run, pending)| {
-                    let DecisionKind::HumanInput { schema, .. } = pending.kind else {
-                        return None;
-                    };
-                    let (_, name) = review_artifact(schema.as_ref())?;
+                    let (_, name) = review_artifact(pending.bootstrap_stage()?);
                     state.run_streams.get(&run)?.artifacts.get(name).cloned()
                 })
                 .collect()
@@ -238,69 +241,99 @@ impl InboxScreen {
 
         // 1. Live blocked decisions (already urgency-sorted).
         for (run_id, p) in state.pending_decisions() {
-            let (badge_color, title, evidence): (Hsla, String, Vec<(String, String)>) = match &p
-                .kind
-            {
-                DecisionKind::Escalation { reason } => (
+            let evidence = match p.kind() {
+                DecisionKind::Escalation { .. } => {
+                    vec![("What happened".to_string(), p.prompt().to_owned())]
+                },
+                DecisionKind::Elevation { .. } => vec![(
+                    "How to answer".to_string(),
+                    "Answer on the approval channel set up for this project (Telegram or \
+                     the desktop prompt). If nobody answers in time, the request is declined."
+                        .to_string(),
+                )],
+                DecisionKind::RoadmapPatch { patch_id, .. } => vec![(
+                    "How to answer".to_string(),
+                    format!(
+                        "Roadmap changes are approved from the terminal for now: \
+                         `surge feature show {patch_id}`."
+                    ),
+                )],
+                DecisionKind::SkillApproval { skills, .. } => vec![(
+                    "Skills to trust".to_string(),
+                    skills
+                        .iter()
+                        .map(|skill| skill.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )],
+                _ => p
+                    .bootstrap_stage()
+                    .map(|stage| {
+                        let (label, name) = review_artifact(stage);
+                        let content = state
+                            .run_streams
+                            .get(&run_id)
+                            .and_then(|stream| stream.artifacts.get(name))
+                            .map(|path| {
+                                self.documents
+                                    .get(path)
+                                    .cloned()
+                                    .unwrap_or_else(|| "Loading document…".into())
+                            })
+                            .unwrap_or_else(|| {
+                                "The review document has not arrived yet. Wait for the run \
+                                 stream to load before deciding."
+                                    .into()
+                            });
+                        (label.to_owned(), content)
+                    })
+                    .into_iter()
+                    .collect(),
+            };
+            let mut evidence = evidence;
+            if p.kind().is_human_input() && !p.decision.actionable {
+                evidence.push((
+                    "Why it can't be answered here".to_string(),
+                    "The run is waiting for capacity or has moved past this step; \
+                     it will ask again if it still needs an answer."
+                        .to_string(),
+                ));
+            }
+            if let Some(deadline) = p.decision.deadline {
+                evidence.push((
+                    "Answer by".to_string(),
+                    deadline
+                        .with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string(),
+                ));
+            }
+            let (badge_color, title) = match p.kind() {
+                DecisionKind::Escalation { .. } => (
                     theme::error(),
                     "Surge could not continue on its own".to_string(),
-                    vec![("What happened".to_string(), reason.clone())],
                 ),
                 DecisionKind::Elevation { capability } => (
                     theme::warning(),
                     format!("An agent asks for more access: {capability}"),
-                    vec![(
-                        "How to answer".to_string(),
-                        "Answer on the approval channel set up for this project (Telegram or \
-                         the desktop prompt). If nobody answers in time, the request is declined."
-                            .to_string(),
-                    )],
                 ),
-                DecisionKind::HumanInput {
-                    prompt,
-                    schema,
-                    call_id,
-                } => {
-                    let mut ev = Vec::new();
-                    if let Some((label, name)) = review_artifact(schema.as_ref()) {
-                        let content = state.run_streams.get(&run_id)
-                                .and_then(|stream| stream.artifacts.get(name))
-                                .map(|path| self.documents.get(path).cloned()
-                                    .unwrap_or_else(|| "Loading document…".into()))
-                                .unwrap_or_else(|| "The review document has not arrived yet. Wait for the run stream to load before deciding.".into());
-                        ev.push((label.to_owned(), content));
-                    }
-                    let _ = call_id;
-                    (theme::warning(), prompt.clone(), ev)
-                },
-                DecisionKind::RoadmapPatch { patch_id } => (
+                DecisionKind::RoadmapPatch { .. } => (
                     theme::violet(),
                     "A change to the roadmap waits for approval".to_string(),
-                    vec![(
-                        "How to answer".to_string(),
-                        format!(
-                            "Roadmap changes are approved from the terminal for now: \
-                             `surge feature show {patch_id}`."
-                        ),
-                    )],
                 ),
+                _ => (theme::warning(), p.prompt().to_owned()),
             };
-            let call_id = match &p.kind {
-                DecisionKind::HumanInput { call_id, .. } => call_id.clone(),
-                _ => None,
-            };
-            let badge = match &p.kind {
-                DecisionKind::HumanInput { schema, .. } => match review_artifact(schema.as_ref()) {
-                    Some(_) => "approve plan",
-                    None if p.kind.badge() == "human input" => "question",
-                    None => "approval",
-                },
+            let badge = match p.kind() {
+                DecisionKind::BootstrapApproval { .. } => "approve plan",
+                DecisionKind::SkillApproval { .. } => "trust skills",
+                DecisionKind::ToolCallInput { .. } => "question",
                 DecisionKind::Elevation { .. } => "permission",
                 DecisionKind::RoadmapPatch { .. } => "roadmap change",
                 DecisionKind::Escalation { .. } => "needs help",
+                _ => "approval",
             };
             items.push(InboxItem {
-                rank: p.kind.rank(),
+                rank: p.rank(),
                 badge,
                 badge_color,
                 title,
@@ -318,8 +351,10 @@ impl InboxScreen {
                     run_id,
                     seq: p.seq,
                     node: p.node.clone(),
-                    kind: p.kind.clone(),
-                    call_id,
+                    kind: Box::new(p.kind().clone()),
+                    call_id: p.call_id(),
+                    outcomes: p.outcomes(),
+                    actionable: p.decision.actionable,
                 },
             });
         }
@@ -516,7 +551,13 @@ impl InboxScreen {
         edits: Option<surge_core::node_overrides::NodeOverrides>,
         cx: &mut Context<Self>,
     ) -> Option<SubmittedDecision> {
-        let Source::Live { run_id, .. } = &item.source else {
+        // Only what the engine would accept now can be submitted.
+        let Source::Live {
+            run_id,
+            actionable: true,
+            ..
+        } = &item.source
+        else {
             return None;
         };
         let identity = item.identity();
@@ -605,10 +646,10 @@ impl InboxScreen {
         if let Source::Live {
             node,
             call_id: Some(call_id),
-            kind: DecisionKind::HumanInput { .. },
+            kind,
             ..
         } = &item.source
-            && surge_core::id::GateRequestId::from_event_call_id(call_id).is_none()
+            && matches!(**kind, DecisionKind::ToolCallInput { .. })
             && !self.comment(cx).trim().is_empty()
             && let Some(submitted) = self.begin_submission(item, None, cx)
         {
@@ -872,19 +913,22 @@ impl InboxScreen {
         // the engine requires {"outcome": <declared key>} — buttons.
         let is_tool_input = matches!(
             &item.source,
-            Source::Live {
-                call_id: Some(id),
-                kind: DecisionKind::HumanInput { .. },
-                ..
-            } if surge_core::id::GateRequestId::from_event_call_id(id).is_none()
+            Source::Live { kind, actionable: true, .. }
+                if matches!(**kind, DecisionKind::ToolCallInput { .. })
         );
         let is_gate_input = matches!(
             &item.source,
             Source::Live {
-                call_id: Some(id),
-                kind: DecisionKind::HumanInput { .. },
+                call_id: Some(_),
+                kind,
+                actionable: true,
                 ..
-            } if surge_core::id::GateRequestId::from_event_call_id(id).is_some()
+            } if matches!(
+                **kind,
+                DecisionKind::Gate { .. }
+                    | DecisionKind::BootstrapApproval { .. }
+                    | DecisionKind::SkillApproval { .. }
+            )
         );
         let is_failure = matches!(
             &item.source,
@@ -1232,7 +1276,7 @@ impl InboxScreen {
             // (schema.properties.outcome.enum) — destructive-looking
             // keys pushed right and styled red.
             let mut outcomes = match &item.source {
-                Source::Live { kind, .. } => kind.gate_outcomes(),
+                Source::Live { outcomes, .. } => outcomes.clone(),
                 _ => Vec::new(),
             };
             if outcomes.is_empty() {
@@ -1383,12 +1427,13 @@ impl InboxScreen {
 /// Evidence label of the generated workflow under review.
 const WORKFLOW_LABEL: &str = "Workflow";
 
-fn review_artifact(schema: Option<&serde_json::Value>) -> Option<(&'static str, &'static str)> {
-    match schema?.get("x-surge-bootstrap-stage")?.as_str()? {
-        "description" => Some(("Description", "description")),
-        "roadmap" => Some(("Roadmap", "roadmap_md")),
-        "flow" => Some((WORKFLOW_LABEL, "flow")),
-        _ => None,
+/// Evidence label and artifact name of the document a bootstrap stage
+/// reviews.
+fn review_artifact(stage: surge_core::run_event::BootstrapStage) -> (&'static str, &'static str) {
+    match stage {
+        surge_core::run_event::BootstrapStage::Description => ("Description", "description"),
+        surge_core::run_event::BootstrapStage::Roadmap => ("Roadmap", "roadmap_md"),
+        surge_core::run_event::BootstrapStage::Flow => (WORKFLOW_LABEL, "flow"),
     }
 }
 
@@ -1461,27 +1506,24 @@ mod tests {
 
     #[gpui_kit::test]
     fn bootstrap_review_shows_document_and_edit_action(cx: &mut TestAppContext) {
-        use crate::run_stream::{DecisionKind, PendingDecision, RunStreamState};
+        use crate::run_stream::{PendingDecision, RunStreamState};
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("immutable-description");
         std::fs::write(&path, "## Goal\nBuild an offline timer.").unwrap();
-        let kind = DecisionKind::HumanInput {
-            call_id: None,
-            prompt: "Approve description?".into(),
-            schema: Some(serde_json::json!({"x-surge-bootstrap-stage":"description"})),
-        };
-        assert_eq!(kind.gate_outcomes(), ["approve", "edit", "reject"]);
+        let decision = PendingDecision::requested(
+            1,
+            "description_gate",
+            None,
+            "Approve description?",
+            Some(serde_json::json!({"x-surge-bootstrap-stage":"description"})),
+        );
+        assert_eq!(decision.outcomes(), ["approve", "edit", "reject"]);
         let inbox = cx.update(|cx| {
             let state = cx.new(|_| {
                 let mut state = AppState::new();
                 let mut stream = RunStreamState::default();
                 stream.artifacts.insert("description".into(), path.clone());
-                stream.pending.push(PendingDecision {
-                    seq: 1,
-                    time: String::new(),
-                    node: "description_gate".into(),
-                    kind,
-                });
+                stream.pending.push(decision);
                 state.run_streams.insert(surge_core::RunId::new(), stream);
                 state
             });
@@ -1542,20 +1584,17 @@ mod tests {
     }
 
     fn decision(seq: u64, tool: bool) -> crate::run_stream::PendingDecision {
-        crate::run_stream::PendingDecision {
+        crate::run_stream::PendingDecision::requested(
             seq,
-            time: String::new(),
-            node: "flow_gate".into(),
-            kind: crate::run_stream::DecisionKind::HumanInput {
-                call_id: Some(if tool {
-                    format!("tool-{seq}")
-                } else {
-                    surge_core::id::GateRequestId::new().to_string()
-                }),
-                prompt: format!("Decision {seq}"),
-                schema: (!tool).then(|| serde_json::json!({"x-surge-bootstrap-stage":"flow"})),
-            },
-        }
+            "flow_gate",
+            Some(if tool {
+                format!("tool-{seq}")
+            } else {
+                surge_core::id::GateRequestId::new().to_string()
+            }),
+            &format!("Decision {seq}"),
+            (!tool).then(|| serde_json::json!({"x-surge-bootstrap-stage":"flow"})),
+        )
     }
 
     fn controlled_fixture(

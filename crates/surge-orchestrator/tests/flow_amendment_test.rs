@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use chrono::{TimeZone, Utc};
 use surge_core::agent_config::{AgentConfig, ArtifactSource, Binding, TemplateVar};
-use surge_core::content_hash::ContentHash;
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
@@ -68,10 +67,8 @@ fn follow_up_flow_is_valid_and_deterministic() {
     assert_eq!(flow.graph.metadata.created_at, created_at);
     assert_eq!(flow.graph.start, node_key("amend_001"));
     assert!(flow.graph.nodes.contains_key(&node_key("end")));
-    assert_eq!(
-        flow.graph_hash,
-        ContentHash::compute(flow.flow_toml.as_bytes())
-    );
+    // The one graph identity (#98), not a hash of the serialized TOML text.
+    assert_eq!(flow.graph_hash, flow.graph.identity().unwrap());
     let parsed: Graph = toml::from_str(&flow.flow_toml).expect("flow TOML parses");
     validate_for_m6(&parsed).expect("follow-up graph validates");
     assert_eq!(parsed, flow.graph);

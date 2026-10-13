@@ -640,7 +640,7 @@ impl CostSummary {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum FoldError {
     #[error("invalid transition: state={from}, event={event}")]
     InvalidTransition {

@@ -7,6 +7,7 @@
 
 use surge_core::run_event::{BootstrapStage, EventPayload};
 use surge_orchestrator::engine::RunEventTap;
+use surge_orchestrator::operator::{DecisionKind, Opening, classify_opening};
 
 use crate::card::emit::{CardEmitter, CardStore, EmitOutcome, TelegramApi};
 use crate::card::render::{
@@ -180,33 +181,11 @@ enum ActionPayload {
 
 /// Decide which cockpit action (if any) a tap event requires.
 fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
-    match tap.event.payload.payload() {
-        EventPayload::HumanInputRequested {
-            node,
-            prompt,
-            schema,
-            ..
-        } => {
-            let stage = schema
-                .as_ref()
-                .and_then(|schema| schema.get("x-surge-bootstrap-stage"))
-                .and_then(|stage| serde_json::from_value::<BootstrapStage>(stage.clone()).ok());
-            Some(CardAction {
-                event_kind: "HumanInputRequested",
-                kind: stage.map_or(CardKind::HumanGate, CardKind::from),
-                node_key: node.to_string(),
-                attempt_index: i64::try_from(tap.event.seq.0).ok()?,
-                payload: match stage {
-                    Some(stage) => ActionPayload::Bootstrap {
-                        stage,
-                        summary: prompt.clone(),
-                    },
-                    None => ActionPayload::HumanGate {
-                        prompt: prompt.clone(),
-                    },
-                },
-            })
-        },
+    let payload = tap.event.payload.payload();
+    if let Some(opening) = classify_opening(payload, None) {
+        return opening_action(tap, opening);
+    }
+    match payload {
         EventPayload::RunCompleted { terminal_node } => Some(CardAction {
             event_kind: "RunCompleted",
             kind: CardKind::Completion,
@@ -225,17 +204,51 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
                 error: error.clone(),
             },
         }),
-        EventPayload::EscalationRequested { stage, reason, .. } => Some(CardAction {
-            event_kind: "EscalationRequested",
+        _ => None,
+    }
+}
+
+/// Correlation key of a run's escalation card: one card per run, updated as
+/// escalations arrive and closed once the fold retires them.
+pub(crate) const ESCALATION_NODE_KEY: &str = "__escalation__";
+
+/// The card, if any, for a decision the shared fold classifies as opening.
+fn opening_action(tap: &RunEventTap, opening: Opening) -> Option<CardAction> {
+    let event_kind = tap.event.payload.payload().discriminant_str();
+    let Opening {
+        node, kind, prompt, ..
+    } = opening;
+    match kind {
+        DecisionKind::Escalation { stage, .. } => Some(CardAction {
+            event_kind,
             kind: CardKind::Escalation,
-            node_key: "__escalation__".into(),
+            node_key: ESCALATION_NODE_KEY.into(),
             attempt_index: 0,
             payload: ActionPayload::Escalation {
-                stage: *stage,
-                reason: reason.clone(),
+                stage,
+                reason: prompt,
             },
         }),
-        _ => None,
+        DecisionKind::Elevation { .. } | DecisionKind::RoadmapPatch { .. } => None,
+        kind => {
+            let stage = match kind {
+                DecisionKind::BootstrapApproval { stage, .. } => Some(stage),
+                _ => None,
+            };
+            Some(CardAction {
+                event_kind,
+                kind: stage.map_or(CardKind::HumanGate, CardKind::from),
+                node_key: node?.to_string(),
+                attempt_index: i64::try_from(tap.event.seq.0).ok()?,
+                payload: match stage {
+                    Some(stage) => ActionPayload::Bootstrap {
+                        stage,
+                        summary: prompt,
+                    },
+                    None => ActionPayload::HumanGate { prompt },
+                },
+            })
+        },
     }
 }
 

@@ -373,7 +373,7 @@ pub async fn apply_active_run_patch(
     target: &RoadmapPatchTarget,
     patch_result: &RoadmapPatchApplyResult,
 ) -> Result<ActiveRunAmendmentOutcome, RoadmapAmendmentError> {
-    let previous_graph_hash = graph_content_hash(active_graph).map_err(FlowAmendmentError::from)?;
+    let previous_graph_hash = graph_content_hash(active_graph)?;
     let amendment = amend_active_flow(active_graph, patch_result)?;
     let artifacts = store_applied_artifacts(
         artifact_store,

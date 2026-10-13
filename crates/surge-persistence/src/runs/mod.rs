@@ -88,9 +88,9 @@ pub use escalations::{
 };
 pub use host_settlement::RunCreationReservation;
 pub use query::{RunStatusSnapshot, aggregate_status, current_status};
+pub use reader::{CorruptTimestamp, ReadEvent, RunEventFeed, RunEventReadLease, RunReader};
 #[cfg(any(test, feature = "test-support"))]
 pub use reader::{FeedPoolProbe, FeedPoolSlots, FeedReadGate};
-pub use reader::{ReadEvent, RunEventFeed, RunEventReadLease, RunReader};
 pub use registry::{RunFilter, RunSummary};
 pub use run_writer::RunWriter;
 pub use seq::EventSeq;

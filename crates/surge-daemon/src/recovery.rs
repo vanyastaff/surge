@@ -56,6 +56,13 @@ pub enum RecoveryAction {
         /// Milliseconds since the run's most recent event.
         idle_ms: i64,
     },
+    /// Run admission would refuse to resume this run: its graph no longer
+    /// validates against the current profile registry (for example a
+    /// referenced profile was removed while it was parked). Operator-fixable,
+    /// so never marked failed: nothing is appended to the log and no status
+    /// changes; an operator is flagged (#97). The reason is on
+    /// [`RecoveryDecision::resume_refusal`].
+    FlagResumeRefused,
     /// The registry already records a terminal status
     /// ([`RunStatus::Completed`] / [`RunStatus::Failed`] /
     /// [`RunStatus::Aborted`]). Nothing to do.
@@ -113,6 +120,11 @@ pub struct RunRecoveryFacts {
     /// display value; `None` only if the row is `Parked` with no
     /// `wake_at` at all (should not happen).
     pub parked_wake_at_ms: Option<i64>,
+    /// Why run admission would refuse to resume this run (its graph no
+    /// longer validates against the current profile registry), computed by
+    /// the planner with the same check admission applies (#97). `None` when
+    /// the run would be admitted, or when no resume is in question.
+    pub resume_refusal: Option<String>,
 }
 
 /// The registry status a reconciled terminal kind projects to: the one
@@ -140,7 +152,9 @@ pub fn reconciled_status(kind: TerminalKind) -> RunStatus {
 /// 4. worktree missing → [`RecoveryAction::MarkFailedWorktreeLost`]
 /// 5. registry status `Parked` and not yet due → [`RecoveryAction::SkipParked`]
 ///    (Task 12 M3 review, BLOCKING #2); due → falls through to 7 like any
-///    other healthy run
+///    other healthy run; once due, if run admission would refuse the resume
+///    (its graph no longer validates against the current profile registry)
+///    → [`RecoveryAction::FlagResumeRefused`] (#97)
 /// 6. idle longer than threshold → [`RecoveryAction::FlagStuck`]
 /// 7. otherwise → [`RecoveryAction::Resume`]
 ///
@@ -216,6 +230,11 @@ pub fn decide_action(
         };
     }
 
+    // 5b. Admission would refuse the resume: flag, never fail (#97).
+    if facts.resume_refusal.is_some() {
+        return RecoveryAction::FlagResumeRefused;
+    }
+
     // 6. Idle too long → do not blindly resume a possibly-wedged run.
     //    Never reached for a still-parked (not-yet-due) run — rule 5
     //    already returned above — so a long, intentional park never
@@ -245,6 +264,10 @@ pub struct RecoveryOptions {
     pub worktrees_root: std::path::PathBuf,
     /// Wall-clock "now" in Unix epoch ms, used for stuck detection.
     pub now_ms: i64,
+    /// The profile registry resumes would be admitted against. `None`
+    /// checks graph structure only (no profile resolution).
+    pub profile_registry:
+        Option<std::sync::Arc<surge_orchestrator::profile_loader::ProfileRegistry>>,
 }
 
 /// One run's recovery decision, suitable for the dry-run inspector and
@@ -263,6 +286,8 @@ pub struct RecoveryDecision {
     pub worktree_path: std::path::PathBuf,
     /// What recovery decided to do.
     pub action: RecoveryAction,
+    /// Why admission would refuse to resume this run, when it would (#97).
+    pub resume_refusal: Option<String>,
 }
 
 /// Result of a recovery scan: one [`RecoveryDecision`] per non-terminal
@@ -384,6 +409,13 @@ pub async fn plan_recovery(
             },
         };
 
+        // Only a run recovery would otherwise resume is checked: the same
+        // graph check run admission applies, against the same registry.
+        let resume_refusal = if matches!(log_verdict, TerminalVerdict::Open) && worktree_exists {
+            resume_refusal(storage, run_id, opts.profile_registry.as_deref()).await
+        } else {
+            None
+        };
         let facts = RunRecoveryFacts {
             registry_status: summary.status,
             log_verdict,
@@ -392,6 +424,7 @@ pub async fn plan_recovery(
             already_active: active_run_ids.contains(&run_id),
             parked_is_due: summary.status == RunStatus::Parked && due_parked_ids.contains(&run_id),
             parked_wake_at_ms: summary.wake_at_ms,
+            resume_refusal: resume_refusal.clone(),
         };
         let action = decide_action(&facts, opts.now_ms, opts.stuck_threshold);
 
@@ -401,10 +434,31 @@ pub async fn plan_recovery(
             active_node,
             worktree_path,
             action,
+            resume_refusal,
         });
     }
 
     Ok(RecoveryReport { decisions })
+}
+
+/// Why run admission would refuse to resume `run_id`: its replayed graph
+/// no longer validates against `registry`. An unreadable log is not a
+/// refusal here; resume itself reports it.
+async fn resume_refusal(
+    storage: &std::sync::Arc<surge_persistence::runs::Storage>,
+    run_id: surge_core::id::RunId,
+    registry: Option<&surge_orchestrator::profile_loader::ProfileRegistry>,
+) -> Option<String> {
+    let reader = storage.open_run_reader(run_id).await.ok()?;
+    let replayed = surge_orchestrator::engine::execution_state::load(
+        &reader,
+        surge_orchestrator::engine::execution_state::Position::Latest,
+    )
+    .await
+    .ok()?;
+    surge_orchestrator::engine::validate::validate_graph_against(&replayed.graph, registry)
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// Side effects recovery performs. Abstracted behind a trait so the
@@ -451,6 +505,14 @@ pub trait RecoveryEffects: Send + Sync {
 
     /// Raise a human-attention signal for a stuck run.
     async fn flag_stuck(&self, run_id: &surge_core::id::RunId, idle_ms: i64) -> Result<(), String>;
+
+    /// Raise a human-attention signal for a run admission would refuse to
+    /// resume. Must not append to the log or change the registry.
+    async fn flag_resume_refused(
+        &self,
+        run_id: &surge_core::id::RunId,
+        reason: &str,
+    ) -> Result<(), String>;
 }
 
 /// Tally of what [`execute_recovery`] did (or would do, in dry-run).
@@ -466,6 +528,8 @@ pub struct RecoveryOutcome {
     pub flagged_stuck: usize,
     /// Runs flagged for conflicting terminal history.
     pub flagged_conflict: usize,
+    /// Runs flagged because admission would refuse to resume them (#97).
+    pub flagged_resume_refused: usize,
     /// Decisions that required no action (already terminal / already active).
     pub skipped: usize,
     /// Runs left parked because their `wake_at` has not passed yet (Task
@@ -598,6 +662,26 @@ pub async fn execute_recovery(
                     }
                 }
             },
+            RecoveryAction::FlagResumeRefused => {
+                let reason = d
+                    .resume_refusal
+                    .as_deref()
+                    .unwrap_or("resume would be refused");
+                tracing::warn!(target: "surge.recovery", run_id = %d.run_id, %reason,
+                    "resume would be refused; left untouched for an operator");
+                if dry_run {
+                    out.flagged_resume_refused += 1;
+                } else {
+                    match effects.flag_resume_refused(&d.run_id, reason).await {
+                        Ok(()) => out.flagged_resume_refused += 1,
+                        Err(e) => {
+                            out.errors += 1;
+                            tracing::warn!(target: "surge.recovery", run_id = %d.run_id,
+                                error = %e, "flag-resume-refused notify failed");
+                        },
+                    }
+                }
+            },
             RecoveryAction::FlagStuck { idle_ms } => {
                 if dry_run {
                     out.flagged_stuck += 1;
@@ -648,6 +732,7 @@ pub async fn execute_recovery(
         failed_worktree = out.failed_worktree,
         flagged_stuck = out.flagged_stuck,
         flagged_conflict = out.flagged_conflict,
+        flagged_resume_refused = out.flagged_resume_refused,
         skipped = out.skipped,
         parked = out.parked,
         errors = out.errors,
@@ -742,6 +827,23 @@ impl RecoveryEffects for DaemonRecoveryEffects {
             format!(
                 "No new events for ~{idle_hours}h after a daemon restart. \
                  Recovery left it untouched; inspect with `surge engine watch {run_id}` \
+                 or abort with `surge run abort {run_id}`."
+            ),
+        )
+        .await
+    }
+
+    async fn flag_resume_refused(
+        &self,
+        run_id: &surge_core::id::RunId,
+        reason: &str,
+    ) -> Result<(), String> {
+        self.notify_operator(
+            run_id,
+            format!("Run {run_id} cannot resume"),
+            format!(
+                "{reason}. Recovery left it untouched (not failed): restore the \
+                 missing profile and resume with `surge engine resume {run_id}`, \
                  or abort with `surge run abort {run_id}`."
             ),
         )
@@ -859,12 +961,14 @@ pub async fn recover_on_startup(
     broadcast: &std::sync::Arc<crate::broadcast::BroadcastRegistry>,
     notifier: &std::sync::Arc<dyn surge_notify::NotifyDeliverer>,
     worktrees_root: std::path::PathBuf,
+    profile_registry: Option<std::sync::Arc<surge_orchestrator::profile_loader::ProfileRegistry>>,
     now_ms: i64,
 ) -> RecoveryOutcome {
     let opts = RecoveryOptions {
         stuck_threshold: DEFAULT_STUCK_THRESHOLD,
         worktrees_root,
         now_ms,
+        profile_registry,
     };
     let active = std::collections::HashSet::new();
 
@@ -946,6 +1050,9 @@ mod execute_recovery_tests {
             self.flag_stuck_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+        async fn flag_resume_refused(&self, _r: &RunId, _reason: &str) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     fn decision(action: RecoveryAction) -> RecoveryDecision {
@@ -955,6 +1062,7 @@ mod execute_recovery_tests {
             active_node: Some("implement".into()),
             worktree_path: PathBuf::from("/wt"),
             action,
+            resume_refusal: None,
         }
     }
 
@@ -991,6 +1099,7 @@ mod execute_recovery_tests {
                 failed_worktree: 1,
                 flagged_stuck: 1,
                 flagged_conflict: 0,
+                flagged_resume_refused: 0,
                 skipped: 2,
                 parked: 0,
                 errors: 0,
@@ -1055,6 +1164,7 @@ mod plan_recovery_tests {
             stuck_threshold: Duration::from_hours(24),
             worktrees_root,
             now_ms: NOW,
+            profile_registry: None,
         }
     }
 
@@ -1114,6 +1224,147 @@ mod plan_recovery_tests {
             terminal_writer.close().await.unwrap();
         }
         tmp.close().unwrap();
+    }
+
+    /// A one-agent graph whose agent references `profile`.
+    fn graph_referencing(profile: &str) -> surge_core::graph::Graph {
+        use std::collections::BTreeMap;
+        use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
+        use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
+        let agent = surge_core::NodeKey::try_from("implement").unwrap();
+        let end = surge_core::NodeKey::try_from("end").unwrap();
+        let mut config: surge_core::agent_config::AgentConfig =
+            toml::from_str(&format!("profile = '{profile}'")).unwrap();
+        config.limits = surge_core::agent_config::NodeLimits::default();
+        let nodes = BTreeMap::from([
+            (
+                agent.clone(),
+                Node {
+                    id: agent.clone(),
+                    position: Position::default(),
+                    declared_outcomes: vec![OutcomeDecl {
+                        id: "done".parse().unwrap(),
+                        description: "done".into(),
+                        edge_kind_hint: EdgeKind::Forward,
+                        is_terminal: false,
+                        ledger_effect: surge_core::LedgerEffect::default(),
+                    }],
+                    config: NodeConfig::Agent(config),
+                },
+            ),
+            (
+                end.clone(),
+                Node {
+                    id: end.clone(),
+                    position: Position::default(),
+                    declared_outcomes: vec![],
+                    config: NodeConfig::Terminal(surge_core::terminal_config::TerminalConfig {
+                        kind: surge_core::terminal_config::TerminalKind::Success,
+                        message: None,
+                    }),
+                },
+            ),
+        ]);
+        surge_core::graph::Graph {
+            schema_version: surge_core::graph::SCHEMA_VERSION,
+            metadata: surge_core::graph::GraphMetadata::new("recovery", chrono::Utc::now()),
+            start: agent.clone(),
+            nodes,
+            edges: vec![Edge {
+                id: "e_done".parse().unwrap(),
+                from: PortRef {
+                    node: agent,
+                    outcome: "done".parse().unwrap(),
+                },
+                to: end,
+                kind: EdgeKind::Forward,
+                policy: EdgePolicy::default(),
+            }],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    /// A run whose graph references a profile the registry no longer holds
+    /// is flagged before the decision (visible to `--dry-run`), never
+    /// resumed into a refusal and never failed (#97).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_admission_would_refuse_is_flagged_not_resumed() {
+        use surge_core::run_event::{EventPayload, VersionedEventPayload};
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let worktree = tmp.path().join("checkout");
+            std::fs::create_dir_all(&worktree).unwrap();
+            let run = RunId::new();
+            let writer = storage.create_run(run, &worktree, None).await.unwrap();
+            let graph = graph_referencing("removed-profile@1.0");
+            writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::PipelineMaterialized {
+                        graph_hash: surge_core::ContentHash::compute(
+                            &serde_json::to_vec(&graph).unwrap(),
+                        ),
+                        graph: Box::new(graph),
+                    },
+                ))
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+
+            let mut options = opts(tmp.path().join("worktrees"));
+            let structural = plan_recovery(&storage, &options, &HashSet::new())
+                .await
+                .unwrap();
+            assert_eq!(structural.decisions[0].action, RecoveryAction::Resume);
+
+            options.profile_registry = Some(std::sync::Arc::new(
+                surge_orchestrator::profile_loader::ProfileRegistry::new(
+                    surge_orchestrator::profile_loader::DiskProfileSet::empty(),
+                ),
+            ));
+            let report = plan_recovery(&storage, &options, &HashSet::new())
+                .await
+                .unwrap();
+            let decision = &report.decisions[0];
+            assert_eq!(decision.action, RecoveryAction::FlagResumeRefused);
+            assert!(
+                decision
+                    .resume_refusal
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("removed-profile")),
+                "{:?}",
+                decision.resume_refusal
+            );
+            let outcome = execute_recovery(&report, &NoEffects, true).await;
+            assert_eq!(outcome.flagged_resume_refused, 1);
+            assert_eq!(outcome.resumed, 0);
+        }
+        tmp.close().unwrap();
+    }
+
+    /// Dry-run effects that must never be called.
+    struct NoEffects;
+
+    #[async_trait::async_trait]
+    impl RecoveryEffects for NoEffects {
+        async fn resume(&self, _: &RunId, _: &std::path::Path) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
+        async fn mark_failed(&self, _: &RunId, _: &str) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
+        async fn reconcile_terminal(&self, _: &RunId, _: TerminalKind) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
+        async fn flag_terminal_conflict(&self, _: &RunId, _: u64, _: u64) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
+        async fn flag_stuck(&self, _: &RunId, _: i64) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
+        async fn flag_resume_refused(&self, _: &RunId, _: &str) -> Result<(), String> {
+            unreachable!("dry-run")
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1230,6 +1481,7 @@ mod decide_action_tests {
             already_active: false,
             parked_is_due: false,
             parked_wake_at_ms: None,
+            resume_refusal: None,
         }
     }
 
@@ -1367,6 +1619,7 @@ mod decide_action_tests {
             registry_status: RunStatus::Parked,
             parked_is_due: false,
             parked_wake_at_ms: Some(NOW + HOUR_MS),
+            resume_refusal: None,
             ..healthy_crashed()
         };
         assert_eq!(
@@ -1388,6 +1641,7 @@ mod decide_action_tests {
             registry_status: RunStatus::Parked,
             parked_is_due: true,
             parked_wake_at_ms: Some(NOW - HOUR_MS),
+            resume_refusal: None,
             ..healthy_crashed()
         };
         assert_eq!(decide_action(&facts, NOW, STUCK), RecoveryAction::Resume);
@@ -1404,6 +1658,7 @@ mod decide_action_tests {
             registry_status: RunStatus::Parked,
             parked_is_due: false,
             parked_wake_at_ms: Some(NOW + HOUR_MS),
+            resume_refusal: None,
             last_event_ms: Some(NOW - 100 * HOUR_MS), // far beyond STUCK (24h)
             ..healthy_crashed()
         };

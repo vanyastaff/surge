@@ -54,7 +54,7 @@ async fn load(runs: MissionRuns) -> Result<Mission, String> {
     };
     let roadmap: Option<RoadmapArtifact> = runs
         .planning
-        .and_then(|p| crate::roadmap_source::read_run_artifact(&home, p, "roadmap_toml"))
+        .and_then(|p| crate::roadmap_source::read_run_roadmap(&home, p))
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| toml::from_str(&text).ok());
     Ok(mission::fold(&planning, &implementation, roadmap.as_ref()))

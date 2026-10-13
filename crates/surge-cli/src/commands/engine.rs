@@ -528,7 +528,6 @@ async fn follow_log_from(run_id: RunId, since_seq: u64) -> Result<u64> {
 /// `N` and print the resulting run state. CLI mirror of the replay
 /// scrubber over the same fold primitive the engine/cockpit use.
 async fn replay_command(run_id: String, seq: Option<u64>, format: OutputFormat) -> Result<()> {
-    use surge_core::run_event::EventPayload;
     use surge_orchestrator::engine::build_replay_view;
     use surge_persistence::runs::{EventSeq, RunReader, aggregate_status};
 
@@ -546,12 +545,27 @@ async fn replay_command(run_id: String, seq: Option<u64>, format: OutputFormat) 
     let events = reader.read_events(EventSeq(0)..end).await?;
     let snap = aggregate_status(id, &events);
 
-    // The graph the run folds to at the cutoff: the last graph-bearing event.
-    let graph = events.iter().rev().find_map(|e| match e.payload.payload() {
-        EventPayload::PipelineMaterialized { graph, .. }
-        | EventPayload::GraphRevisionAccepted { graph, .. } => Some((**graph).clone()),
-        _ => None,
-    });
+    // The graph in force at the cutoff (#100): the execution state's rule
+    // (first materialization, then applied revisions), never the last
+    // graph-bearing event, which for a bootstrap run is its child's graph.
+    // A log whose checkpoint is unusable is still drawn, on the first
+    // materialization.
+    let position = match seq {
+        Some(n) => surge_orchestrator::engine::execution_state::Position::AtSeq(n),
+        None => surge_orchestrator::engine::execution_state::Position::Latest,
+    };
+    let graph = match surge_orchestrator::engine::execution_state::load(&reader, position).await {
+        Ok(state) => Some(state.graph),
+        Err(error) => {
+            // Still draw the run, but say the graph shown may predate applied
+            // revisions: the logs that reach here are the ones being debugged.
+            eprintln!(
+                "warning: execution state of {run_id} could not be rebuilt ({error}); \
+                 showing the first materialized graph"
+            );
+            surge_orchestrator::engine::execution_state::graph_in_force(&events, 0)
+        },
+    };
     let view = graph.as_ref().map(|g| build_replay_view(g, &events));
 
     let seq_label = if cutoff == u64::MAX {
@@ -693,6 +707,13 @@ async fn fork_command(
     println!("forked {parent} @ seq {seq}");
     println!("  new run:       {}", outcome.new_run);
     println!("  events copied: {}", outcome.copied_events);
+    if outcome.cursor_source
+        == surge_orchestrator::engine::execution_state::CursorSource::GraphStart
+    {
+        println!(
+            "  note: the prefix has no execution checkpoint; the fork starts at the graph start and re-enters the first stage"
+        );
+    }
     println!("  worktree:      {}", destination.display());
     if !prompt.is_empty() || !profile.is_empty() {
         println!(

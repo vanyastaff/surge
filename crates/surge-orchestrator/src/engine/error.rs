@@ -21,6 +21,36 @@ pub enum EngineError {
     #[error("run is already active in this process: {0}")]
     RunAlreadyActive(RunId),
 
+    /// Run admission (#97): an untracked start or resume of a reserved task
+    /// run, or a task start/resume without a valid launch claim. Only the
+    /// owning host can drive a task.
+    #[error("task ownership required: {0}")]
+    OwnershipRequired(String),
+
+    /// Run admission (#97): a suspended task has no Continue reservation for
+    /// its current attempt generation, so a stale Continue cannot restart it.
+    #[error("suspended task requires its durable Continue reservation for generation {generation}")]
+    StaleContinue {
+        /// The claim's attempt generation.
+        generation: u64,
+    },
+
+    /// Run admission (#97): a resumed run's graph no longer validates against
+    /// the current profile registry (for example a profile it references was
+    /// removed while it was parked). Operator-fixable; never fails the run.
+    #[error("resume refused: the run's graph no longer validates: {0}")]
+    ResumeGraphInvalid(String),
+
+    /// Run admission (#98): a follow-up run's bootstrap handoff was refused
+    /// (an invalid plan, or a parent whose completion is not confirmed).
+    #[error("bootstrap handoff refused: {0}")]
+    BootstrapHandoff(crate::bootstrap::handoff::HandoffRejection),
+
+    /// Run admission (#97, ADR-0021): a prior MCP process group of the run
+    /// could not be stopped or its ownership is unclear.
+    #[error("resume refused: prior MCP process group is not stopped: {0}")]
+    McpGroupNotStopped(String),
+
     /// The run's log claims termination more than once (#95): its outcome
     /// is unconfirmed, so resume refuses without side effects — it neither
     /// picks a claim nor re-executes (which would append another).

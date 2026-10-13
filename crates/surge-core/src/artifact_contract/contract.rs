@@ -89,27 +89,14 @@ pub struct ParseArtifactKindError {
 impl FromStr for ArtifactKind {
     type Err = ParseArtifactKindError;
 
+    /// Delegates to the one name authority ([`super::artifact_name`]), so
+    /// every spelling a producer can emit (`roadmap_toml` included) parses.
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            "description" | "description-md" => Ok(Self::Description),
-            "requirements" | "requirements-md" => Ok(Self::Requirements),
-            "roadmap" | "roadmap-md" | "roadmap-toml" => Ok(Self::Roadmap),
-            "roadmap-patch" | "roadmap_patch" | "roadmap-patch-toml" => Ok(Self::RoadmapPatch),
-            "discovered-tasks" | "discovered_tasks" | "discovered-tasks-toml" => {
-                Ok(Self::DiscoveredTasks)
-            },
-            "verification-report" | "verification_report" | "verification-report-toml" => {
-                Ok(Self::VerificationReport)
-            },
-            "spec" | "spec-md" | "spec-toml" => Ok(Self::Spec),
-            "adr" | "architecture-decision-record" => Ok(Self::Adr),
-            "story" | "story-file" => Ok(Self::Story),
-            "plan" | "implementation-plan" => Ok(Self::Plan),
-            "flow" | "flow-toml" => Ok(Self::Flow),
-            _ => Err(ParseArtifactKindError {
+        super::artifact_name(input)
+            .map(|name| name.kind)
+            .ok_or_else(|| ParseArtifactKindError {
                 input: input.to_owned(),
-            }),
-        }
+            })
     }
 }
 

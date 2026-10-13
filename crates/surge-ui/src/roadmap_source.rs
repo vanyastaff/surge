@@ -3,7 +3,7 @@
 //! A project's roadmap lives in one of two places:
 //! 1. a `roadmap.toml` checked into the project (or `.surge/roadmap.toml`);
 //! 2. the plan a bootstrap operation wrote for this project — the
-//!    `roadmap_toml` artifact of its planning run.
+//!    machine roadmap of its planning run (any producer spelling).
 //!
 //! A plan alone says every task is pending. For (2) the implementation run's
 //! task ledger is overlaid, so a task reads "completed · verified" only when
@@ -61,13 +61,49 @@ pub fn project_file(root: &Path) -> Option<LoadedRoadmap> {
 /// Read a named artifact of `run_id` straight from the content-addressed
 /// store layout (`runs/<run>/artifacts/index.json` → `<hex>`).
 pub fn read_run_artifact(surge_home: &Path, run_id: RunId, name: &str) -> Option<Vec<u8>> {
+    let (dir, index) = artifact_index(surge_home, run_id)?;
+    read_verified(&dir, index.get(name)?)
+}
+
+/// The run's machine-readable roadmap, under whatever spelling the planner
+/// produced it (`roadmap`, `roadmap.toml`, `roadmap_toml`, …), resolved by the
+/// one artifact-name authority (#98). Competing spellings with different
+/// content are ambiguous and read as absent rather than guessed.
+pub fn read_run_roadmap(surge_home: &Path, run_id: RunId) -> Option<Vec<u8>> {
+    use surge_core::artifact_contract::{ArtifactFormat, ArtifactKind, artifact_name};
+    let (dir, index) = artifact_index(surge_home, run_id)?;
+    let mut hashes: Vec<&String> = index
+        .iter()
+        .filter(|(name, _)| {
+            artifact_name(name).is_some_and(|name| {
+                name.kind == ArtifactKind::Roadmap
+                    && name.effective_format() == ArtifactFormat::Toml
+            })
+        })
+        .map(|(_, hash)| hash)
+        .collect();
+    hashes.sort();
+    hashes.dedup();
+    match hashes.as_slice() {
+        [hash] => read_verified(&dir, hash),
+        _ => None,
+    }
+}
+
+fn artifact_index(
+    surge_home: &Path,
+    run_id: RunId,
+) -> Option<(std::path::PathBuf, HashMap<String, String>)> {
     let dir = surge_home
         .join("runs")
         .join(run_id.to_string())
         .join("artifacts");
-    let index: HashMap<String, String> =
-        serde_json::from_slice(&std::fs::read(dir.join("index.json")).ok()?).ok()?;
-    let hash: ContentHash = index.get(name)?.parse().ok()?;
+    let index = serde_json::from_slice(&std::fs::read(dir.join("index.json")).ok()?).ok()?;
+    Some((dir, index))
+}
+
+fn read_verified(dir: &Path, hash: &str) -> Option<Vec<u8>> {
+    let hash: ContentHash = hash.parse().ok()?;
     let bytes = std::fs::read(dir.join(hash.to_hex())).ok()?;
     // The store is content-addressed; a mismatch means a torn or foreign file.
     (ContentHash::compute(&bytes) == hash).then_some(bytes)
@@ -164,7 +200,7 @@ pub async fn planned(project_root: &Path, surge_home: &Path) -> Option<LoadedRoa
     use surge_persistence::task_ledger::TaskLedgerIndexFilter;
 
     for op in operations(project_root, surge_home).await {
-        let Some(bytes) = read_run_artifact(surge_home, op.planning_run, "roadmap_toml") else {
+        let Some(bytes) = read_run_roadmap(surge_home, op.planning_run) else {
             continue;
         };
         let Ok(text) = String::from_utf8(bytes) else {
@@ -206,7 +242,7 @@ pub async fn planned(project_root: &Path, surge_home: &Path) -> Option<LoadedRoa
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_ledger, read_run_artifact, rollup};
+    use super::{apply_ledger, read_run_artifact, read_run_roadmap, rollup};
     use std::collections::HashMap;
     use surge_core::RunId;
     use surge_core::content_hash::ContentHash;
@@ -279,8 +315,56 @@ status = "pending"
         );
         assert!(read_run_artifact(home.path(), run, "missing").is_none());
 
+        // The roadmap reader finds it under the planner's spelling.
+        assert_eq!(
+            read_run_roadmap(home.path(), run).as_deref(),
+            Some(PLAN.as_bytes())
+        );
+
         // A file whose bytes no longer match its address is not trusted.
         std::fs::write(dir.join(hash.to_hex()), "tampered").unwrap();
         assert!(read_run_artifact(home.path(), run, "roadmap_toml").is_none());
+        assert!(read_run_roadmap(home.path(), run).is_none());
+    }
+
+    #[test]
+    fn roadmap_is_found_under_every_spelling_and_never_guessed() {
+        let home = tempfile::tempdir().unwrap();
+        let run = RunId::new();
+        let dir = home
+            .path()
+            .join("runs")
+            .join(run.to_string())
+            .join("artifacts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hash = ContentHash::compute(PLAN.as_bytes());
+        std::fs::write(dir.join(hash.to_hex()), PLAN).unwrap();
+        let other = ContentHash::compute(b"a different roadmap");
+        std::fs::write(dir.join(other.to_hex()), "a different roadmap").unwrap();
+        let markdown = ContentHash::compute(b"# Roadmap");
+        std::fs::write(dir.join(markdown.to_hex()), "# Roadmap").unwrap();
+        for spelling in ["roadmap", "roadmap.toml", "roadmap-toml", "roadmap_toml"] {
+            std::fs::write(
+                dir.join("index.json"),
+                serde_json::json!({ spelling: hash.to_string(), "roadmap_md": markdown.to_string() })
+                    .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                read_run_roadmap(home.path(), run).as_deref(),
+                Some(PLAN.as_bytes()),
+                "{spelling}"
+            );
+        }
+        std::fs::write(
+            dir.join("index.json"),
+            serde_json::json!({ "roadmap": hash.to_string(), "roadmap_toml": other.to_string() })
+                .to_string(),
+        )
+        .unwrap();
+        assert!(
+            read_run_roadmap(home.path(), run).is_none(),
+            "competing roadmaps are ambiguous"
+        );
     }
 }

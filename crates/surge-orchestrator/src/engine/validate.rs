@@ -95,6 +95,27 @@ pub(crate) fn validate_agent_inputs(
     Ok(())
 }
 
+/// Validate a graph against a profile registry: structure, profile
+/// references and required profile inputs; structure only without a
+/// registry. The one graph check run admission applies to every kind (#97),
+/// and the one daemon recovery applies before it would resume a run, so the
+/// two can never disagree about whether a resume will be admitted.
+///
+/// # Errors
+/// The first validation failure.
+pub fn validate_graph_against(
+    graph: &Graph,
+    registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Result<(), EngineError> {
+    match registry {
+        Some(registry) => {
+            validate_for_m6_with_resolver(graph, registry)?;
+            validate_profile_inputs(graph, registry)
+        },
+        None => validate_for_m6(graph),
+    }
+}
+
 /// Validate required profile bindings in the root graph and every loop/subgraph body.
 pub(crate) fn validate_profile_inputs(
     graph: &Graph,

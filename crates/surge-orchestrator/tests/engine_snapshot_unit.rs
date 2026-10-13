@@ -228,9 +228,12 @@ async fn three_node_branch_run_writes_two_snapshots() {
             surge_orchestrator::engine::snapshot::EngineSnapshot::deserialize(&blob).unwrap();
         assert_eq!(snapshot.root_traversal_counts.get("e1"), Some(&1));
         assert_eq!(snapshot.root_traversal_counts.get("e2"), Some(&1));
-        let replayed = surge_orchestrator::engine::replay::replay(&reader)
-            .await
-            .unwrap();
+        let replayed = surge_orchestrator::engine::execution_state::load(
+            &reader,
+            surge_orchestrator::engine::execution_state::Position::Latest,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             replayed
                 .root_traversal_counts

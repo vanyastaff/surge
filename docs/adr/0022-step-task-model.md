@@ -136,3 +136,15 @@ replaying through the loop-frame path.
   of four sources.
 - Phase 1 is additive and fits v1; phases 2–3 change engine control flow and
   can follow v1 without blocking the release.
+
+## Note 2026-10-12 — run admission (#97)
+
+One run admission module, `engine::admission`, admits every run before its first stage. It takes three kinds of input: a fresh untracked run, a replayed untracked run, or a task-claimed start or resume. It returns either an admitted run or a typed rejection. `Engine` keeps only the active-run registry and the spawning of the run task.
+
+Three rules follow for task runs:
+
+- **Task-claimed start trusts the frozen reservation.** The config of a task is validated and frozen once, at reservation time (`Engine::freeze_work_item_config`). That is the task-claimed front half of admission, and it uses the same validation sequence as a fresh start. Task start does not validate again; it checks only the claim and the owned-Flow pending state.
+- **Every resume, replayed or task-claimed, validates the replayed graph against the current profile registry.** This happens before the resume clears a Parked registry row or appends `RunWokeFromPark`. A profile removed while a run was parked is therefore refused at resume, and nothing durable changes. Daemon recovery applies the same check and flags the run (`FlagResumeRefused`); it never fails the run.
+- **Ownership refusals are typed.** An untracked start or resume of a reserved task fails with `EngineError::OwnershipRequired`. A suspended task without a Continue for its current generation fails with `EngineError::StaleContinue`.
+
+Profiles are not snapshotted into a run. Resume validates against the live registry because that is the registry the run will actually execute with.

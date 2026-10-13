@@ -19,7 +19,6 @@
 
 use std::path::{Path, PathBuf};
 
-use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::keys::NodeKey;
 use surge_core::run_event::{BootstrapStage, EscalationCause, EventPayload, VersionedEventPayload};
@@ -284,7 +283,11 @@ pub async fn run_flow_generator_post_processing_with_registry(
         return route_validation_failure(node, memory, edit_loop_cap, writer, feedback).await;
     }
 
-    let graph_hash = ContentHash::compute(text.as_bytes());
+    // The one graph identity (#98), not a hash of the generator's raw text.
+    let graph_hash = match graph.identity() {
+        Ok(identity) => identity,
+        Err(error) => return Err(StageError::Internal(error.to_string())),
+    };
     tracing::info!(
         target: "engine::bootstrap::validation",
         node = %node,

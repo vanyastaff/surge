@@ -14,21 +14,13 @@ async fn bootstrap_multi_milestone_materializes_outer_and_inner_loops() {
 
     harness.wait_for_subscribe_count(1).await;
     harness
-        .complete_agent_with_artifact(
-            0,
-            "description.md",
-            "## Goal\nBuild a three-milestone roadmap.\n",
-        )
+        .complete_agent_with_artifact(0, "description.md", fixtures::bootstrap::VALID_DESCRIPTION)
         .await;
     harness.approve_next_gate().await;
 
     harness.wait_for_subscribe_count(2).await;
     harness
-        .complete_agent_with_artifact(
-            1,
-            "roadmap.md",
-            "## Milestones\n1. Intake\n2. Execution\n3. Review\n",
-        )
+        .complete_agent_with_artifact(1, "roadmap.toml", fixtures::bootstrap::VALID_ROADMAP)
         .await;
     harness.approve_next_gate().await;
 
@@ -43,13 +35,9 @@ async fn bootstrap_multi_milestone_materializes_outer_and_inner_loops() {
     harness.approve_next_gate().await;
 
     let materialized = driver.await.unwrap().expect("bootstrap succeeds");
-    validate_for_m6(&materialized.materialized_graph).unwrap();
-    assert!(has_roadmap_milestone_outer_loop(
-        &materialized.materialized_graph
-    ));
-    assert!(has_current_milestone_task_loop(
-        &materialized.materialized_graph
-    ));
+    validate_for_m6(&materialized.graph).unwrap();
+    assert!(has_roadmap_milestone_outer_loop(&materialized.graph));
+    assert!(has_current_milestone_task_loop(&materialized.graph));
     harness.close();
 }
 
