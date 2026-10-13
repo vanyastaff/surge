@@ -771,27 +771,13 @@ impl SurgeApp {
                 tracing::info!(run_id = %run_id, "per-run event stream attached");
                 // Subscribe first, then replay a read-only durable snapshot.
                 // Live events buffered during hydration are deduplicated by seq.
-                if let Some(home) = surge_core::home::surge_home_dir() {
-                    match surge_persistence::runs::Storage::inspect_existing_run_events(
-                        home.join("runs"), run_id,
-                    ).await {
-                        Ok(events) => cx.update(|cx| {
-                            let _ = state.update(cx, |s, cx| {
-                                let stream = s.run_streams.entry(run_id).or_default();
-                                stream.begin_display_history(run_id, None);
-                                let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
-                                for event in events {
-                                    stream.apply_recorded(&surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
-                                        seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
-                                    }, event.timestamp_ms);
-                                }
-                                stream.finish_display_history(through_seq);
-                                cx.notify();
-                            });
-                        }),
-                        Err(error) => tracing::warn!(%run_id, %error, "could not restore run history"),
-                    }
-                }
+                // A failed read is retried with backoff from this same loop
+                // (#121): while a read runs, live events wait in the channel,
+                // and every event received before it is already durable, so
+                // the replay includes it and nothing is lost.
+                let mut hydration_attempt = 0_u32;
+                let mut hydrated = hydrate_run_history(&state, run_id, cx).await;
+                let mut next_retry = std::time::Instant::now() + history_retry_delay(0);
                 cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| {
                         s.run_streams.entry(run_id).or_default().live = true;
@@ -799,7 +785,26 @@ impl SurgeApp {
                     });
                 });
                 loop {
-                    match rx.recv().await {
+                    // A fixed retry instant: live traffic must not keep
+                    // pushing the next attempt back.
+                    let retry = cx
+                        .background_executor()
+                        .timer(next_retry.saturating_duration_since(std::time::Instant::now()));
+                    let received = tokio::select! {
+                        received = rx.recv() => Some(received),
+                        () = retry, if !hydrated => None,
+                    };
+                    let Some(received) = received else {
+                        hydration_attempt = hydration_attempt.saturating_add(1);
+                        hydrated = hydrate_run_history(&state, run_id, cx).await;
+                        if hydrated {
+                            tracing::info!(%run_id, attempts = hydration_attempt + 1, "run history restored after retry");
+                        } else {
+                            next_retry = std::time::Instant::now() + history_retry_delay(hydration_attempt);
+                        }
+                        continue;
+                    };
+                    match received {
                         Ok(event) => {
                             let alive = cx.update(|cx| {
                                 state
@@ -815,11 +820,15 @@ impl SurgeApp {
                         },
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged");
+                            tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged; restoring history");
                             cx.update(|cx| { let _ = state.update(cx, |s, cx| {
                                 s.run_streams.entry(run_id).or_default().invalidate_display();
                                 cx.notify();
                             }); });
+                            // Dropped events are durable: rebuild from the journal.
+                            hydration_attempt = 0;
+                            hydrated = false;
+                            next_retry = std::time::Instant::now();
                         },
                     }
                 }
@@ -1834,5 +1843,73 @@ mod bootstrap_index_tests {
         std::fs::write(&path, b"{bad").unwrap();
         assert!(SurgeApp::load_bootstrap_index_at(&path).is_empty());
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+/// Backoff before history-restore attempt `attempt + 1` (#121): 0.5 s,
+/// doubling, capped at 30 s.
+fn history_retry_delay(attempt: u32) -> std::time::Duration {
+    const FIRST_MS: u64 = 500;
+    const CAP_MS: u64 = 30_000;
+    let factor = 1_u64.checked_shl(attempt.min(16)).unwrap_or(u64::MAX);
+    std::time::Duration::from_millis(FIRST_MS.saturating_mul(factor).min(CAP_MS))
+}
+
+/// Replay `run_id`'s durable journal into its stream so pending decisions
+/// rest on trusted history. Returns whether the stream now holds it; without
+/// a Surge home there is nothing to read, so that counts as done (retrying
+/// cannot help).
+async fn hydrate_run_history(
+    state: &WeakEntity<AppState>,
+    run_id: surge_core::id::RunId,
+    cx: &mut AsyncApp,
+) -> bool {
+    let Some(home) = surge_core::home::surge_home_dir() else {
+        tracing::warn!(%run_id, "no Surge home; run history cannot be restored");
+        return true;
+    };
+    match surge_persistence::runs::Storage::inspect_existing_run_events(home.join("runs"), run_id)
+        .await
+    {
+        Ok(events) => {
+            cx.update(|cx| {
+                let _ = state.update(cx, |s, cx| {
+                    let stream = s.run_streams.entry(run_id).or_default();
+                    stream.begin_display_history(run_id, None);
+                    let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
+                    for event in events {
+                        stream.apply_recorded(
+                            &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                                seq: event.seq.as_u64(),
+                                payload: Box::new(event.payload.payload),
+                            },
+                            event.timestamp_ms,
+                        );
+                    }
+                    stream.finish_display_history(through_seq);
+                    cx.notify();
+                });
+            });
+            true
+        },
+        Err(error) => {
+            tracing::warn!(%run_id, %error, "could not restore run history; will retry");
+            false
+        },
+    }
+}
+
+#[cfg(test)]
+mod history_retry_tests {
+    use super::history_retry_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn history_retries_back_off_to_a_cap() {
+        assert_eq!(history_retry_delay(0), Duration::from_millis(500));
+        assert_eq!(history_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(history_retry_delay(3), Duration::from_secs(4));
+        assert_eq!(history_retry_delay(6), Duration::from_secs(30));
+        assert_eq!(history_retry_delay(u32::MAX), Duration::from_secs(30));
     }
 }
