@@ -8,14 +8,19 @@
 use std::sync::Arc;
 
 use surge_core::RunId;
-use surge_core::node::NodeConfig;
-use surge_core::run_state::RunState;
 use surge_persistence::runs::Storage;
 
 use crate::engine::daemon_facade::DaemonEngineFacade;
 use crate::engine::facade::EngineFacade;
 use crate::operator::error::OperatorError;
-use crate::operator::journal::fold_run_state;
+use crate::operator::journal::read_run_events;
+
+mod decisions;
+
+pub use decisions::{
+    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, Incomplete, PendingDecision,
+    PendingDecisions, Retirement,
+};
 
 /// One outcome a `HumanGate` declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +154,8 @@ impl PendingInput {
     }
 }
 
-/// Fold `run_id`'s event log and return what it is blocked on.
+/// Fold `run_id`'s event log and return what it is blocked on: the run's
+/// current human-input request, as [`PendingDecisions`] classifies it.
 ///
 /// # Errors
 /// Returns [`OperatorError`] if the run cannot be read or is not waiting for
@@ -164,59 +170,46 @@ pub async fn inspect_pending(
         .open_run_reader(run_id)
         .await
         .map_err(|source| OperatorError::OpenRun { run_id, source })?;
-    let state = fold_run_state(&reader).await?;
-
-    let RunState::Pipeline {
-        graph,
-        pending_human_input: Some(pending),
-        ..
-    } = &state
-    else {
+    let events = read_run_events(&reader).await?;
+    drop(reader);
+    let decisions = PendingDecisions::from_events(run_id, &events);
+    if let FoldStatus::Incomplete(incomplete) = decisions.status() {
+        let cause = match incomplete {
+            Incomplete::Gap { expected, found } => {
+                surge_core::run_state::FoldError::CorruptedSequence {
+                    expected_seq: *expected,
+                    got_seq: *found,
+                }
+            },
+            Incomplete::Unfoldable(cause) => cause.clone(),
+        };
+        return Err(OperatorError::Fold { run_id, cause });
+    }
+    let Some(pending) = decisions.current_request() else {
         return Err(OperatorError::NotAwaitingInput {
             run_id,
-            attention: state.attention(),
+            attention: decisions.run_state().attention(),
         });
     };
-
-    // Gate options come from the pending node's HumanGate config, if any. The
-    // node may live at the top level or inside a subgraph (e.g. a gate in a
-    // loop body), so search both — a top-level-only lookup shows no options for
-    // subgraph gates and skips client-side outcome validation.
-    let gate_node = graph.find_node(&pending.node);
-    let is_bootstrap_gate = matches!(
-        gate_node.map(|n| &n.config),
-        Some(NodeConfig::HumanGate(cfg))
-            if matches!(cfg.mode, surge_core::human_gate_config::HumanGateMode::Bootstrap { .. })
-    );
-    let tool_call_id = pending
-        .call_id
-        .as_deref()
-        .filter(|id| surge_core::id::GateRequestId::from_event_call_id(id).is_none());
-    let kind = if is_bootstrap_gate {
-        PendingKind::BootstrapGate
-    } else if let Some(call_id) = tool_call_id {
-        PendingKind::ToolCall {
-            call_id: call_id.to_owned(),
-        }
-    } else {
-        let options = match gate_node.map(|n| &n.config) {
-            Some(NodeConfig::HumanGate(cfg)) => cfg
-                .options
-                .iter()
-                .map(|o| GateOption {
-                    outcome: o.outcome.to_string(),
-                    label: o.label.clone(),
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        PendingKind::Gate {
-            call_id: pending.call_id.clone(),
-            options,
-        }
+    let node = pending
+        .node
+        .clone()
+        .ok_or_else(|| OperatorError::NotAwaitingInput {
+            run_id,
+            attention: decisions.run_state().attention(),
+        })?;
+    let kind = match &pending.kind {
+        DecisionKind::BootstrapApproval { .. } => PendingKind::BootstrapGate,
+        DecisionKind::ToolCallInput { call_id } => PendingKind::ToolCall {
+            call_id: call_id.clone(),
+        },
+        kind => PendingKind::Gate {
+            call_id: kind.call_id().map(str::to_owned),
+            options: pending.options.clone(),
+        },
     };
     Ok(PendingInput {
-        node: pending.node.clone(),
+        node,
         prompt: pending.prompt.clone(),
         kind,
     })
