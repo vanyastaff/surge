@@ -74,6 +74,7 @@ pub fn artifact_name(name: &str) -> Option<ArtifactName> {
         "story" | "story-file" => ArtifactKind::Story,
         "plan" | "implementation-plan" => ArtifactKind::Plan,
         "flow" => ArtifactKind::Flow,
+        "triage-decision" => ArtifactKind::TriageDecision,
         _ => return None,
     };
     // The flow graph's TOML is its own format.

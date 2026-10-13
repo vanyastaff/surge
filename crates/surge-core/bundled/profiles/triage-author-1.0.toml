@@ -29,25 +29,37 @@ mode = "read-only"
 id = "enqueued"
 description = "The ticket should be worked on; a priority and summary are recorded."
 edge_kind_hint = "forward"
-required_artifacts = ["triage_decision.json"]
+
+[[outcomes.produced_artifacts]]
+path = "triage_decision.json"
+contract = { kind = "triage-decision", schema_version = 1 }
 
 [[outcomes]]
 id = "duplicate"
 description = "The ticket duplicates an existing one."
 edge_kind_hint = "forward"
-required_artifacts = ["triage_decision.json"]
+
+[[outcomes.produced_artifacts]]
+path = "triage_decision.json"
+contract = { kind = "triage-decision", schema_version = 1 }
 
 [[outcomes]]
 id = "out_of_scope"
 description = "The ticket does not belong to this project."
 edge_kind_hint = "forward"
-required_artifacts = ["triage_decision.json"]
+
+[[outcomes.produced_artifacts]]
+path = "triage_decision.json"
+contract = { kind = "triage-decision", schema_version = 1 }
 
 [[outcomes]]
 id = "unclear"
 description = "The ticket needs a clarifying question before it can be triaged."
 edge_kind_hint = "forward"
-required_artifacts = ["triage_decision.json"]
+
+[[outcomes.produced_artifacts]]
+path = "triage_decision.json"
+contract = { kind = "triage-decision", schema_version = 1 }
 
 [[bindings.expected]]
 name = "triage_input"
@@ -103,7 +115,10 @@ triage_decision.json schema:
 - priority: "urgent" | "high" | "medium" | "low"
 - priority_reasoning: one sentence
 - summary: one sentence
-- question: string (only when decision = "unclear")
+- question: string (required when decision = "unclear")
+- duplicate_of is required when decision = "duplicate".
+
+The decision is checked when you report the outcome; if it is rejected, fix the file and report again.
 {{#if feedback}}
 
 # Feedback from previous attempt

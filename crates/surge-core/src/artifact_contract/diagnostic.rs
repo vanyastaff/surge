@@ -33,6 +33,8 @@ pub enum ArtifactDiagnosticCode {
     UnsupportedSchemaVersion,
     /// TOML content failed to parse.
     InvalidToml,
+    /// JSON content failed to parse or match its typed shape.
+    InvalidJson,
     /// Markdown frontmatter is missing or malformed.
     InvalidFrontmatter,
     /// Acceptance criteria are missing.
@@ -76,6 +78,7 @@ impl ArtifactDiagnosticCode {
             Self::MissingSchemaVersion => "missing_schema_version",
             Self::UnsupportedSchemaVersion => "unsupported_schema_version",
             Self::InvalidToml => "invalid_toml",
+            Self::InvalidJson => "invalid_json",
             Self::InvalidFrontmatter => "invalid_frontmatter",
             Self::MissingAcceptanceCriteria => "missing_acceptance_criteria",
             Self::EmptyAcceptanceCriteria => "empty_acceptance_criteria",

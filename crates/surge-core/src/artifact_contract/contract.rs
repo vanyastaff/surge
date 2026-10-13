@@ -45,6 +45,8 @@ pub enum ArtifactKind {
     Plan,
     /// Executable `flow.toml` graph artifact.
     Flow,
+    /// Triage Author's decision about an intake ticket.
+    TriageDecision,
 }
 
 impl ArtifactKind {
@@ -63,6 +65,7 @@ impl ArtifactKind {
             Self::Story => "story",
             Self::Plan => "plan",
             Self::Flow => "flow",
+            Self::TriageDecision => "triage-decision",
         }
     }
 
@@ -111,6 +114,8 @@ pub enum ArtifactFormat {
     Toml,
     /// `flow.toml` graph parsed as [`crate::graph::Graph`].
     FlowToml,
+    /// JSON parsed into a typed Rust structure.
+    Json,
 }
 
 /// Component that owns the schema-version field for a contract.
@@ -215,6 +220,7 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
         ArtifactKind::Story => STORY_CONTRACT,
         ArtifactKind::Plan => PLAN_CONTRACT,
         ArtifactKind::Flow => FLOW_CONTRACT,
+        ArtifactKind::TriageDecision => TRIAGE_DECISION_CONTRACT,
     }
 }
 
@@ -243,6 +249,7 @@ const ADR_ALIASES: &[&str] = &["adr.md"];
 const STORY_ALIASES: &[&str] = &[];
 const PLAN_ALIASES: &[&str] = &["plan.md"];
 const FLOW_ALIASES: &[&str] = &[];
+const TRIAGE_DECISION_ALIASES: &[&str] = &[];
 
 const DESCRIPTION_CONTRACT: ArtifactContract = ArtifactContract {
     kind: ArtifactKind::Description,
@@ -354,7 +361,17 @@ const FLOW_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: FLOW_ALIASES,
 };
 
-const CONTRACTS: [ArtifactContract; 11] = [
+const TRIAGE_DECISION_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::TriageDecision,
+    canonical_path: crate::triage_decision::TRIAGE_DECISION_PATH,
+    primary_format: ArtifactFormat::Json,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::HumanReadable,
+    validator_kind: "triage-decision",
+    aliases: TRIAGE_DECISION_ALIASES,
+};
+
+const CONTRACTS: [ArtifactContract; 12] = [
     DESCRIPTION_CONTRACT,
     REQUIREMENTS_CONTRACT,
     ROADMAP_CONTRACT,
@@ -366,4 +383,5 @@ const CONTRACTS: [ArtifactContract; 11] = [
     STORY_CONTRACT,
     PLAN_CONTRACT,
     FLOW_CONTRACT,
+    TRIAGE_DECISION_CONTRACT,
 ];
