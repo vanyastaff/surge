@@ -1071,12 +1071,11 @@ fn internal(error: EngineError) -> AdmissionRejection {
     }
 }
 
-fn state_rejection(error: execution_state::ExecutionStateError) -> AdmissionRejection {
-    match error {
-        execution_state::ExecutionStateError::Storage(message) => {
-            AdmissionRejection::Storage(message)
-        },
-        other => AdmissionRejection::Internal(Box::new(EngineError::from(other))),
+fn state_rejection(error: execution_state::ExecutionStateLoadError) -> AdmissionRejection {
+    if error.is_storage() {
+        AdmissionRejection::Storage(error.to_string())
+    } else {
+        AdmissionRejection::Internal(Box::new(EngineError::from(error)))
     }
 }
 

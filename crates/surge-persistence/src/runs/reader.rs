@@ -227,19 +227,19 @@ impl RunReader {
     /// `surge-cli` (`surge run report`, `surge inbox`, `surge resolve`) and
     /// `surge-daemon` (the L3 merge gate's optional Run Report attachment,
     /// spec §10/R31) alike.
+    ///
+    /// # Errors
+    /// Storage failures, and [`StorageError::CorruptTimestamp`] for an event
+    /// whose recorded time is not a valid instant (never shown as 1970).
     pub async fn read_run_events(&self) -> Result<Vec<RunEvent>, StorageError> {
         let run_id = self.run_id;
         let events = self.read_events(EventSeq(0)..EventSeq(u64::MAX)).await?;
-        Ok(events
-            .into_iter()
-            .map(|read| RunEvent {
-                run_id,
-                seq: read.seq.0,
-                timestamp: chrono::DateTime::from_timestamp_millis(read.timestamp_ms)
-                    .unwrap_or_default(),
-                payload: read.payload.payload,
-            })
-            .collect())
+        // The one conversion (#100): a corrupt timestamp is reported, never
+        // shown as 1970.
+        events
+            .iter()
+            .map(|read| read.to_run_event(run_id).map_err(StorageError::from))
+            .collect()
     }
 
     /// Read all rows of the `stage_executions` materialized view.
