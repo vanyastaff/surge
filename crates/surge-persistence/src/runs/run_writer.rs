@@ -36,6 +36,8 @@ pub struct RunWriter {
     pub(crate) closed: bool,
     pub(crate) priority_stop: Option<oneshot::Sender<()>>,
     pub(crate) lifecycle: watch::Receiver<WriterLifecycle>,
+    /// The clock stamping this run's event timestamps.
+    pub(crate) clock: std::sync::Arc<dyn crate::runs::clock::Clock>,
 }
 
 /// Append-only event capability for a run-owned child dispatcher.
@@ -73,6 +75,13 @@ impl RunWriter {
     #[must_use]
     pub fn event_feed(&self) -> super::reader::RunEventFeed {
         super::reader::RunEventFeed::from_writer(self)
+    }
+
+    /// The clock that stamps this run's event timestamps; elapsed time
+    /// measured against a durable event must use it.
+    #[must_use]
+    pub fn clock(&self) -> &dyn crate::runs::clock::Clock {
+        self.clock.as_ref()
     }
 
     /// Give a dispatcher append authority without writer-lifecycle authority.
