@@ -34,8 +34,9 @@
 //! 7. combine the body's result with every cleanup failure into one error.
 //!
 //! A confirmed forced reap keeps a successful body result. Any cleanup
-//! failure — an unconfirmed close above all — fails the stage, so the run
-//! never proceeds while a writer might still touch the worktree.
+//! failure — an unconfirmed close above all — fails the stage: it is never
+//! reported as success. A body that needs operator recovery or was cancelled
+//! keeps that classification, with the cleanup failures in its message.
 //!
 //! A lease dropped without settling (its future was dropped) logs at error
 //! level and schedules a detached best-effort close. It writes no events.
@@ -298,12 +299,14 @@ impl<'a> SessionLease<'a> {
         body: Result<T, StageError>,
         usage: UsageQueue<'_>,
     ) -> Result<T, StageError> {
-        self.settled = true;
         let endpoint = match self.endpoint.take() {
             Some(endpoint) => endpoint.close().await.map_err(|error| error.to_string()),
             None => Ok(()),
         };
         let closed = self.bridge.close_session(self.session).await;
+        // The bridge close has run: from here the backstop has nothing to do.
+        // Dropped before this point, it still schedules the close.
+        self.settled = true;
 
         let mut failures = Vec::new();
         if let Some(turn) = self.turn.take().filter(|turn| !turn.joined) {
@@ -376,10 +379,19 @@ impl<'a> SessionLease<'a> {
                 endpoint: &endpoint,
             }
         );
-        Err(if storage_only {
-            StageError::Storage(message)
-        } else {
-            StageError::Bridge(message)
+        Err(match body {
+            // Routing-significant outcomes survive a cleanup failure: an
+            // operator-recovery stop must not become a retryable or
+            // hook-suppressible failure, and a cancelled run stays cancelled.
+            Err(StageError::RecoveryRequired(reason)) => {
+                StageError::RecoveryRequired(format!("{reason}; {message}"))
+            },
+            Err(StageError::Cancelled) => {
+                tracing::error!(session = %self.session, %message, "cleanup failed for a cancelled stage");
+                StageError::Cancelled
+            },
+            _ if storage_only => StageError::Storage(message),
+            _ => StageError::Bridge(message),
         })
     }
 }

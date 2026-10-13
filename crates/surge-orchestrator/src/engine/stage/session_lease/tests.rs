@@ -521,15 +521,14 @@ async fn turns_run_one_at_a_time() {
         Err(StageError::Internal(_))
     ));
     lease.join_turn().await.unwrap().unwrap();
-    assert!(lease.turn_finished().is_cancelled());
+    let first = lease.turn_finished().clone();
+    assert!(first.is_cancelled());
     lease
         .start_turn(MessageContent::Text("retry".into()))
         .unwrap();
-    assert!(
-        !lease.turn_finished().is_cancelled() || lease.turn_joined(),
-        "a new turn arms a fresh finished signal"
-    );
+    assert!(!lease.turn_joined());
     lease.join_turn().await.unwrap().unwrap();
+    assert!(lease.turn_finished().is_cancelled());
     assert_eq!(fixture.sends().await, 2);
     let mut deferred = usage(&mut events);
     let _ = lease
@@ -604,5 +603,34 @@ async fn a_dropped_lease_schedules_a_close_and_records_nothing() {
         ["opened"],
         "an unsettled lease leaves SessionOpened unpaired"
     );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recovery_stop_stays_recovery_when_cleanup_also_fails() {
+    let fixture = Fixture::new().await;
+    let OpenedLease {
+        lease, mut events, ..
+    } = fixture.open().await;
+    *fixture.mock.next_close_error.lock().await =
+        Some(CloseSessionError::Bridge(BridgeError::CleanupUnconfirmed));
+    let mut deferred = usage(&mut events);
+    let settled = lease
+        .settle(
+            Err::<&str, _>(StageError::RecoveryRequired(
+                "RunContinued: disk full".into(),
+            )),
+            UsageQueue {
+                events: &mut events,
+                deferred: &mut deferred,
+            },
+        )
+        .await;
+    let Err(StageError::RecoveryRequired(reason)) = &settled else {
+        panic!("a cleanup failure must not downgrade a recovery stop: {settled:?}");
+    };
+    assert!(reason.starts_with("RunContinued: disk full"), "{reason}");
+    assert!(reason.contains("session cleanup failed"), "{reason}");
+    drop(events);
     fixture.close().await;
 }
