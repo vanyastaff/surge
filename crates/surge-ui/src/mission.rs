@@ -317,10 +317,19 @@ pub fn fold(
                         }
                     },
                     surge_orchestrator::operator::DecisionChange::Retired { id, .. } => {
+                        // A step stops waiting when its last open question
+                        // retires; an elevation or a sibling request does not
+                        // end the wait.
                         let node = decisions
                             .retired()
                             .find(|(decision, _)| decision.id == id)
-                            .and_then(|(decision, _)| decision.node.clone());
+                            .filter(|(decision, _)| decision.kind.is_human_input())
+                            .and_then(|(decision, _)| decision.node.clone())
+                            .filter(|node| {
+                                !decisions.open().any(|open| {
+                                    open.kind.is_human_input() && open.node.as_ref() == Some(node)
+                                })
+                            });
                         if let Some(node) = node {
                             with_step(&mut mission, &placed, node.as_str(), |s| {
                                 if s.state == StepState::WaitingOnYou {

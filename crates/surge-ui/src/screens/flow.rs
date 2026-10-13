@@ -171,6 +171,7 @@ impl PlanTarget {
             && state.run_in_project(&self.run)
             && state.pending_decisions().iter().any(|(run, decision)| {
                 *run == self.run
+                    && decision.kind().is_human_input()
                     && decision.node == "flow_gate"
                     && self.decision_seq.is_none_or(|seq| seq == decision.seq)
             })
@@ -766,7 +767,11 @@ impl FlowScreen {
                 decision_seq: state
                     .pending_decisions()
                     .iter()
-                    .find(|(run, decision)| *run == plan_run && decision.node == "flow_gate")
+                    .find(|(run, decision)| {
+                        *run == plan_run
+                            && decision.kind().is_human_input()
+                            && decision.node == "flow_gate"
+                    })
                     .map(|(_, decision)| decision.seq),
             });
             let current = state

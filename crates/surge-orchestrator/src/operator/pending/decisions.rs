@@ -161,8 +161,9 @@ impl DecisionKind {
     }
 }
 
-/// A decision's stable identity: the run, the sequence of the event that
-/// opened it, and its kind-specific key.
+/// A decision's stable identity: the run and the sequence of the event that
+/// opened it (unique per decision; the kind-specific key — call id, node,
+/// patch id, cause — is on [`PendingDecision::kind`] and `node`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DecisionId {
     /// The run.
@@ -196,6 +197,7 @@ pub struct PendingDecision {
 }
 
 /// Why a decision is no longer pending.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retirement {
     /// A human-input request was answered.
@@ -211,6 +213,7 @@ pub enum Retirement {
 }
 
 /// What feeding one event changed.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecisionChange {
     /// A decision opened.
@@ -225,6 +228,7 @@ pub enum DecisionChange {
 }
 
 /// Whether the folded set can be trusted.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FoldStatus {
     /// Every event from seq 1 to the last folded one was seen.
@@ -234,6 +238,7 @@ pub enum FoldStatus {
 }
 
 /// Why a fold stopped.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Incomplete {
     /// An event skipped sequences.
@@ -248,6 +253,7 @@ pub enum Incomplete {
 }
 
 /// What [`PendingDecisions::feed`] did with an event.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fed {
     /// The event was folded; these decisions changed.
@@ -348,7 +354,9 @@ impl PendingDecisions {
             .map(|open| &open.decision)
     }
 
-    /// Retired decisions in retirement order, with why.
+    /// Retired decisions in retirement order, with why. Unlike [`Self::open`],
+    /// this stays readable after the fold becomes incomplete: a retirement it
+    /// saw before stopping did happen.
     pub fn retired(&self) -> impl Iterator<Item = (&PendingDecision, Retirement)> {
         self.retired
             .iter()

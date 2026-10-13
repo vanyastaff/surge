@@ -208,6 +208,10 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
     }
 }
 
+/// Correlation key of a run's escalation card: one card per run, updated as
+/// escalations arrive and closed once the fold retires them.
+pub(crate) const ESCALATION_NODE_KEY: &str = "__escalation__";
+
 /// The card, if any, for a decision the shared fold classifies as opening.
 fn opening_action(tap: &RunEventTap, opening: Opening) -> Option<CardAction> {
     let event_kind = tap.event.payload.payload().discriminant_str();
@@ -218,7 +222,7 @@ fn opening_action(tap: &RunEventTap, opening: Opening) -> Option<CardAction> {
         DecisionKind::Escalation { stage, .. } => Some(CardAction {
             event_kind,
             kind: CardKind::Escalation,
-            node_key: "__escalation__".into(),
+            node_key: ESCALATION_NODE_KEY.into(),
             attempt_index: 0,
             payload: ActionPayload::Escalation {
                 stage,

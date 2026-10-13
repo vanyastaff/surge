@@ -55,6 +55,10 @@ enum Source {
         call_id: Option<String>,
         /// Outcome keys the decision accepts, from the operator fold.
         outcomes: Vec<String>,
+        /// Whether the engine would accept an answer now (the operator
+        /// fold's actionability: current request, cursor on its node, run
+        /// not parked).
+        actionable: bool,
     },
     /// A failed or aborted run needing triage.
     FailedRun { run_id: RunId },
@@ -286,6 +290,24 @@ impl InboxScreen {
                     .into_iter()
                     .collect(),
             };
+            let mut evidence = evidence;
+            if p.kind().is_human_input() && !p.decision.actionable {
+                evidence.push((
+                    "Why it can't be answered here".to_string(),
+                    "The run is waiting for capacity or has moved past this step; \
+                     it will ask again if it still needs an answer."
+                        .to_string(),
+                ));
+            }
+            if let Some(deadline) = p.decision.deadline {
+                evidence.push((
+                    "Answer by".to_string(),
+                    deadline
+                        .with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string(),
+                ));
+            }
             let (badge_color, title) = match p.kind() {
                 DecisionKind::Escalation { .. } => (
                     theme::error(),
@@ -332,6 +354,7 @@ impl InboxScreen {
                     kind: Box::new(p.kind().clone()),
                     call_id: p.call_id(),
                     outcomes: p.outcomes(),
+                    actionable: p.decision.actionable,
                 },
             });
         }
@@ -528,7 +551,13 @@ impl InboxScreen {
         edits: Option<surge_core::node_overrides::NodeOverrides>,
         cx: &mut Context<Self>,
     ) -> Option<SubmittedDecision> {
-        let Source::Live { run_id, .. } = &item.source else {
+        // Only what the engine would accept now can be submitted.
+        let Source::Live {
+            run_id,
+            actionable: true,
+            ..
+        } = &item.source
+        else {
             return None;
         };
         let identity = item.identity();
@@ -884,13 +913,15 @@ impl InboxScreen {
         // the engine requires {"outcome": <declared key>} — buttons.
         let is_tool_input = matches!(
             &item.source,
-            Source::Live { kind, .. } if matches!(**kind, DecisionKind::ToolCallInput { .. })
+            Source::Live { kind, actionable: true, .. }
+                if matches!(**kind, DecisionKind::ToolCallInput { .. })
         );
         let is_gate_input = matches!(
             &item.source,
             Source::Live {
                 call_id: Some(_),
                 kind,
+                actionable: true,
                 ..
             } if matches!(
                 **kind,

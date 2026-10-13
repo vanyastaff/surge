@@ -21,7 +21,7 @@ use surge_core::id::RunId;
 use surge_notify::telegram::InboxKeyboardButton;
 use surge_orchestrator::engine::RunEventTap;
 use surge_orchestrator::engine::facade::EngineFacade;
-use surge_orchestrator::operator::{FoldStatus, PendingDecisions};
+use surge_orchestrator::operator::{DecisionKind, FoldStatus, PendingDecisions};
 use surge_persistence::runs::RunStatusSnapshot;
 use surge_persistence::runs::storage::Storage;
 use surge_persistence::telegram::cards::Card;
@@ -354,11 +354,30 @@ fn fold_decisions(
     PendingDecisions::from_events(run_id, &log)
 }
 
+/// The run's escalation card is settled once the shared fold has retired
+/// an escalation (its cause cleared, or the run ended) and none is open.
+fn escalations_settled(card: &Card, events: &[surge_persistence::runs::ReadEvent]) -> bool {
+    let Ok(run_id) = card.run_id.parse::<RunId>() else {
+        return false;
+    };
+    let decisions = fold_decisions(run_id, events);
+    let is_escalation = |kind: &DecisionKind| matches!(kind, DecisionKind::Escalation { .. });
+    decisions
+        .retired()
+        .any(|(decision, _)| is_escalation(&decision.kind))
+        && !decisions
+            .open()
+            .any(|decision| is_escalation(&decision.kind))
+}
+
 /// A newer request alone is never evidence that the card's request was settled.
 /// The decision opened at the card's sequence must have retired, and that
 /// source event must be a gate request for the card's own node.
 fn exact_request_settled(card: &Card, events: &[surge_persistence::runs::ReadEvent]) -> bool {
     use surge_core::EventPayload;
+    if card.node_key == super::dispatch::ESCALATION_NODE_KEY {
+        return escalations_settled(card, events);
+    }
     let Some(source) = events
         .iter()
         .find(|event| i64::try_from(event.seq.0).ok() == Some(card.attempt_index))
