@@ -6,7 +6,9 @@
 //! validation or compilation itself.
 //!
 //! - [`inbox`] groups runs by what they need from the operator.
-//! - [`pending`] inspects a blocked run and builds/delivers the answer.
+//! - [`pending`] folds what a run waits on ([`PendingDecisions`]: the one
+//!   source every surface renders), inspects a blocked run and
+//!   builds/delivers the answer.
 //! - [`backlog`] lists the actionable backlog and the full task ledger.
 //! - [`steer`] queues a steer message; [`memory`] searches project memory.
 //! - [`report`] compiles the Run Report and the OTLP trace.
@@ -30,8 +32,9 @@ pub use inbox::{AttentionGroup, DoneReason, InboxEntry, classify, collect_entrie
 pub use journal::{fold_run_state, read_run_events};
 pub use memory::{MemoryQuery, query_memory};
 pub use pending::{
-    GateOption, OperatorAnswer, PendingInput, PendingKind, ValidatedAnswer, deliver_answer,
-    inspect_pending,
+    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, GateOption, Incomplete, Opening,
+    OperatorAnswer, PendingDecision, PendingDecisions, PendingInput, PendingKind, Retirement,
+    ValidatedAnswer, classify_opening, deliver_answer, inspect_pending,
 };
 pub use report::{compile_report, compile_trace};
 pub use run_id::resolve_run_id;

@@ -83,3 +83,14 @@ Reopen this ADR when **any** of the following becomes true:
 - A new card kind needs to span multiple Telegram messages (e.g., a diff preview that exceeds the 4096-byte body limit and must be split across messages). The `(run_id, node_key, attempt_index)` triple would need to become `(triple, fragment_index)`.
 - The recovery model needs to handle a hostile-network case (Telegram unreachable for hours): today the cockpit simply skips reconcile and retries; if this becomes unacceptable, a per-card "needs-reconcile" flag may be needed.
 - Telegram's Bot API changes its `editMessageText` semantics (e.g., loses the no-op short-circuit, or starts charging the rate-limit budget on no-op edits). At that point the content-hash check would need to short-circuit even earlier in the dispatch path.
+
+## Amendment (2026-10-13, #102): the request sequence is the attempt index
+
+The cockpit stores the durable sequence of the event that opened the
+request in `attempt_index`, not `RunMemory.node_visits`. The sequence is
+equally deterministic under replay, is unique per request attempt (so
+attempt 2 never overwrites attempt 1), and is the identity the operator
+pending-decisions fold (`operator::pending::PendingDecisions`) gives every
+decision (`DecisionId { run, request_seq }`), so the card triple and the
+decision identity agree. The table schema and the `UNIQUE` triple are
+unchanged.

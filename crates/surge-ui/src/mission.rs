@@ -292,7 +292,56 @@ pub fn fold(
     // node → where its latest attempt lives, for completion routing.
     let mut placed: BTreeMap<String, Option<Scope>> = BTreeMap::new();
 
-    for event in implementation {
+    // "Waiting on you" follows the operator fold, so a step stops waiting
+    // exactly when the request is answered, times out or the run ends. The
+    // log is numbered from seq 1; the fold's run identity is not used here.
+    let mut decisions =
+        surge_orchestrator::operator::PendingDecisions::new(surge_core::RunId::new());
+    for (seq, event) in (1u64..).zip(implementation) {
+        let fed = decisions.feed(&surge_core::RunEvent {
+            run_id: decisions.run(),
+            seq,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            payload: event.clone(),
+        });
+        if let surge_orchestrator::operator::Fed::Applied(changes) = fed {
+            for change in changes {
+                match change {
+                    surge_orchestrator::operator::DecisionChange::Opened(decision)
+                        if decision.kind.is_human_input() =>
+                    {
+                        if let Some(node) = &decision.node {
+                            with_step(&mut mission, &placed, node.as_str(), |s| {
+                                s.state = StepState::WaitingOnYou;
+                            });
+                        }
+                    },
+                    surge_orchestrator::operator::DecisionChange::Retired { id, .. } => {
+                        // A step stops waiting when its last open question
+                        // retires; an elevation or a sibling request does not
+                        // end the wait.
+                        let node = decisions
+                            .retired()
+                            .find(|(decision, _)| decision.id == id)
+                            .filter(|(decision, _)| decision.kind.is_human_input())
+                            .and_then(|(decision, _)| decision.node.clone())
+                            .filter(|node| {
+                                !decisions.open().any(|open| {
+                                    open.kind.is_human_input() && open.node.as_ref() == Some(node)
+                                })
+                            });
+                        if let Some(node) = node {
+                            with_step(&mut mission, &placed, node.as_str(), |s| {
+                                if s.state == StepState::WaitingOnYou {
+                                    s.state = StepState::Working;
+                                }
+                            });
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        }
         match event {
             EventPayload::PipelineMaterialized { graph: g, .. } => {
                 if graph.is_none() {
@@ -548,16 +597,6 @@ pub fn fold(
                         }
                     },
                 );
-            },
-            EventPayload::HumanInputRequested { node, .. } => {
-                with_step(&mut mission, &placed, node.as_str(), |s| {
-                    s.state = StepState::WaitingOnYou
-                });
-            },
-            EventPayload::HumanInputResolved { node, .. } => {
-                with_step(&mut mission, &placed, node.as_str(), |s| {
-                    s.state = StepState::Working
-                });
             },
             EventPayload::OutcomeReported { node, summary, .. } => {
                 let summary = summary.trim().to_string();
@@ -894,6 +933,54 @@ mod tests {
             item: toml::from_str(item).unwrap(),
             index,
         }
+    }
+
+    /// A step waits on the operator exactly while its request is open: a
+    /// timeout ends the wait as surely as an answer (#102).
+    #[test]
+    fn a_timed_out_request_stops_waiting_on_you() {
+        let started = EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: "/project".into(),
+            initial_prompt: "build".into(),
+            config: surge_core::RunConfig {
+                budget: Default::default(),
+                sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                auto_pr: false,
+                mcp_servers: Vec::new(),
+                bootstrap_edit_loop_cap: None,
+            },
+        };
+        let request = EventPayload::HumanInputRequested {
+            node: key("final_verify"),
+            session: None,
+            call_id: Some(surge_core::id::GateRequestId::new().to_string()),
+            prompt: "ship it?".into(),
+            schema: None,
+        };
+        let EventPayload::HumanInputRequested { call_id, .. } = &request else {
+            unreachable!()
+        };
+        let timed_out = EventPayload::HumanInputTimedOut {
+            node: key("final_verify"),
+            call_id: call_id.clone(),
+            elapsed_seconds: 60,
+        };
+        let mut events = vec![
+            started,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(graph()),
+                graph_hash: ContentHash::compute(b"g"),
+            },
+            enter("final_verify", 1),
+            request,
+        ];
+        let waiting = fold(&[], &events, None);
+        assert_eq!(waiting.steps[0].state, StepState::WaitingOnYou);
+        events.push(timed_out);
+        let after = fold(&[], &events, None);
+        assert_eq!(after.steps[0].state, StepState::Working);
     }
 
     #[test]

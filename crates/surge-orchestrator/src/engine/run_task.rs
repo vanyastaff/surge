@@ -20,7 +20,6 @@ use crate::roadmap_amendment::{ActiveRunAmendmentOutcome, apply_active_run_patch
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::hooks::HookTrigger;
 use surge_core::id::RunId;
@@ -54,25 +53,16 @@ pub(crate) struct RunTaskParams {
     pub bridge: Arc<dyn BridgeFacade>,
     pub tool_dispatcher: Arc<dyn ToolDispatcher>,
     pub notify_deliverer: Arc<dyn NotifyDeliverer>,
-    pub graph: Graph,
+    /// Where execution stands (#100): cursor, frames, counters, memory, the
+    /// graph in force and its pending revisions, loaded once by admission.
+    pub execution: crate::engine::execution_state::ExecutionState,
+    /// Whether this run task resumes an existing log (as opposed to a fresh
+    /// start right after its startup prefix).
+    pub resumed: bool,
     pub worktree_path: PathBuf,
     pub run_config: EngineRunConfig,
     pub event_tx: broadcast::Sender<EngineRunEvent>,
     pub cancel: CancellationToken,
-    /// Resume from an existing cursor; if None, start at graph.start.
-    pub resume_cursor: Option<Cursor>,
-    /// Resume from existing memory; if None, start fresh.
-    pub resume_memory: Option<RunMemory>,
-    /// Exact durable prefix already folded into resume memory.
-    pub resume_memory_applied_seq: Option<u64>,
-    /// Resume from an existing frame stack; if None, start with an empty stack.
-    pub resume_frames: Option<Vec<crate::engine::frames::Frame>>,
-    /// Resume from existing root traversal counts; if None, start fresh.
-    pub resume_root_traversal_counts:
-        Option<std::collections::HashMap<surge_core::keys::EdgeKey, u32>>,
-    /// Latest accepted graph revision sequence that was durably applied to
-    /// the active graph at a stage boundary.
-    pub resume_applied_graph_revision_seq: Option<u64>,
     /// Node-keyed decision registry (`node_key → PendingGate`). The engine's
     /// resolve side finds the sender and fires it; `engine::human_decision`
     /// owns registration for `HumanGate` nodes and the skill-trust prompt.
@@ -213,10 +203,7 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> ExecutionFinished {
 }
 
 async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
-    let mut state = match initial_execution_state(params).await {
-        Ok(state) => state,
-        Err(error) => return failed(params, error).await,
-    };
+    let mut state = initial_execution_state(params);
 
     // ADR-0021: a resumed run records best-effort cleanup for prior MCP groups
     // that the resume check observed empty.
@@ -238,7 +225,7 @@ async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
     if let Err(outcome) = Box::pin(restore_committed_routes(params, &mut state)).await {
         return outcome;
     }
-    if params.resume_cursor.is_some()
+    if params.resumed
         && !had_suspended_phase
         && state.memory.suspension.is_none()
         && let Some(claim) = params.work_item_claim.as_ref()
@@ -716,7 +703,9 @@ async fn suspend_interrupted_gate(
                 .await;
         },
     };
-    apply_read_events(params.run_id, &events, &mut state.memory);
+    if let Err(error) = apply_read_events(params.run_id, &events, &mut state.memory) {
+        return recovery_required(params, format!("fold interrupted gate identity: {error}")).await;
+    }
     let records: Vec<_> = state
         .memory
         .gate_decisions
@@ -1200,23 +1189,21 @@ struct RunExecutionState {
     proven_capacity_recovery: Option<crate::engine::capacity::CanonicalRuntimeId>,
 }
 
-async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
-    let active_graph = params.graph.clone();
-    let cursor = params.resume_cursor.clone().unwrap_or_else(|| Cursor {
-        node: active_graph.start.clone(),
-        attempt: 1,
-    });
-    let (memory, memory_applied_seq) = match params.resume_memory.clone() {
-        Some(memory) => (memory, params.resume_memory_applied_seq.unwrap_or(0)),
-        None => load_existing_memory(&params.writer, params.run_id)
-            .await
-            .map_err(|e| format!("load existing memory: {e}"))?,
-    };
-    let applied_graph_revision_seq = params.resume_applied_graph_revision_seq.unwrap_or(0);
-    let pending_graph_revisions =
-        load_pending_graph_revisions_after(&params.writer, applied_graph_revision_seq)
-            .await
-            .map_err(|e| format!("load pending graph revisions: {e}"))?;
+fn initial_execution_state(params: &RunTaskParams) -> RunExecutionState {
+    // The loaded execution state is whole (#100); only per-process parts are
+    // added here: the routing graph, the hook executor, the elevation queue
+    // and the budget flags from memory.
+    let crate::engine::execution_state::ExecutionState {
+        cursor,
+        frames,
+        root_traversal_counts,
+        memory,
+        memory_applied_seq,
+        graph: active_graph,
+        applied_graph_revision_seq,
+        pending_graph_revisions,
+        ..
+    } = params.execution.clone();
 
     // Seed the warn-once / breach-once flags from the folded event log so a
     // resumed run does not re-emit a `BudgetWarningRaised` / `BudgetExceeded`
@@ -1224,18 +1211,15 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
     let budget_warned = memory.budget_warning_raised;
     let budget_exceeded_noted = memory.budget_exceeded_noted;
 
-    Ok(RunExecutionState {
+    RunExecutionState {
         routing_graph: surge_core::escalation::with_default_escalation_gates(&active_graph),
         active_graph,
         cursor,
         hook_executor: HookExecutor::new(),
         memory,
         memory_applied_seq,
-        frames: params.resume_frames.clone().unwrap_or_default(),
-        root_traversal_counts: params
-            .resume_root_traversal_counts
-            .clone()
-            .unwrap_or_default(),
+        frames,
+        root_traversal_counts,
         applied_graph_revision_seq,
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
@@ -1245,7 +1229,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         skill_catalog: None,
         restored_quota_entry: None,
         proven_capacity_recovery: None,
-    })
+    }
 }
 
 async fn drain_roadmap_queue(
@@ -2775,7 +2759,8 @@ async fn route_and_snapshot(
         )
         .await
         .map_err(|error| format!("read stage route prefix: {error}"))?;
-    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory);
+    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory)
+        .map_err(|error| format!("fold stage route prefix: {error}"))?;
     prepared
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
@@ -3161,34 +3146,14 @@ fn resolve_profile_for_hooks(
     }
 }
 
-async fn load_existing_memory(
-    writer: &surge_persistence::runs::run_writer::RunWriter,
-    run_id: RunId,
-) -> Result<(RunMemory, u64), surge_persistence::runs::StorageError> {
-    let current = writer.current_seq().await?;
-    let events = writer
-        .read_events(surge_persistence::runs::EventSeq(1)..current.next())
-        .await?;
-    let mut memory = RunMemory::default();
-    let _ = apply_read_events(run_id, &events, &mut memory);
-    Ok((memory, current.as_u64()))
-}
-
 #[derive(Debug, Clone, Default)]
 struct AppliedEventBatch {
     graph_revisions: Vec<ObservedGraphRevision>,
 }
 
-#[derive(Debug, Clone)]
-struct ObservedGraphRevision {
-    seq: u64,
-    patch_id: RoadmapPatchId,
-    target: RoadmapPatchTarget,
-    previous_graph_hash: ContentHash,
-    graph: Graph,
-    graph_hash: ContentHash,
-    active_pickup: ActivePickupPolicy,
-}
+/// A graph revision accepted but not yet applied (#100: one type with the
+/// execution state's pending list).
+type ObservedGraphRevision = crate::engine::execution_state::PendingGraphRevision;
 
 async fn apply_memory_events_after(
     writer: &surge_persistence::runs::run_writer::RunWriter,
@@ -3201,20 +3166,7 @@ async fn apply_memory_events_after(
         return Ok(AppliedEventBatch::default());
     }
     let events = writer.read_events(after.next()..current.next()).await?;
-    Ok(apply_read_events(run_id, &events, memory))
-}
-
-async fn load_pending_graph_revisions_after(
-    writer: &surge_persistence::runs::run_writer::RunWriter,
-    applied_seq: u64,
-) -> Result<Vec<ObservedGraphRevision>, surge_persistence::runs::StorageError> {
-    let current = writer.current_seq().await?;
-    let after = surge_persistence::runs::EventSeq(applied_seq);
-    if current <= after {
-        return Ok(Vec::new());
-    }
-    let events = writer.read_events(after.next()..current.next()).await?;
-    Ok(graph_revisions_from_events(&events))
+    apply_read_events(run_id, &events, memory)
 }
 
 struct RoadmapAmendmentQueue<'a> {
@@ -3278,56 +3230,19 @@ impl RoadmapAmendmentQueue<'_> {
     }
 }
 
+/// Fold events appended during live execution into memory, through the one
+/// shared clock-free conversion (#100).
 fn apply_read_events(
     run_id: RunId,
     events: &[surge_persistence::runs::ReadEvent],
     memory: &mut RunMemory,
-) -> AppliedEventBatch {
-    let batch = AppliedEventBatch {
-        graph_revisions: graph_revisions_from_events(events),
-    };
+) -> Result<AppliedEventBatch, surge_persistence::runs::StorageError> {
     for event in events {
-        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.timestamp_ms)
-            .unwrap_or_else(chrono::Utc::now);
-        memory.apply_event(&RunEvent {
-            run_id,
-            seq: event.seq.as_u64(),
-            timestamp,
-            payload: event.payload.payload.clone(),
-        });
+        memory.apply_event(&event.to_run_event(run_id)?);
     }
-    batch
-}
-
-fn graph_revisions_from_events(
-    events: &[surge_persistence::runs::ReadEvent],
-) -> Vec<ObservedGraphRevision> {
-    events
-        .iter()
-        .filter_map(|event| {
-            if let EventPayload::GraphRevisionAccepted {
-                patch_id,
-                target,
-                previous_graph_hash,
-                graph,
-                graph_hash,
-                active_pickup,
-            } = &event.payload.payload
-            {
-                Some(ObservedGraphRevision {
-                    seq: event.seq.as_u64(),
-                    patch_id: patch_id.clone(),
-                    target: target.clone(),
-                    previous_graph_hash: *previous_graph_hash,
-                    graph: graph.as_ref().clone(),
-                    graph_hash: *graph_hash,
-                    active_pickup: *active_pickup,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
+    Ok(AppliedEventBatch {
+        graph_revisions: crate::engine::execution_state::pending_revisions(events, 0),
+    })
 }
 
 fn maybe_apply_pending_graph_revision(
@@ -3499,6 +3414,7 @@ mod tests {
     use super::*;
     use surge_core::LedgerEffect;
     use surge_core::agent_config::AgentConfig;
+    use surge_core::content_hash::ContentHash;
     use surge_core::edge::EdgeKind;
     use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
     use surge_core::keys::ProfileKey;
@@ -3752,7 +3668,7 @@ mod tests {
             &mut applied_seq,
         );
         assert_eq!(active_graph, revised_graph);
-        assert!(pending.is_empty());
+        assert_eq!(pending.len(), 0);
         assert_eq!(processed_seq, 7);
         assert_eq!(applied_seq, 7);
     }
@@ -3784,7 +3700,7 @@ mod tests {
         );
 
         assert_eq!(active_graph, original_graph);
-        assert!(pending.is_empty());
+        assert_eq!(pending.len(), 0);
         assert_eq!(processed_seq, 7);
         assert_eq!(applied_seq, 0);
     }

@@ -101,6 +101,10 @@ pub enum StorageError {
     #[error("invalid event sequence bound or row")]
     InvalidEventSequence,
 
+    /// A persisted event's timestamp is not a valid instant (#100).
+    #[error(transparent)]
+    CorruptTimestamp(#[from] super::reader::CorruptTimestamp),
+
     /// Connection pool error.
     #[error("pool error: {0}")]
     Pool(String),

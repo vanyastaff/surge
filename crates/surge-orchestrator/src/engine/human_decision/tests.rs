@@ -94,17 +94,42 @@ fn fired<'a>() -> Signal<'a> {
     Box::pin(std::future::ready(()))
 }
 
-/// Answer like `Engine::resolve_gate_input`: commit through the waiter's own
-/// recorder first, then hand the receipt over.
+/// Answer like `Engine::resolve_gate_input`: once the request is durable (a
+/// real operator answers what it has seen), commit through the waiter's own
+/// recorder first, then hand the receipt over. The sender is registered just
+/// before the request becomes durable (ADR-0015), so registration alone is
+/// not a request to answer.
 fn commit_when_registered(
+    fx: &Fixture,
     registry: Arc<GateResolutions>,
     node: NodeKey,
     response: serde_json::Value,
     receipt_response: serde_json::Value,
 ) -> tokio::task::JoinHandle<()> {
+    let storage = Arc::clone(&fx.storage);
+    let run = fx.run;
     tokio::spawn(async move {
         loop {
-            let pending = registry.lock().await.remove(&node);
+            let requested = {
+                let reader = storage.open_run_reader(run).await.unwrap();
+                let events = reader
+                    .read_events(
+                        surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+                    )
+                    .await
+                    .unwrap();
+                events.iter().any(|event| {
+                    matches!(
+                        event.payload.payload,
+                        EventPayload::HumanInputRequested { .. }
+                    )
+                })
+            };
+            let pending = if requested {
+                registry.lock().await.remove(&node)
+            } else {
+                None
+            };
             if let Some(pending) = pending {
                 let seq = pending
                     .recorder
@@ -137,6 +162,7 @@ async fn engine_committed_answer_is_verified_and_returned() {
     let cancel = CancellationToken::new();
     let answer = serde_json::json!({"outcome": "approve"});
     let operator = commit_when_registered(
+        &fx,
         registry.clone(),
         fx.node.clone(),
         answer.clone(),
@@ -173,6 +199,7 @@ async fn contradicting_receipt_is_recovery_required() {
     let registry = gate_registry();
     let cancel = CancellationToken::new();
     let operator = commit_when_registered(
+        &fx,
         registry.clone(),
         fx.node.clone(),
         serde_json::json!({"outcome": "approve"}),

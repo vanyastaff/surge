@@ -450,9 +450,12 @@ async fn resume_refusal(
     registry: Option<&surge_orchestrator::profile_loader::ProfileRegistry>,
 ) -> Option<String> {
     let reader = storage.open_run_reader(run_id).await.ok()?;
-    let replayed = surge_orchestrator::engine::replay::replay(&reader)
-        .await
-        .ok()?;
+    let replayed = surge_orchestrator::engine::execution_state::load(
+        &reader,
+        surge_orchestrator::engine::execution_state::Position::Latest,
+    )
+    .await
+    .ok()?;
     surge_orchestrator::engine::validate::validate_graph_against(&replayed.graph, registry)
         .err()
         .map(|error| error.to_string())

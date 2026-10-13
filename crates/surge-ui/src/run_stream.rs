@@ -87,92 +87,115 @@ pub enum StagePhase {
     Failed,
 }
 
-/// A decision the engine is blocked on (or loudly asking about).
+pub use surge_orchestrator::operator::DecisionKind;
+
+/// A decision the run waits on, as the operator fold
+/// ([`surge_orchestrator::operator::PendingDecisions`]) reports it, with
+/// what the queue displays. The fold owns every matching rule; this view only
+/// renders it.
 #[derive(Clone)]
 pub struct PendingDecision {
+    /// Sequence of the event that opened the decision (its identity).
     pub seq: u64,
+    /// Local request time.
     pub time: String,
+    /// The node it concerns; the patch id for a roadmap patch, `engine` for
+    /// an unattributed escalation.
     pub node: String,
-    pub kind: DecisionKind,
+    /// The folded decision.
+    pub decision: surge_orchestrator::operator::PendingDecision,
 }
 
-#[derive(Clone)]
-pub enum DecisionKind {
-    /// `HumanInputRequested` — resolvable via `resolve_human_input`.
-    ///
-    /// This is the ONLY event a paused gate emits that the operator can
-    /// answer in-band. Namespaced `GateRequestId` identifies a gate; other scoped
-    /// call IDs identify tool requests. None is a legacy unbound request that
-    /// cannot authorize a decision. For gate requests the engine requires `{"outcome": <key>}` where the valid
-    /// keys are declared in `schema.properties.outcome.enum`. Bootstrap
-    /// gates arrive through this same event (their companion
-    /// `BootstrapApprovalRequested` is bookkeeping, not a second
-    /// decision — the fold deliberately does not surface it).
-    HumanInput {
-        call_id: Option<String>,
-        prompt: String,
-        schema: Option<serde_json::Value>,
-    },
-    /// `SandboxElevationRequested` — capability grant.
-    Elevation { capability: String },
-    /// `RoadmapPatchApprovalRequested` — resolved via the
-    /// roadmap-amendment flow (`submit_roadmap_amendment`), not
-    /// `resolve_human_input`; surfaced as informational.
-    RoadmapPatch { patch_id: String },
-    /// `EscalationRequested` — the engine gave up and needs a human.
-    Escalation { reason: String },
-}
-
-impl DecisionKind {
-    /// Short badge label for queue rows.
-    pub fn badge(&self) -> &'static str {
-        match self {
-            Self::HumanInput {
-                call_id: Some(id), ..
-            } if surge_core::id::GateRequestId::from_event_call_id(id).is_some() => "review gate",
-            Self::HumanInput {
-                call_id: Some(_), ..
-            } => "human input",
-            Self::HumanInput { call_id: None, .. } => "review gate",
-            Self::Elevation { .. } => "elevation",
-            Self::RoadmapPatch { .. } => "roadmap patch",
-            Self::Escalation { .. } => "escalation",
+impl PendingDecision {
+    /// Display view of one folded decision.
+    pub fn new(decision: surge_orchestrator::operator::PendingDecision) -> Self {
+        let node = match (&decision.node, &decision.kind) {
+            (Some(node), _) => node.to_string(),
+            (None, DecisionKind::RoadmapPatch { patch_id, .. }) => patch_id.clone(),
+            (None, _) => "engine".to_owned(),
+        };
+        Self {
+            seq: decision.id.request_seq,
+            time: decision
+                .requested_at
+                .with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string(),
+            node,
+            decision,
         }
+    }
+
+    /// What the decision asks.
+    pub fn kind(&self) -> &DecisionKind {
+        &self.decision.kind
+    }
+
+    /// The question or reason shown to the operator.
+    pub fn prompt(&self) -> &str {
+        &self.decision.prompt
+    }
+
+    /// The call id an answer is delivered under, for human input.
+    pub fn call_id(&self) -> Option<String> {
+        self.decision.kind.call_id().map(str::to_owned)
+    }
+
+    /// The outcome keys the decision accepts (empty: free-form or answered
+    /// elsewhere).
+    pub fn outcomes(&self) -> Vec<String> {
+        self.decision
+            .options
+            .iter()
+            .map(|option| option.outcome.clone())
+            .collect()
     }
 
     /// Urgency rank for the Inbox (lower = more urgent).
     pub fn rank(&self) -> u8 {
-        match self {
-            Self::Escalation { .. } => 0,
-            Self::Elevation { .. } => 1,
-            Self::HumanInput { .. } => 2,
-            Self::RoadmapPatch { .. } => 4,
-        }
+        self.decision.kind.rank()
     }
 
-    /// Valid outcome keys for a HumanGate decision, parsed from the
-    /// request schema (`properties.outcome.enum`). Empty when the gate
-    /// allows free-text outcomes or the schema is absent.
-    pub fn gate_outcomes(&self) -> Vec<String> {
-        let Self::HumanInput {
-            schema: Some(schema),
-            ..
-        } = self
-        else {
-            return Vec::new();
-        };
-        if schema.get("x-surge-bootstrap-stage").is_some() {
-            return vec!["approve".into(), "edit".into(), "reject".into()];
+    /// The bootstrap stage under review, for a bootstrap approval.
+    pub fn bootstrap_stage(&self) -> Option<surge_core::run_event::BootstrapStage> {
+        match &self.decision.kind {
+            DecisionKind::BootstrapApproval { stage, .. } => Some(*stage),
+            _ => None,
         }
-        schema
-            .pointer("/properties/outcome/enum")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+impl PendingDecision {
+    /// A human-input request classified exactly as the operator fold does.
+    pub(crate) fn requested(
+        seq: u64,
+        node: &str,
+        call_id: Option<String>,
+        prompt: &str,
+        schema: Option<serde_json::Value>,
+    ) -> Self {
+        let payload = EventPayload::HumanInputRequested {
+            node: surge_core::keys::NodeKey::try_from(node).unwrap(),
+            session: None,
+            call_id,
+            prompt: prompt.into(),
+            schema,
+        };
+        let opening = surge_orchestrator::operator::classify_opening(&payload, None).unwrap();
+        Self::new(surge_orchestrator::operator::PendingDecision {
+            id: surge_orchestrator::operator::DecisionId {
+                run: surge_core::RunId::new(),
+                request_seq: seq,
+            },
+            requested_at: chrono::Utc::now(),
+            node: opening.node,
+            kind: opening.kind,
+            prompt: opening.prompt,
+            options: opening.options,
+            deadline: None,
+            actionable: true,
+        })
     }
 }
 
@@ -197,8 +220,11 @@ pub struct RunStreamState {
     pub live: bool,
     pub log: VecDeque<RunLogRow>,
     pub stages: Vec<StageRow>,
+    /// Open decisions, published from `decisions` only while the stream's
+    /// history is trusted.
     pub pending: Vec<PendingDecision>,
-    pending_history: Vec<PendingDecision>,
+    /// The operator fold of this run's decisions, fed as events arrive.
+    decisions: Option<surge_orchestrator::operator::PendingDecisions>,
     pending_replay: bool,
     pending_watermark: u64,
     pub tokens_in: u64,
@@ -237,10 +263,10 @@ impl RunStreamState {
         self.ownership_binding_seen = false;
         self.ownership_invalid = false;
         self.registry_status = status.or(self.registry_status);
-        // Rebuild actionable decisions from the full trusted journal below.
-        // Do not expose them until the caller confirms this replay is complete.
+        // Rebuild decisions from the full trusted journal below. Do not
+        // expose them until the caller confirms this replay is complete.
         self.pending.clear();
-        self.pending_history.clear();
+        self.decisions = Some(surge_orchestrator::operator::PendingDecisions::new(run_id));
         self.pending_replay = true;
     }
 
@@ -252,8 +278,12 @@ impl RunStreamState {
         if self.session_history_confirmed()
             && self.display_seq == through_seq
             && through_seq >= self.pending_watermark
+            && self.decisions.as_ref().is_some_and(|decisions| {
+                decisions.last_seq() == through_seq
+                    && *decisions.status() == surge_orchestrator::operator::FoldStatus::Complete
+            })
         {
-            self.pending = std::mem::take(&mut self.pending_history);
+            self.publish_decisions();
             self.pending_watermark = through_seq;
         } else {
             self.invalidate_display();
@@ -271,8 +301,44 @@ impl RunStreamState {
         self.display_state = None;
         self.trusted_work_item = None;
         self.session_history_valid = false;
-        self.pending_history.clear();
+        self.decisions = None;
         self.pending.clear();
+    }
+
+    /// Publish the fold's open set, or nothing when the fold is untrusted.
+    fn publish_decisions(&mut self) {
+        self.pending = self
+            .decisions
+            .as_ref()
+            .filter(|decisions| {
+                *decisions.status() == surge_orchestrator::operator::FoldStatus::Complete
+            })
+            .map(|decisions| {
+                decisions
+                    .open()
+                    .cloned()
+                    .map(PendingDecision::new)
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+
+    /// Feed one durable event to the operator fold.
+    fn feed_decisions(
+        &mut self,
+        seq: u64,
+        at: chrono::DateTime<chrono::Utc>,
+        payload: &EventPayload,
+    ) {
+        let Some(decisions) = self.decisions.as_mut() else {
+            return;
+        };
+        let _ = decisions.feed(&surge_core::RunEvent {
+            run_id: decisions.run(),
+            seq,
+            timestamp: at,
+            payload: payload.clone(),
+        });
     }
 
     pub fn session_history_confirmed(&self) -> bool {
@@ -398,37 +464,33 @@ impl RunStreamState {
     /// Fold one wire event into the view state: log row, stage
     /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
-        self.apply_at(event, chrono::Local::now().format("%H:%M:%S").to_string());
+        self.apply_at(event, chrono::Utc::now());
     }
 
     /// Fold durable history using its recorded time rather than replay time.
     pub fn apply_recorded(&mut self, event: &EngineRunEvent, timestamp_ms: i64) {
-        let time = chrono::DateTime::from_timestamp_millis(timestamp_ms)
-            .map(|time| {
-                time.with_timezone(&chrono::Local)
-                    .format("%H:%M:%S")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "unknown".into());
-        self.apply_at(event, time);
+        match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+            Some(at) => self.apply_at(event, at),
+            None => {
+                // An unreadable durable time cannot date a decision.
+                self.invalidate_display();
+                self.apply_at(event, chrono::Utc::now());
+            },
+        }
     }
 
-    fn apply_at(&mut self, event: &EngineRunEvent, now: String) {
+    fn apply_at(&mut self, event: &EngineRunEvent, at: chrono::DateTime<chrono::Utc>) {
+        let now = at
+            .with_timezone(&chrono::Local)
+            .format("%H:%M:%S")
+            .to_string();
         self.observe_display(event);
         if self.pending_replay
             && let EngineRunEvent::Persisted { seq, payload } = event
             && self.session_history_valid
             && self.display_seq == *seq
         {
-            Self::fold_pending_into(&mut self.pending_history, *seq, &now, payload);
-            if matches!(
-                payload.as_ref(),
-                EventPayload::RunCompleted { .. }
-                    | EventPayload::RunFailed { .. }
-                    | EventPayload::RunAborted { .. }
-            ) {
-                self.pending_history.clear();
-            }
+            self.feed_decisions(*seq, at, payload);
         }
         match event {
             EngineRunEvent::Persisted { seq, payload } => {
@@ -454,24 +516,18 @@ impl RunStreamState {
                 self.last_seq = self.last_seq.max(*seq);
                 self.fold_stages(payload);
                 if !self.pending_replay {
-                    let pending_is_trusted = self.display_run_id.is_none()
-                        || (self.session_history_valid && self.display_seq == *seq);
-                    if pending_is_trusted {
-                        Self::fold_pending_into(&mut self.pending, *seq, &now, payload);
+                    // Decisions are shown only from a fold over a trusted,
+                    // contiguous history; anything else shows none rather
+                    // than stale buttons.
+                    if self.session_history_valid && self.display_seq == *seq {
+                        self.feed_decisions(*seq, at, payload);
+                        self.publish_decisions();
                     } else {
                         self.pending.clear();
                     }
                     self.pending_watermark = self.pending_watermark.max(*seq);
                 }
                 self.fold_cost(payload);
-                if matches!(
-                    payload.as_ref(),
-                    EventPayload::RunCompleted { .. }
-                        | EventPayload::RunFailed { .. }
-                        | EventPayload::RunAborted { .. }
-                ) {
-                    self.pending.clear();
-                }
                 if let Some((kind, tone, text)) = describe(payload) {
                     self.log.push_back(RunLogRow {
                         time: now,
@@ -506,7 +562,7 @@ impl RunStreamState {
                     &EngineRunEvent::StreamError {
                         message: format!("resource settlement failed: {failures:?}"),
                     },
-                    now,
+                    at,
                 );
             },
             EngineRunEvent::Terminal { outcome } => {
@@ -604,101 +660,6 @@ impl RunStreamState {
                 phase,
                 detail,
             });
-        }
-    }
-
-    fn fold_pending_into(
-        list: &mut Vec<PendingDecision>,
-        seq: u64,
-        now: &str,
-        payload: &EventPayload,
-    ) {
-        let push = |list: &mut Vec<PendingDecision>, node: String, kind: DecisionKind| {
-            if list.iter().any(|pending| pending.seq == seq) {
-                return;
-            }
-            list.push(PendingDecision {
-                seq,
-                time: now.to_string(),
-                node,
-                kind,
-            });
-        };
-
-        match payload {
-            EventPayload::HumanInputRequested {
-                node,
-                call_id,
-                prompt,
-                schema,
-                ..
-            } => push(
-                list,
-                node.as_str().to_string(),
-                DecisionKind::HumanInput {
-                    call_id: call_id.clone(),
-                    prompt: prompt.clone(),
-                    schema: schema.clone(),
-                },
-            ),
-            EventPayload::HumanInputResolved { call_id, node, .. }
-            | EventPayload::HumanInputTimedOut { call_id, node, .. } => {
-                list.retain(|p| match &p.kind {
-                    DecisionKind::HumanInput { call_id: c, .. } => {
-                        // A resolution with a call_id retires exactly that
-                        // request; one without retires the (single) gate
-                        // pause on that node. Mixed Some/None never match —
-                        // a specific resolution must not sweep away a
-                        // different, still-pending request on the same node.
-                        let resolved = match (c, call_id) {
-                            (Some(a), Some(b)) => a == b,
-                            (None, None) => p.node == node.as_str(),
-                            _ => false,
-                        };
-                        !resolved
-                    },
-                    _ => true,
-                });
-            },
-            // ApprovalRequested/Decided and BootstrapApprovalRequested/
-            // Decided are bookkeeping companions of the same gate's
-            // HumanInputRequested (human_gate.rs emits both for one
-            // pause) — folding them too would double-count a single
-            // decision, and the bootstrap timeout path never emits a
-            // Decided to clear it. Log-only.
-            EventPayload::SandboxElevationRequested { node, capability } => push(
-                list,
-                node.as_str().to_string(),
-                DecisionKind::Elevation {
-                    capability: capability.clone(),
-                },
-            ),
-            EventPayload::SandboxElevationDecided { node, .. }
-            | EventPayload::SandboxElevationTimedOut { node, .. } => {
-                let n = node.as_str();
-                list.retain(|p| !(matches!(p.kind, DecisionKind::Elevation { .. }) && p.node == n));
-            },
-            EventPayload::RoadmapPatchApprovalRequested { patch_id, .. } => push(
-                list,
-                patch_id.to_string(),
-                DecisionKind::RoadmapPatch {
-                    patch_id: patch_id.to_string(),
-                },
-            ),
-            EventPayload::RoadmapPatchApprovalDecided { patch_id, .. } => {
-                let id = patch_id.to_string();
-                list.retain(
-                    |p| !matches!(&p.kind, DecisionKind::RoadmapPatch { patch_id } if *patch_id == id),
-                );
-            },
-            EventPayload::EscalationRequested { reason, .. } => push(
-                list,
-                "engine".to_string(),
-                DecisionKind::Escalation {
-                    reason: reason.clone(),
-                },
-            ),
-            _ => {},
         }
     }
 
@@ -1206,17 +1167,9 @@ mod tests {
         NodeKey::try_from(name).unwrap()
     }
 
-    fn human_input(node_name: &str, call_id: Option<&str>) -> EventPayload {
-        EventPayload::HumanInputRequested {
-            node: node(node_name),
-            session: None,
-            call_id: call_id.map(str::to_string),
-            prompt: "answer me".into(),
-            schema: None,
-        }
-    }
-
-    fn stream_with_started_run() -> RunStreamState {
+    /// A stream whose history is trusted from `RunStarted` at seq 1: the
+    /// only kind that shows pending decisions.
+    fn trusted_stream() -> RunStreamState {
         let mut stream = RunStreamState::default();
         stream.begin_display_history(surge_core::RunId::new(), None);
         stream.apply(&persisted(
@@ -1239,13 +1192,21 @@ mod tests {
         stream
     }
 
+    fn human_input(node_name: &str, call_id: Option<&str>) -> EventPayload {
+        EventPayload::HumanInputRequested {
+            node: node(node_name),
+            session: None,
+            call_id: call_id.map(str::to_string),
+            prompt: "answer me".into(),
+            schema: None,
+        }
+    }
+
     #[test]
     fn settlement_failure_preserves_pending_decision_and_reports_unconfirmed() {
-        let mut stream = RunStreamState {
-            live: true,
-            ..RunStreamState::default()
-        };
-        stream.apply(&persisted(17, human_input("review", Some("call-1"))));
+        let mut stream = trusted_stream();
+        stream.live = true;
+        stream.apply(&persisted(2, human_input("review", Some("call-1"))));
         stream.apply(&EngineRunEvent::Terminal {
             outcome: surge_orchestrator::engine::handle::RunOutcome::SettlementFailed {
                 original: Box::new(surge_orchestrator::engine::handle::RunOutcome::Completed {
@@ -1264,16 +1225,14 @@ mod tests {
 
     #[test]
     fn stream_failure_preserves_last_durable_decision_without_terminal_claim() {
-        let mut stream = RunStreamState {
-            live: true,
-            ..RunStreamState::default()
-        };
-        stream.apply(&persisted(17, human_input("review", Some("call-1"))));
+        let mut stream = trusted_stream();
+        stream.live = true;
+        stream.apply(&persisted(2, human_input("review", Some("call-1"))));
         stream.apply(&EngineRunEvent::StreamError {
             message: "catch-up storage unavailable".into(),
         });
         assert!(!stream.live);
-        assert_eq!(stream.last_seq, 17);
+        assert_eq!(stream.last_seq, 2);
         assert_eq!(stream.pending.len(), 1);
         assert_eq!(stream.pending[0].node, "review");
         let error = stream.log.back().unwrap();
@@ -1284,19 +1243,19 @@ mod tests {
 
     #[test]
     fn recorded_terminal_uses_durable_time_and_clears_pending() {
-        let mut state = RunStreamState::default();
-        state.apply(&persisted(1, human_input("gate", None)));
-        assert!(!state.pending.is_empty());
+        let mut state = trusted_stream();
+        state.apply(&persisted(2, human_input("gate", None)));
+        assert_eq!(state.pending.len(), 1);
         state.apply_recorded(
             &persisted(
-                2,
+                3,
                 EventPayload::RunAborted {
                     reason: "done".into(),
                 },
             ),
             0,
         );
-        assert!(state.pending.is_empty());
+        assert_eq!(state.pending.len(), 0);
         let expected = chrono::DateTime::from_timestamp_millis(0)
             .unwrap()
             .with_timezone(&chrono::Local)
@@ -1409,71 +1368,6 @@ mod tests {
     }
 
     #[test]
-    fn resolved_with_call_id_removes_only_that_request() {
-        let mut s = stream_with_started_run();
-        s.apply(&persisted(2, human_input("gate_a", Some("call-1"))));
-        s.apply(&persisted(3, human_input("gate_b", Some("call-2"))));
-        assert_eq!(s.pending.len(), 2);
-
-        s.apply(&persisted(
-            4,
-            EventPayload::HumanInputResolved {
-                node: node("gate_a"),
-                call_id: Some("call-1".into()),
-                response: serde_json::Value::Null,
-            },
-        ));
-        assert_eq!(s.pending.len(), 1);
-        assert_eq!(s.pending[0].node, "gate_b");
-    }
-
-    #[test]
-    fn resolved_without_call_id_matches_by_node_only() {
-        // Regression: `None == None` on call_id must NOT remove pending
-        // inputs that belong to a different node.
-        let mut s = stream_with_started_run();
-        s.apply(&persisted(2, human_input("gate_a", None)));
-        s.apply(&persisted(3, human_input("gate_b", None)));
-        assert_eq!(s.pending.len(), 2);
-
-        s.apply(&persisted(
-            4,
-            EventPayload::HumanInputResolved {
-                node: node("gate_a"),
-                call_id: None,
-                response: serde_json::Value::Null,
-            },
-        ));
-        assert_eq!(s.pending.len(), 1, "only gate_a's request may be removed");
-        assert_eq!(s.pending[0].node, "gate_b");
-    }
-
-    #[test]
-    fn resolving_specific_call_id_keeps_none_sibling_on_same_node() {
-        // Regression: a resolution carrying call_id "c1" must not sweep
-        // away a different, still-pending request on the same node that
-        // has no call_id.
-        let mut s = stream_with_started_run();
-        s.apply(&persisted(2, human_input("gate_a", Some("c1"))));
-        s.apply(&persisted(3, human_input("gate_a", None)));
-        assert_eq!(s.pending.len(), 2);
-
-        s.apply(&persisted(
-            4,
-            EventPayload::HumanInputResolved {
-                node: node("gate_a"),
-                call_id: Some("c1".into()),
-                response: serde_json::Value::Null,
-            },
-        ));
-        assert_eq!(s.pending.len(), 1, "only the c1 request may be removed");
-        assert!(matches!(
-            &s.pending[0].kind,
-            DecisionKind::HumanInput { call_id: None, .. }
-        ));
-    }
-
-    #[test]
     fn loop_iteration_clears_previous_stage_rows() {
         // Loop bodies re-enter the same node keys; the strip shows the
         // CURRENT iteration only.
@@ -1509,28 +1403,10 @@ mod tests {
     }
 
     #[test]
-    fn gate_outcomes_parse_schema_enum() {
-        let schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "outcome": { "type": "string", "enum": ["approve", "edit", "reject"] },
-                "comment": { "type": "string" },
-            },
-            "required": ["outcome"],
-        });
-        let kind = DecisionKind::HumanInput {
-            call_id: None,
-            prompt: "gate".into(),
-            schema: Some(schema),
-        };
-        assert_eq!(kind.gate_outcomes(), vec!["approve", "edit", "reject"]);
-    }
-
-    #[test]
     fn tokens_accumulate_and_terminal_clears_pending() {
-        let mut s = RunStreamState::default();
+        let mut s = trusted_stream();
         s.apply(&persisted(
-            1,
+            2,
             EventPayload::TokensConsumed {
                 session: surge_core::SessionId::new(),
                 prompt_tokens: 1000,
@@ -1541,7 +1417,7 @@ mod tests {
             },
         ));
         s.apply(&persisted(
-            2,
+            3,
             EventPayload::TokensConsumed {
                 session: surge_core::SessionId::new(),
                 prompt_tokens: 500,
@@ -1555,13 +1431,13 @@ mod tests {
         assert_eq!(s.tokens_out, 300);
         assert!((s.cost_usd - 0.30).abs() < 1e-9);
 
-        s.apply(&persisted(3, human_input("gate_a", None)));
+        s.apply(&persisted(4, human_input("gate_a", None)));
         assert_eq!(s.pending.len(), 1);
         s.apply(&EngineRunEvent::Terminal {
             outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted {
                 reason: "operator".into(),
             },
         });
-        assert!(s.pending.is_empty(), "terminal run has nothing to decide");
+        assert_eq!(s.pending.len(), 0, "terminal run has nothing to decide");
     }
 }

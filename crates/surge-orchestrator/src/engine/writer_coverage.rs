@@ -185,7 +185,11 @@ pub(crate) async fn stop_and_assess_mcp_cleanup(
         .open_run_reader(run)
         .await
         .map_err(|error| crate::engine::error::EngineError::Storage(error.to_string()))?;
-    let memory = super::replay::replay(&reader).await?.memory;
+    // Memory only (#100): a route-checkpoint problem must not hide behind an
+    // MCP cleanup refusal.
+    let memory =
+        super::execution_state::load_memory(&reader, super::execution_state::Position::Latest)
+            .await?;
     for record in memory.execution_writers.values() {
         if !is_mcp_writer(&record.intent.kind)
             || record.cleanup_confirmed

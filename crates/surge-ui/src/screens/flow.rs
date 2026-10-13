@@ -171,6 +171,7 @@ impl PlanTarget {
             && state.run_in_project(&self.run)
             && state.pending_decisions().iter().any(|(run, decision)| {
                 *run == self.run
+                    && decision.kind().is_human_input()
                     && decision.node == "flow_gate"
                     && self.decision_seq.is_none_or(|seq| seq == decision.seq)
             })
@@ -766,7 +767,11 @@ impl FlowScreen {
                 decision_seq: state
                     .pending_decisions()
                     .iter()
-                    .find(|(run, decision)| *run == plan_run && decision.node == "flow_gate")
+                    .find(|(run, decision)| {
+                        *run == plan_run
+                            && decision.kind().is_human_input()
+                            && decision.node == "flow_gate"
+                    })
                     .map(|(_, decision)| decision.seq),
             });
             let current = state
@@ -1495,16 +1500,15 @@ mod tests {
                 });
                 let mut stream = crate::run_stream::RunStreamState::default();
                 stream.artifacts.insert("flow".into(), path.clone());
-                stream.pending.push(crate::run_stream::PendingDecision {
-                    seq,
-                    time: String::new(),
-                    node: "flow_gate".into(),
-                    kind: crate::run_stream::DecisionKind::HumanInput {
-                        call_id: None,
-                        prompt: "Plan".into(),
-                        schema: None,
-                    },
-                });
+                stream
+                    .pending
+                    .push(crate::run_stream::PendingDecision::requested(
+                        seq,
+                        "flow_gate",
+                        None,
+                        "Plan",
+                        None,
+                    ));
                 state.run_streams.insert(run, stream);
             }
             state
@@ -1563,16 +1567,15 @@ mod tests {
             });
             let mut stream = crate::run_stream::RunStreamState::default();
             stream.artifacts.insert("flow".into(), path);
-            stream.pending.push(crate::run_stream::PendingDecision {
-                seq: 1,
-                time: String::new(),
-                node: "flow_gate".into(),
-                kind: crate::run_stream::DecisionKind::HumanInput {
-                    call_id: None,
-                    prompt: "Plan".into(),
-                    schema: None,
-                },
-            });
+            stream
+                .pending
+                .push(crate::run_stream::PendingDecision::requested(
+                    1,
+                    "flow_gate",
+                    None,
+                    "Plan",
+                    None,
+                ));
             state.run_streams.insert(run, stream);
             state
         });
