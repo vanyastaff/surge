@@ -449,15 +449,7 @@ fn next_edge_key(existing: &mut BTreeSet<EdgeKey>) -> Result<EdgeKey, FlowAmendm
 }
 
 fn item_ref_label(reference: &RoadmapItemRef) -> String {
-    match reference {
-        RoadmapItemRef::Milestone { milestone_id } => milestone_id.to_string(),
-        RoadmapItemRef::Task {
-            milestone_id,
-            task_id,
-        } => {
-            format!("{milestone_id}/{task_id}")
-        },
-    }
+    crate::roadmap_amendment::item_label(reference, crate::roadmap_amendment::ItemLabel::StageSpec)
 }
 
 fn milestone_label(patch_result: &RoadmapPatchApplyResult, milestone_id: &MilestoneId) -> String {
