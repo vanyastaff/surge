@@ -809,3 +809,14 @@ Everything above about *what* the engine decides still holds. What changed is
   written rather than re-resolving it through another registry. No data
   migration: a row left under the builtin key is a real builtin row that the
   next successful builtin dispatch clears or that expires at its reset.
+
+## Addendum 2026-10-12 — the M4 choke point now lives in run admission (#97)
+
+Clearing the Parked registry row (mandatory) and appending `RunWokeFromPark` (best-effort) now happen in `engine::admission`, unchanged in behaviour. At the `Engine` boundary, `Engine::resume_run` is still the choke point every real wake goes through.
+
+The one-shot precheck bypass is now decided by `quota_recovery::ResumeEvidence::bypasses_precheck`, from facts that admission reads once:
+
+- whether the registry row was Parked;
+- for a task run, the execution control read after the claim is validated: its state, its generation and the reason on its fence.
+
+A task run resumed through a capacity Continue bypasses the precheck only when that Continue's generation matches the claim's. Before this change the generation was not checked, so a Continue left by an earlier attempt could arm the bypass.
