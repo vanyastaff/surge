@@ -67,6 +67,7 @@ async fn legacy_recovery_excludes_both_reserved_ids_even_for_future_payloads() {
         stuck_threshold: Duration::from_secs(3600),
         worktrees_root: worktrees,
         now_ms: 0,
+        profile_registry: None,
     };
     for version in [1, 99] {
         storage

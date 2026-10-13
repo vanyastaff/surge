@@ -88,7 +88,7 @@ async fn fixture_owned(command: Option<&str>, owned: bool) -> Fixture {
             id: "passed".parse().unwrap(),
             description: "verification".into(),
             edge_kind_hint: surge_core::edge::EdgeKind::Forward,
-            is_terminal: false,
+            is_terminal: true,
             ledger_effect: surge_core::node::LedgerEffect::Verified,
         }],
         config: surge_core::node::NodeConfig::Terminal(
@@ -99,6 +99,7 @@ async fn fixture_owned(command: Option<&str>, owned: bool) -> Fixture {
         ),
     };
     let mut nodes = BTreeMap::from([(verify.clone(), node)]);
+    let mut edges = Vec::new();
     let start = if let Some(command) = command {
         let id = NodeKey::try_from("later").unwrap();
         let mut config: surge_core::agent_config::AgentConfig =
@@ -118,10 +119,28 @@ async fn fixture_owned(command: Option<&str>, owned: bool) -> Fixture {
             surge_core::node::Node {
                 id: id.clone(),
                 position: Default::default(),
-                declared_outcomes: vec![],
+                declared_outcomes: vec![surge_core::node::OutcomeDecl {
+                    id: "done".parse().unwrap(),
+                    description: "implemented".into(),
+                    edge_kind_hint: surge_core::edge::EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: Default::default(),
+                }],
                 config: surge_core::node::NodeConfig::Agent(config),
             },
         );
+        // Resume validates the graph (#97): the hook-bearing agent must
+        // reach the verification terminal like any real graph.
+        edges.push(surge_core::edge::Edge {
+            id: "e_done".parse().unwrap(),
+            from: surge_core::edge::PortRef {
+                node: id.clone(),
+                outcome: "done".parse().unwrap(),
+            },
+            to: verify.clone(),
+            kind: surge_core::edge::EdgeKind::Forward,
+            policy: Default::default(),
+        });
         id
     } else {
         verify.clone()
@@ -131,7 +150,7 @@ async fn fixture_owned(command: Option<&str>, owned: bool) -> Fixture {
         metadata: surge_core::graph::GraphMetadata::new("verification", chrono::Utc::now()),
         start,
         nodes,
-        edges: vec![],
+        edges,
         subgraphs: Default::default(),
     };
     if owned {

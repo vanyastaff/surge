@@ -19,6 +19,9 @@ enum Source {
     Durable {
         engine: Arc<Engine>,
         storage: Arc<Storage>,
+        /// The in-host facade task runs are admitted through, the same seam
+        /// ordinary runs use (#97).
+        facade: Arc<dyn EngineFacade>,
     },
     Synthetic,
 }
@@ -27,7 +30,14 @@ impl TrackingContext {
     /// Use the actual engine and its storage, never a reconstructed runtime.
     #[must_use]
     pub fn new(engine: Arc<Engine>, storage: Arc<Storage>) -> Self {
-        Self(Source::Durable { engine, storage })
+        let facade: Arc<dyn EngineFacade> = Arc::new(
+            surge_orchestrator::engine::facade::LocalEngineFacade::new(engine.clone()),
+        );
+        Self(Source::Durable {
+            engine,
+            storage,
+            facade,
+        })
     }
     /// Explicit adapter for synthetic facades without a persisted event log.
     #[must_use]
@@ -38,7 +48,9 @@ impl TrackingContext {
     /// Durable host capabilities; synthetic adapters cannot mutate tasks.
     pub(crate) fn task_sources(&self) -> Option<(Arc<Engine>, Arc<Storage>)> {
         match &self.0 {
-            Source::Durable { engine, storage } => Some((engine.clone(), storage.clone())),
+            Source::Durable {
+                engine, storage, ..
+            } => Some((engine.clone(), storage.clone())),
             Source::Synthetic => None,
         }
     }
@@ -50,13 +62,13 @@ impl TrackingContext {
         resume: bool,
     ) -> Result<TrackedRun, EngineError> {
         let prepared = self.prepare(claim.run(), resume).await?;
-        let Some((engine, _)) = self.task_sources() else {
+        let Source::Durable { facade, .. } = &self.0 else {
             return Err(EngineError::Storage("task host unavailable".into()));
         };
         let handle = if resume {
-            engine.resume_work_item(claim).await?
+            facade.resume_work_item(claim).await?
         } else {
-            engine.start_work_item(claim).await?
+            facade.start_work_item(claim).await?
         };
         Ok(TrackedRun { handle, prepared })
     }
@@ -64,7 +76,9 @@ impl TrackingContext {
     async fn prepare(&self, id: RunId, resume: bool) -> Result<Prepared, EngineError> {
         match &self.0 {
             Source::Synthetic => Ok(Prepared::Synthetic),
-            Source::Durable { engine, storage } => {
+            Source::Durable {
+                engine, storage, ..
+            } => {
                 // Subscribe before inspecting/resuming or starting: no start window is unobserved.
                 let tap = engine.subscribe_tap();
                 let last_seq = if resume {

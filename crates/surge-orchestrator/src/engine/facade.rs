@@ -37,6 +37,33 @@ pub trait EngineFacade: Send + Sync {
         worktree_path: PathBuf,
     ) -> Result<RunHandle, EngineError>;
 
+    /// Start a durable task reservation under its launch claim (#97): the
+    /// task-claimed counterpart of [`Self::start_run`], admitted by the same
+    /// run admission. A launch claim is a host-local capability, so only an
+    /// in-host facade implements this; remote callers drive tasks through
+    /// the `WorkItem` command path, which reaches this method on the host.
+    async fn start_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        let _ = claim;
+        Err(EngineError::OperationNotSupported {
+            operation: "start_work_item",
+        })
+    }
+
+    /// Resume a durable task run under its launch claim (#97). See
+    /// [`Self::start_work_item`].
+    async fn resume_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        let _ = claim;
+        Err(EngineError::OperationNotSupported {
+            operation: "resume_work_item",
+        })
+    }
+
     /// Cancel an in-flight run.
     async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError>;
 
@@ -165,6 +192,20 @@ impl EngineFacade for LocalEngineFacade {
         worktree_path: PathBuf,
     ) -> Result<RunHandle, EngineError> {
         self.engine.resume_run(run_id, worktree_path).await
+    }
+
+    async fn start_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        self.engine.start_work_item(claim).await
+    }
+
+    async fn resume_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        self.engine.resume_work_item(claim).await
     }
 
     async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError> {

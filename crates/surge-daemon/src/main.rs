@@ -357,6 +357,7 @@ fn main() -> std::process::ExitCode {
             &broadcast_registry,
             &notifier,
             worktrees_root,
+            Some(profile_registry.clone()),
             now_ms,
         )
         .await;
@@ -365,6 +366,8 @@ fn main() -> std::process::ExitCode {
             reconciled = recovery_outcome.reconciled,
             failed_worktree = recovery_outcome.failed_worktree,
             flagged_stuck = recovery_outcome.flagged_stuck,
+            flagged_conflict = recovery_outcome.flagged_conflict,
+            flagged_resume_refused = recovery_outcome.flagged_resume_refused,
             skipped = recovery_outcome.skipped,
             errors = recovery_outcome.errors,
             "crash recovery pass complete"
