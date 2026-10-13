@@ -366,6 +366,9 @@ async fn request_carries_its_deadline_contract() {
             _ => None,
         })
         .collect();
+    // Release the reader before the fixture removes its directory: an open
+    // handle keeps the run database locked on Windows.
+    drop(reader);
     assert_eq!(
         contracts,
         [serde_json::json!(7000), serde_json::Value::Null]
