@@ -421,7 +421,7 @@ mod tests {
             outcomes,
             ["enqueued", "duplicate", "out_of_scope", "unclear"]
         );
-        assert!(!profile.runtime.agent_id.is_empty());
+        assert_ne!(profile.runtime.agent_id, "");
         assert!(
             profile.hooks.entries.is_empty(),
             "standalone profiles run no hooks"
