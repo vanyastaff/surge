@@ -18,8 +18,8 @@ use crate::operator::journal::read_run_events;
 mod decisions;
 
 pub use decisions::{
-    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, Incomplete, PendingDecision,
-    PendingDecisions, Retirement,
+    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, Incomplete, Opening,
+    PendingDecision, PendingDecisions, Retirement, classify_opening,
 };
 
 /// One outcome a `HumanGate` declares.

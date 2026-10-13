@@ -671,3 +671,42 @@ fn a_tool_call_request_is_actionable_free_form_input() {
     assert!(decision.options.is_empty());
     assert!(decision.actionable);
 }
+
+#[test]
+fn a_single_event_classifies_without_history_as_the_fold_does() {
+    let marker = classify_opening(
+        &EventPayload::HumanInputRequested {
+            node: key(AGENT),
+            session: None,
+            call_id: Some(gate_id()),
+            prompt: "approve?".into(),
+            schema: Some(serde_json::json!({"x-surge-bootstrap-stage": "description"})),
+        },
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        marker.kind,
+        DecisionKind::BootstrapApproval {
+            stage: BootstrapStage::Description,
+            ..
+        }
+    ));
+    let escalation = classify_opening(
+        &EventPayload::EscalationRequested {
+            stage: Some(BootstrapStage::Flow),
+            reason: "edit loop exhausted".into(),
+            cause: EscalationCause::BootstrapEditLoopExhausted,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(escalation.prompt, "edit loop exhausted");
+    let companion = EventPayload::BootstrapApprovalRequested {
+        stage: BootstrapStage::Flow,
+        channel: ApprovalChannel::Desktop {
+            duration: ApprovalDuration::Persistent,
+        },
+    };
+    assert_eq!(classify_opening(&companion, None), None);
+}

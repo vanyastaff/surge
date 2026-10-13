@@ -214,7 +214,7 @@ pub enum Retirement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecisionChange {
     /// A decision opened.
-    Opened(PendingDecision),
+    Opened(Box<PendingDecision>),
     /// A decision retired.
     Retired {
         /// The retired decision.
@@ -412,7 +412,7 @@ impl PendingDecisions {
         let mut changes = Vec::new();
         self.retire_for(event, &mut changes);
         if let Some(open) = self.open_for(event) {
-            changes.push(DecisionChange::Opened(open.decision.clone()));
+            changes.push(DecisionChange::Opened(Box::new(open.decision.clone())));
             self.open.push(open);
         }
         if let EventPayload::StageEntered { node, .. } = &event.payload {
@@ -430,72 +430,25 @@ impl PendingDecisions {
     }
 
     fn open_for(&self, event: &RunEvent) -> Option<Open> {
-        let id = DecisionId {
-            run: self.run,
-            request_seq: event.seq,
-        };
-        let decision = |node, kind, prompt, options, deadline| PendingDecision {
-            id: id.clone(),
-            requested_at: event.timestamp,
+        let graph = self.graph().map(Arc::as_ref);
+        let Opening {
             node,
             kind,
             prompt,
             options,
-            deadline,
-            actionable: false,
-        };
-        let open = |decision| Open {
-            decision,
-            clears: EscalationClears::FinalOutcomeOnly,
-        };
-        match &event.payload {
-            EventPayload::HumanInputRequested {
-                node,
-                call_id,
-                prompt,
-                schema,
-                ..
-            } => {
-                let (kind, options) = self.classify(node, call_id.as_deref(), schema.as_ref());
-                let deadline = self.gate_timeout(node).and_then(|seconds| {
-                    event
-                        .timestamp
-                        .checked_add_signed(chrono::Duration::seconds(i64::from(seconds)))
-                });
-                Some(open(decision(
-                    Some(node.clone()),
-                    kind,
-                    prompt.clone(),
-                    options,
-                    deadline,
-                )))
-            },
-            EventPayload::SandboxElevationRequested { node, capability } => Some(open(decision(
-                Some(node.clone()),
-                DecisionKind::Elevation {
-                    capability: capability.clone(),
-                },
-                format!("{node} requests {capability}"),
-                Vec::new(),
-                None,
-            ))),
-            EventPayload::RoadmapPatchApprovalRequested {
-                patch_id, target, ..
-            } => Some(open(decision(
-                None,
-                DecisionKind::RoadmapPatch {
-                    patch_id: patch_id.to_string(),
-                    target: target.clone(),
-                },
-                format!("roadmap patch {patch_id} awaits approval"),
-                Vec::new(),
-                None,
-            ))),
-            EventPayload::EscalationRequested {
-                stage,
-                reason,
-                cause,
-            } => {
+        } = classify_opening(&event.payload, graph)?;
+        let deadline = node
+            .as_ref()
+            .filter(|_| kind.is_human_input())
+            .and_then(|node| self.gate_timeout(node))
+            .and_then(|seconds| {
+                event
+                    .timestamp
+                    .checked_add_signed(chrono::Duration::seconds(i64::from(seconds)))
+            });
+        // An escalation is attributed to the latest entered stage.
+        let (node, clears) = match &kind {
+            DecisionKind::Escalation { cause, .. } => {
                 let attributed = self.entered.clone();
                 let clears = match cause {
                     EscalationCause::CapacityBlindParkLimitExceeded => {
@@ -513,98 +466,26 @@ impl PendingDecisions {
                         }),
                     _ => EscalationClears::FinalOutcomeOnly,
                 };
-                Some(Open {
-                    decision: decision(
-                        attributed,
-                        DecisionKind::Escalation {
-                            cause: *cause,
-                            stage: *stage,
-                        },
-                        reason.clone(),
-                        Vec::new(),
-                        None,
-                    ),
-                    clears,
-                })
+                (attributed, clears)
             },
-            _ => None,
-        }
-    }
-
-    fn classify(
-        &self,
-        node: &NodeKey,
-        call_id: Option<&str>,
-        schema: Option<&serde_json::Value>,
-    ) -> (DecisionKind, Vec<GateOption>) {
-        let marker = |key: &str| schema.and_then(|schema| schema.get(key));
-        let gate = self.graph().and_then(|graph| match graph.find_node(node) {
-            Some(found) => match &found.config {
-                NodeConfig::HumanGate(config) => Some(config.clone()),
-                _ => None,
-            },
-            None => None,
-        });
-        let stage = marker("x-surge-bootstrap-stage")
-            .and_then(|value| serde_json::from_value::<BootstrapStage>(value.clone()).ok())
-            .or_else(|| match gate.as_ref().map(|config| &config.mode) {
-                Some(HumanGateMode::Bootstrap { stage }) => Some(*stage),
-                _ => None,
-            });
-        if let Some(stage) = stage {
-            return (
-                DecisionKind::BootstrapApproval {
-                    stage,
-                    call_id: call_id.map(str::to_owned),
-                },
-                fixed_options(&[
-                    ("approve", "Approve"),
-                    ("edit", "Edit"),
-                    ("reject", "Reject"),
-                ]),
-            );
-        }
-        if let Some(skills) = marker("x-surge-skill-bindings")
-            .and_then(|value| serde_json::from_value::<Vec<SkillRef>>(value.clone()).ok())
-        {
-            return (
-                DecisionKind::SkillApproval {
-                    call_id: call_id.map(str::to_owned),
-                    skills,
-                },
-                fixed_options(&[("approve", "Approve"), ("reject", "Reject")]),
-            );
-        }
-        let gate_options = || match &gate {
-            Some(config) if !config.options.is_empty() => config
-                .options
-                .iter()
-                .map(|option| GateOption {
-                    outcome: option.outcome.to_string(),
-                    label: option.label.clone(),
-                })
-                .collect(),
-            _ => schema_options(schema),
+            _ => (node, EscalationClears::FinalOutcomeOnly),
         };
-        match call_id {
-            None => (DecisionKind::LegacyUnbound, gate_options()),
-            Some(call_id)
-                if surge_core::id::GateRequestId::from_event_call_id(call_id).is_some() =>
-            {
-                (
-                    DecisionKind::Gate {
-                        call_id: call_id.to_owned(),
-                    },
-                    gate_options(),
-                )
-            },
-            Some(call_id) => (
-                DecisionKind::ToolCallInput {
-                    call_id: call_id.to_owned(),
+        Some(Open {
+            decision: PendingDecision {
+                id: DecisionId {
+                    run: self.run,
+                    request_seq: event.seq,
                 },
-                Vec::new(),
-            ),
-        }
+                requested_at: event.timestamp,
+                node,
+                kind,
+                prompt,
+                options,
+                deadline,
+                actionable: false,
+            },
+            clears,
+        })
     }
 
     fn gate_timeout(&self, node: &NodeKey) -> Option<u32> {
@@ -661,6 +542,153 @@ impl PendingDecisions {
                 kind => current == Some(decision.id.request_seq) && kind.call_id().is_some(),
             };
         }
+    }
+}
+
+/// A decision one event opens, classified from the event alone (and the
+/// run's graph when the caller has it). [`PendingDecisions`] classifies with
+/// this, so a surface that sees single events (the Telegram live dispatch)
+/// classifies exactly as the fold does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Opening {
+    /// The requesting or elevated node; `None` for a roadmap patch and for an
+    /// escalation (the fold attributes escalations to the latest stage).
+    pub node: Option<NodeKey>,
+    /// What it asks.
+    pub kind: DecisionKind,
+    /// The question or reason shown to the operator.
+    pub prompt: String,
+    /// The outcomes it accepts.
+    pub options: Vec<GateOption>,
+}
+
+/// The decision `payload` opens, if any. Without `graph`, a bootstrap-mode
+/// gate is recognised only by its `x-surge-bootstrap-stage` schema marker and
+/// gate options only from the request schema.
+#[must_use]
+pub fn classify_opening(payload: &EventPayload, graph: Option<&Graph>) -> Option<Opening> {
+    match payload {
+        EventPayload::HumanInputRequested {
+            node,
+            call_id,
+            prompt,
+            schema,
+            ..
+        } => {
+            let (kind, options) =
+                classify_request(graph, node, call_id.as_deref(), schema.as_ref());
+            Some(Opening {
+                node: Some(node.clone()),
+                kind,
+                prompt: prompt.clone(),
+                options,
+            })
+        },
+        EventPayload::SandboxElevationRequested { node, capability } => Some(Opening {
+            node: Some(node.clone()),
+            kind: DecisionKind::Elevation {
+                capability: capability.clone(),
+            },
+            prompt: format!("{node} requests {capability}"),
+            options: Vec::new(),
+        }),
+        EventPayload::RoadmapPatchApprovalRequested {
+            patch_id, target, ..
+        } => Some(Opening {
+            node: None,
+            kind: DecisionKind::RoadmapPatch {
+                patch_id: patch_id.to_string(),
+                target: target.clone(),
+            },
+            prompt: format!("roadmap patch {patch_id} awaits approval"),
+            options: Vec::new(),
+        }),
+        EventPayload::EscalationRequested {
+            stage,
+            reason,
+            cause,
+        } => Some(Opening {
+            node: None,
+            kind: DecisionKind::Escalation {
+                cause: *cause,
+                stage: *stage,
+            },
+            prompt: reason.clone(),
+            options: Vec::new(),
+        }),
+        _ => None,
+    }
+}
+
+fn classify_request(
+    graph: Option<&Graph>,
+    node: &NodeKey,
+    call_id: Option<&str>,
+    schema: Option<&serde_json::Value>,
+) -> (DecisionKind, Vec<GateOption>) {
+    let marker = |key: &str| schema.and_then(|schema| schema.get(key));
+    let gate = graph.and_then(|graph| match graph.find_node(node) {
+        Some(found) => match &found.config {
+            NodeConfig::HumanGate(config) => Some(config.clone()),
+            _ => None,
+        },
+        None => None,
+    });
+    let stage = marker("x-surge-bootstrap-stage")
+        .and_then(|value| serde_json::from_value::<BootstrapStage>(value.clone()).ok())
+        .or_else(|| match gate.as_ref().map(|config| &config.mode) {
+            Some(HumanGateMode::Bootstrap { stage }) => Some(*stage),
+            _ => None,
+        });
+    if let Some(stage) = stage {
+        return (
+            DecisionKind::BootstrapApproval {
+                stage,
+                call_id: call_id.map(str::to_owned),
+            },
+            fixed_options(&[
+                ("approve", "Approve"),
+                ("edit", "Edit"),
+                ("reject", "Reject"),
+            ]),
+        );
+    }
+    if let Some(skills) = marker("x-surge-skill-bindings")
+        .and_then(|value| serde_json::from_value::<Vec<SkillRef>>(value.clone()).ok())
+    {
+        return (
+            DecisionKind::SkillApproval {
+                call_id: call_id.map(str::to_owned),
+                skills,
+            },
+            fixed_options(&[("approve", "Approve"), ("reject", "Reject")]),
+        );
+    }
+    let gate_options = || match &gate {
+        Some(config) if !config.options.is_empty() => config
+            .options
+            .iter()
+            .map(|option| GateOption {
+                outcome: option.outcome.to_string(),
+                label: option.label.clone(),
+            })
+            .collect(),
+        _ => schema_options(schema),
+    };
+    match call_id {
+        None => (DecisionKind::LegacyUnbound, gate_options()),
+        Some(call_id) if surge_core::id::GateRequestId::from_event_call_id(call_id).is_some() => (
+            DecisionKind::Gate {
+                call_id: call_id.to_owned(),
+            },
+            gate_options(),
+        ),
+        Some(call_id) => (
+            DecisionKind::ToolCallInput {
+                call_id: call_id.to_owned(),
+            },
+            Vec::new(),
+        ),
     }
 }
 

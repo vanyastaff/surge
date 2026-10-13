@@ -32,9 +32,9 @@ pub use inbox::{AttentionGroup, DoneReason, InboxEntry, classify, collect_entrie
 pub use journal::{fold_run_state, read_run_events};
 pub use memory::{MemoryQuery, query_memory};
 pub use pending::{
-    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, GateOption, Incomplete,
+    DecisionChange, DecisionId, DecisionKind, Fed, FoldStatus, GateOption, Incomplete, Opening,
     OperatorAnswer, PendingDecision, PendingDecisions, PendingInput, PendingKind, Retirement,
-    ValidatedAnswer, deliver_answer, inspect_pending,
+    ValidatedAnswer, classify_opening, deliver_answer, inspect_pending,
 };
 pub use report::{compile_report, compile_trace};
 pub use run_id::resolve_run_id;
