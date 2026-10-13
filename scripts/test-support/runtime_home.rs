@@ -47,8 +47,8 @@ impl FixtureHome {
         } = self;
         #[cfg(windows)]
         {
-            drop(owner);
             const SHARING_VIOLATION: i32 = 32;
+            drop(owner);
             let path = outer.keep();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
