@@ -561,16 +561,15 @@ fn older_inbox_plan_opens_its_exact_run_in_workflows() {
             });
             let mut stream = crate::run_stream::RunStreamState::default();
             stream.artifacts.insert("flow".into(), path);
-            stream.pending.push(crate::run_stream::PendingDecision {
-                seq,
-                time: String::new(),
-                node: "flow_gate".into(),
-                kind: crate::run_stream::DecisionKind::HumanInput {
-                    call_id: Some(format!("gate-{seq}")),
-                    prompt: format!("Review plan {seq}"),
-                    schema: Some(serde_json::json!({"x-surge-bootstrap-stage":"flow"})),
-                },
-            });
+            stream
+                .pending
+                .push(crate::run_stream::PendingDecision::requested(
+                    seq,
+                    "flow_gate",
+                    Some(format!("gate-{seq}")),
+                    &format!("Review plan {seq}"),
+                    Some(serde_json::json!({"x-surge-bootstrap-stage":"flow"})),
+                ));
             state.run_streams.insert(run, stream);
         }
         state

@@ -1495,16 +1495,15 @@ mod tests {
                 });
                 let mut stream = crate::run_stream::RunStreamState::default();
                 stream.artifacts.insert("flow".into(), path.clone());
-                stream.pending.push(crate::run_stream::PendingDecision {
-                    seq,
-                    time: String::new(),
-                    node: "flow_gate".into(),
-                    kind: crate::run_stream::DecisionKind::HumanInput {
-                        call_id: None,
-                        prompt: "Plan".into(),
-                        schema: None,
-                    },
-                });
+                stream
+                    .pending
+                    .push(crate::run_stream::PendingDecision::requested(
+                        seq,
+                        "flow_gate",
+                        None,
+                        "Plan",
+                        None,
+                    ));
                 state.run_streams.insert(run, stream);
             }
             state
@@ -1563,16 +1562,15 @@ mod tests {
             });
             let mut stream = crate::run_stream::RunStreamState::default();
             stream.artifacts.insert("flow".into(), path);
-            stream.pending.push(crate::run_stream::PendingDecision {
-                seq: 1,
-                time: String::new(),
-                node: "flow_gate".into(),
-                kind: crate::run_stream::DecisionKind::HumanInput {
-                    call_id: None,
-                    prompt: "Plan".into(),
-                    schema: None,
-                },
-            });
+            stream
+                .pending
+                .push(crate::run_stream::PendingDecision::requested(
+                    1,
+                    "flow_gate",
+                    None,
+                    "Plan",
+                    None,
+                ));
             state.run_streams.insert(run, stream);
             state
         });
