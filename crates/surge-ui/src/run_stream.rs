@@ -1264,6 +1264,57 @@ mod tests {
         assert_eq!(state.log.back().unwrap().time, expected);
     }
 
+    /// #121: a stream whose first history load failed shows no decisions;
+    /// a later successful load (the app retries) replays the journal, which
+    /// already holds every live event received before it, so the request
+    /// appears, and a duplicate live delivery is ignored.
+    #[test]
+    fn a_late_history_restore_reveals_decisions_without_losing_live_events() {
+        let run = surge_core::RunId::new();
+        let started = persisted(
+            1,
+            EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: "/project".into(),
+                initial_prompt: "late restore".into(),
+                config: surge_core::RunConfig {
+                    budget: Default::default(),
+                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                    mcp_servers: Vec::new(),
+                    bootstrap_edit_loop_cap: None,
+                },
+            },
+        );
+        let request = persisted(2, human_input("review", Some("call-1")));
+
+        // The first restore failed: live events arrive without trusted history.
+        let mut stream = RunStreamState {
+            live: true,
+            ..Default::default()
+        };
+        stream.apply(&request);
+        assert!(
+            stream.pending.is_empty(),
+            "no decisions without trusted history"
+        );
+
+        // The retry reads the journal (seq 1..=2) and replays it.
+        stream.begin_display_history(run, None);
+        for event in [&started, &request] {
+            stream.apply_recorded(event, 1_760_000_000_000);
+        }
+        stream.finish_display_history(2);
+        assert_eq!(stream.pending.len(), 1);
+        assert_eq!(stream.pending[0].node, "review");
+
+        // A live copy of an already-replayed event changes nothing.
+        stream.apply(&request);
+        assert_eq!(stream.pending.len(), 1);
+        assert_eq!(stream.last_seq, 2);
+    }
+
     #[test]
     fn hydration_overlap_does_not_duplicate_or_rewind_events() {
         let mut state = RunStreamState::default();
