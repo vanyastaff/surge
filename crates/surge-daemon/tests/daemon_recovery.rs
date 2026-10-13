@@ -147,6 +147,7 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
         &broadcast,
         &notifier,
         worktrees_root,
+        None,
         now_ms,
     )
     .await;
@@ -197,6 +198,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
         &broadcast,
         &notifier,
         worktrees_root.clone(),
+        None,
         now_ms,
     )
     .await;
@@ -211,6 +213,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
         &broadcast,
         &notifier,
         worktrees_root,
+        None,
         now_ms,
     )
     .await;
@@ -292,6 +295,7 @@ async fn recover_reconciles_log_terminal_run() {
         &broadcast,
         &notifier,
         worktrees_root,
+        None,
         1_700_000_000_000,
     )
     .await;
@@ -349,6 +353,7 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
         &broadcast,
         &notifier,
         worktrees_root,
+        None,
         far_future,
     )
     .await;

@@ -101,10 +101,22 @@ async fn recover(dry_run: bool) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
+    // The same registry the daemon would admit resumes against, so the
+    // preview flags exactly the runs admission would refuse (#97).
+    let profile_registry = match surge_orchestrator::profile_loader::ProfileRegistry::load() {
+        Ok(registry) => Some(std::sync::Arc::new(registry)),
+        Err(error) => {
+            eprintln!(
+                "warning: profile registry failed to load ({error}); checking graph structure only"
+            );
+            None
+        },
+    };
     let opts = RecoveryOptions {
         stuck_threshold: DEFAULT_STUCK_THRESHOLD,
         worktrees_root,
         now_ms,
+        profile_registry,
     };
 
     let report = plan_recovery(&storage, &opts, &std::collections::HashSet::new())
@@ -150,6 +162,12 @@ async fn recover(dry_run: bool) -> Result<()> {
             RecoveryAction::FlagStuck { idle_ms } => {
                 format!("flag stuck (idle ~{}h)", idle_ms / 3_600_000)
             },
+            RecoveryAction::FlagResumeRefused => format!(
+                "flag resume refused ({})",
+                d.resume_refusal
+                    .as_deref()
+                    .unwrap_or("graph no longer validates")
+            ),
             RecoveryAction::SkipTerminal => "skip (terminal)".to_string(),
             RecoveryAction::SkipAlreadyActive => "skip (active)".to_string(),
             RecoveryAction::SkipParked { wake_at_ms } => match wake_at_ms {

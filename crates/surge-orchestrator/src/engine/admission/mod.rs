@@ -387,8 +387,7 @@ impl Admission<'_> {
         working_dir: Option<&Path>,
     ) -> Result<(), AdmissionRejection> {
         use crate::engine::validate::{
-            validate_for_m6, validate_for_m6_with_resolver, validate_loop_seeds,
-            validate_profile_inputs, validate_quota_policy,
+            validate_graph_against, validate_loop_seeds, validate_quota_policy,
         };
         let graph_rejection = |error: EngineError| match rule {
             ValidationRule::Resume => AdmissionRejection::ResumeGraphInvalid(Box::new(error)),
@@ -398,13 +397,8 @@ impl Admission<'_> {
         };
         // A profile registry lets validation resolve profile references and
         // agent-runtime identity (`ProfileNotFound`, `SameRuntimeVerification`).
-        match self.config.profile_registry.as_ref() {
-            Some(registry) => {
-                validate_for_m6_with_resolver(graph, registry.as_ref()).map_err(graph_rejection)?;
-                validate_profile_inputs(graph, registry).map_err(graph_rejection)?;
-            },
-            None => validate_for_m6(graph).map_err(graph_rejection)?,
-        }
+        validate_graph_against(graph, self.config.profile_registry.as_deref())
+            .map_err(graph_rejection)?;
         if rule == ValidationRule::Fresh
             && matches!(
                 self.config.capacity.rotation,
