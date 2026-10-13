@@ -1369,6 +1369,61 @@ async fn durable_terminal_settlement_validates_frozen_requirements_before_releas
     server.await.unwrap().unwrap();
 }
 
+/// Wait until the agent subprocess has received its prompt (the mock writes
+/// `marker`). Fails at once, with the attempt and the wire log, when the
+/// attempt leaves `Reserved`/`Launched` (no prompt will come), so the ceiling is
+/// only a hang guard: spawning an agent and its ACP handshake on a loaded
+/// Windows runner can exceed a few seconds (#122).
+async fn wait_for_prompt(
+    marker: &Path,
+    storage: &Storage,
+    run: surge_core::RunId,
+    wire_log: &Path,
+) {
+    const HANG_GUARD: Duration = Duration::from_secs(60);
+    let diagnostic = || {
+        format!(
+            "attempt={:?}; wire={}",
+            storage
+                .work_items()
+                .for_run(run)
+                .map(|attempt| attempt.map(|attempt| (attempt.state, attempt.diagnostic))),
+            bounded_child_log(wire_log)
+        )
+    };
+    let waited = tokio::time::timeout(HANG_GUARD, async {
+        loop {
+            if marker.exists() {
+                return Ok(());
+            }
+            let inactive = storage
+                .work_items()
+                .for_run(run)
+                .unwrap()
+                .is_some_and(|attempt| {
+                    !matches!(
+                        attempt.state,
+                        surge_core::work_item::WorkItemAttemptState::Reserved
+                            | surge_core::work_item::WorkItemAttemptState::Launched
+                    )
+                });
+            if inactive && !marker.exists() {
+                return Err(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    match waited {
+        Ok(Ok(())) => {},
+        Ok(Err(())) => panic!(
+            "the attempt ended before its agent was prompted: {}",
+            diagnostic()
+        ),
+        Err(_) => panic!("no prompt within {HANG_GUARD:?}: {}", diagnostic()),
+    }
+}
+
 async fn wait_for_attempt_state(
     storage: &Storage,
     run: surge_core::RunId,
@@ -3417,13 +3472,7 @@ async fn suspend_continue_wire_in_home(
     let (engine, cancel, server, socket) =
         cold_wire_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
     request(&socket, serde_json::to_value(start).unwrap()).await;
-    tokio::time::timeout(Duration::from_secs(8), async {
-        while !marker.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_prompt(&marker, &storage, attempt.run, &wire_log).await;
     std::fs::write(
         workspace.path.join("retained-untracked"),
         "preserve on pause",
