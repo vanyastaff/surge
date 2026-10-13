@@ -5,7 +5,7 @@ use crate::history_bypass_fixture::{Fixture, close_registry};
 async fn history_after_actual_settlement_failure_does_not_recover_success() {
     let fixture = Fixture::new().await;
     let recovered = durable_outcome(&fixture.storage, fixture.run).await;
-    fixture.close();
+    fixture.close().await;
     assert!(
         !matches!(recovered, Some(RunOutcome::Completed { .. })),
         "historical recovery authorized success after actual Engine SettlementFailed: {recovered:?}"
@@ -32,7 +32,7 @@ async fn history_after_actual_settlement_failure_does_not_enqueue_terminal_comme
         (row.state, count)
     };
     close_registry(conn);
-    fixture.close();
+    fixture.close().await;
     assert_eq!(
         (state, outbox_count),
         (TicketState::Active, 0),

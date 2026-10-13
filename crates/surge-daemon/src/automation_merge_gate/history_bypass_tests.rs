@@ -71,7 +71,7 @@ async fn history_after_actual_settlement_failure_does_not_dispatch_merge() {
         )
         .unwrap();
     close_registry(conn);
-    fixture.close();
+    fixture.close().await;
     assert_eq!(
         (calls, attempted),
         (0, 0),

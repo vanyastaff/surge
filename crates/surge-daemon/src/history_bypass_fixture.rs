@@ -19,7 +19,14 @@ pub(crate) struct Fixture {
     pub run: RunId,
     worktree: tempfile::TempDir,
     home: crate::runtime_home_fixture::FixtureHome,
+    /// Observes this Storage's registry teardown: Windows refuses to remove
+    /// the home while its native SQLite handles are still settling.
+    #[cfg(windows)]
+    registry: surge_persistence::runs::storage::reader_pool_witness::RegistryPoolWitness,
 }
+
+/// How long dropped Storage owners get to settle before the home is removed.
+const SETTLE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Fixture {
     pub async fn new() -> Self {
@@ -27,11 +34,15 @@ impl Fixture {
         let worktree = tempfile::tempdir().unwrap();
         let run = producer::produce(home.path(), worktree.path()).await;
         let storage = Storage::open(home.path()).await.unwrap();
+        #[cfg(windows)]
+        let registry = storage.registry_pool_witness().unwrap();
         Self {
             storage,
             run,
             worktree,
             home,
+            #[cfg(windows)]
+            registry,
         }
     }
 
@@ -79,14 +90,37 @@ impl Fixture {
         Arc::new(Mutex::new(conn))
     }
 
-    pub fn close(self) {
+    /// Drop the Storage, wait until its reader pools and registry have
+    /// actually settled, then remove the directories.
+    pub async fn close(self) {
         let Self {
             storage,
+            run,
             worktree,
             home,
-            ..
+            #[cfg(windows)]
+            registry,
         } = self;
+        let mut readers = storage.take_reader_pool_witnesses(run).unwrap();
         drop(storage);
+        tokio::time::timeout(SETTLE_DEADLINE, async {
+            for reader in &mut readers {
+                reader.released().await.unwrap();
+            }
+        })
+        .await
+        .expect("run reader pools did not settle");
+        #[cfg(windows)]
+        {
+            let deadline = tokio::time::Instant::now() + SETTLE_DEADLINE;
+            while registry.is_retained() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "registry owners did not settle"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
         worktree.close().unwrap();
         home.close().unwrap();
     }
@@ -102,5 +136,5 @@ pub(crate) fn close_registry(conn: Arc<Mutex<Connection>>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actual_completed_run_reports_exhausted_forwarder_pool() {
-    Fixture::new().await.close();
+    Fixture::new().await.close().await;
 }
