@@ -181,7 +181,7 @@ pub enum InvocationFailure {
     #[error("send failed: {0}")]
     Send(String),
     /// The deadline passed before an outcome was accepted.
-    #[error("no outcome within {0:?}")]
+    #[error("timeout: no outcome within {0:?}")]
     DeadlineElapsed(Duration),
     /// The caller cancelled.
     #[error("cancelled")]

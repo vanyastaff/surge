@@ -187,9 +187,13 @@ async fn triage_enqueued_yields_real_priority() {
         bridge_drive.pump_scripted_events().await;
     });
 
+    // The daemon's wiring: the same profile and agent registries runs use.
     let mut opts = surge_orchestrator::triage::TriageOptions::with_scratch_root(
         tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
+        Arc::new(surge_orchestrator::profile_loader::ProfileRegistry::new(
+            surge_orchestrator::profile_loader::DiskProfileSet::empty(),
+        )),
+        Some(Arc::new(surge_acp::Registry::builtin())),
     );
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;

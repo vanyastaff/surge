@@ -31,6 +31,26 @@ fn task_details(id: &str) -> TaskDetails {
     }
 }
 
+/// The profile registry triage resolves through: the bundled profiles,
+/// optionally with a disk override of `triage-author` naming `agent`.
+fn profiles(agent: Option<&str>) -> Arc<surge_orchestrator::profile_loader::ProfileRegistry> {
+    use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+    let Some(agent) = agent else {
+        return Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+    };
+    let dir = tempfile::tempdir().unwrap().keep();
+    let bundled = include_str!("../../surge-core/bundled/profiles/triage-author-1.0.toml");
+    std::fs::write(
+        dir.join("triage-author-1.0.toml"),
+        bundled.replace(
+            "agent_id = \"claude-code\"",
+            &format!("agent_id = \"{agent}\""),
+        ),
+    )
+    .unwrap();
+    Arc::new(ProfileRegistry::new(DiskProfileSet::scan(&dir).unwrap()))
+}
+
 fn input() -> TriageInput {
     TriageInput {
         task: task_details("mock:t#1"),
@@ -70,7 +90,11 @@ async fn drive_one_attempt(
             session,
             outcome: OutcomeKey::from_str(outcome_key).unwrap(),
             summary: format!("agent picked {outcome_key}"),
-            artifacts_produced: vec!["triage_decision.json".into(), "inbox_summary.md".into()],
+            artifacts_produced: if summary_md.is_empty() {
+                vec!["triage_decision.json".into()]
+            } else {
+                vec!["triage_decision.json".into(), "inbox_summary.md".into()]
+            },
 
             verification_report: None,
         })
@@ -123,10 +147,7 @@ async fn enqueued_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = false;
@@ -161,10 +182,7 @@ async fn duplicate_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = false;
@@ -198,10 +216,7 @@ async fn out_of_scope_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = false;
@@ -230,10 +245,7 @@ async fn unclear_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = false;
@@ -268,10 +280,7 @@ async fn bad_json_then_recovers() {
     bridge.pin_session_ids(vec![session_a, session_b]).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 3;
     opts.keep_scratch_on_failure = false;
@@ -306,10 +315,7 @@ async fn exhaust_retries_yields_unclear() {
     bridge.pin_session_ids(vec![s1, s2, s3]).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 3;
     opts.keep_scratch_on_failure = true;
@@ -348,10 +354,7 @@ async fn timeout_yields_unclear() {
     bridge.pin_session_ids(vec![s]).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_millis(150);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = true;
@@ -380,10 +383,7 @@ async fn agent_crashed_yields_unclear() {
     bridge.pin_session_ids(vec![s]).await;
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(
-        tmp.path().to_path_buf(),
-        Some(std::path::PathBuf::from("/dev/null")),
-    );
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
     opts.attempt_timeout = Duration::from_secs(2);
     opts.max_attempts = 1;
     opts.keep_scratch_on_failure = true;
@@ -422,11 +422,15 @@ async fn agent_crashed_yields_unclear() {
 }
 
 #[tokio::test]
-async fn binary_missing_short_circuits() {
+async fn an_unconfigured_agent_short_circuits_to_a_configuration_unclear() {
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
 
     let tmp = TempDir::new().unwrap();
-    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), None);
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        profiles(Some("no-such-agent")),
+        None,
+    );
     opts.attempt_timeout = Duration::from_secs(5);
     opts.max_attempts = 3;
     opts.keep_scratch_on_failure = false;
@@ -438,15 +442,93 @@ async fn binary_missing_short_circuits() {
     match &result {
         TriageDecision::Unclear { question } => {
             assert!(
-                question.to_lowercase().contains("claude binary"),
-                "expected 'claude binary' in hint, got: {question}"
+                question.contains("not configured") && question.contains("no-such-agent"),
+                "expected a configuration hint naming the agent, got: {question}"
             );
         },
         other => panic!("expected Unclear, got {other:?}"),
     }
 
-    // The bridge should NEVER have been called — the function returned
-    // before any open_session.
+    // Never retried, and no session was ever opened.
     let calls = bridge.recorded_calls.lock().await;
     assert!(calls.is_empty(), "no bridge calls expected, got {calls:?}");
+}
+
+/// Regression (#99): triage ran only on a Claude binary. It now runs on
+/// whatever registry entry its profile names.
+#[tokio::test]
+async fn triage_runs_on_a_non_claude_registry_entry() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let session = SessionId::new();
+    bridge.pin_next_session_id(session).await;
+    let mut agents = std::collections::HashMap::new();
+    agents.insert(
+        "my-provider".to_string(),
+        surge_core::config::AgentConfig {
+            command: "my-agent".into(),
+            args: vec!["--acp".into()],
+            transport: surge_core::config::Transport::Stdio,
+            mcp_servers: vec![],
+            capabilities: vec![],
+            env: Default::default(),
+            capacity_route: None,
+            settings_files: vec![],
+        },
+    );
+    let tmp = TempDir::new().unwrap();
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        profiles(Some("my-provider")),
+        Some(Arc::new(surge_acp::Registry::from_config(agents))),
+    );
+    opts.attempt_timeout = Duration::from_secs(5);
+    opts.max_attempts = 1;
+    let drive = tokio::spawn(drive_one_attempt(
+        Arc::clone(&bridge),
+        tmp.path().to_path_buf(),
+        session,
+        "out_of_scope",
+        r#"{"decision":"out_of_scope","priority_reasoning":"belongs elsewhere"}"#,
+        "",
+    ));
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .unwrap();
+    drive.await.unwrap();
+    assert!(
+        matches!(result, TriageDecision::OutOfScope { .. }),
+        "{result:?}"
+    );
+}
+
+/// Regression (#99): a failed `send_message` used to return before closing
+/// the session it had opened.
+#[tokio::test]
+async fn a_failed_send_closes_the_triage_session() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    bridge
+        .fail_next_send_message(
+            surge_acp::bridge::SendMessageError::AgentAuthenticationFailed {
+                details: "fixture".into(),
+            },
+        )
+        .await;
+    let tmp = TempDir::new().unwrap();
+    let opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts).await;
+    assert!(
+        matches!(
+            result,
+            Err(surge_orchestrator::triage::TriageError::Invocation(_))
+        ),
+        "{result:?}"
+    );
+    let closes = bridge
+        .recorded_calls
+        .lock()
+        .await
+        .iter()
+        .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::CloseSession(_)))
+        .count();
+    assert_eq!(closes, 1);
 }

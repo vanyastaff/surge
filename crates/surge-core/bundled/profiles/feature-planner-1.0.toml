@@ -47,13 +47,9 @@ source = { source = "any" }
 name = "roadmap"
 source = { source = "any" }
 
-[[hooks.entries]]
-id = "validate-roadmap-patch"
-trigger = "on_outcome"
-matcher = { outcome = "patched" }
-command = "{surge} artifact validate --kind roadmap-patch roadmap-patch.toml"
-on_failure = "reject"
-timeout_seconds = 30
+# No validation hook: the declared roadmap-patch contract above is checked by
+# the outcome-acceptance rule (#94), and the standalone invocation (#99)
+# refuses profiles with hooks rather than skipping them.
 
 [prompt]
 system = """\
