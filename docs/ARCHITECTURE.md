@@ -291,6 +291,8 @@ Precedence (most restrictive wins): `surge:disabled > surge:auto > surge:templat
 
 The router (`surge_intake::router::TaskRouter`) classifies events: `NewTask` events flow through Tier-1 PreFilter into the triage path; everything else surfaces as `RouterOutput::ExternalUpdate` and bypasses dedup.
 
+**Triage runs standalone.** The Triage Author is the bundled `triage-author@1.0` profile, run outside any flow graph through the standalone agent invocation (`surge_orchestrator::agent_invocation`). That is the same path `surge project describe` and `surge feature describe` use. The agent is resolved through the operator's profile and agent registries like any run (ADR-0019), so triage works on any configured provider. Running triage as an engine graph node ("Layer 2") is deferred with no plan. The standalone path is the supported design.
+
 **Idempotency** is centralised in the `intake_emit_log` table keyed by `(source_id, task_id, event_kind, run_id)`. Every outbound side-effect that must survive daemon restarts records there; retries no-op. Event kinds: `triage_decision`, `run_started`, `run_completed`, `run_failed`, `run_aborted`, `merge_proposed`, `merge_blocked`.
 
 This is implemented in the `surge-intake` crate around a `TaskSource` trait so future sources (Discord, Jira, Slack, Notion, …) plug in without core changes. The full reference lives in [`docs/tracker-automation.md`](tracker-automation.md) and the decision record is [ADR 0013](adr/0013-tracker-automation-tiers.md).

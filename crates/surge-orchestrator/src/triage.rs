@@ -1,26 +1,26 @@
-//! Triage Author dispatcher: assembles inputs, dispatches via ACP,
-//! parses LLM output.
+//! Triage Author dispatcher: assembles inputs, runs the bundled
+//! `triage-author@1.0` profile through the standalone agent invocation
+//! (`crate::agent_invocation`, #99), and parses its `triage_decision.json`
+//! into a typed [`TriageDecision`].
 //!
-//! Layer 1 of the two-layer plan in
-//! `docs/ARCHITECTURE.md`:
-//! standalone [`dispatch_triage`] function that opens an ACP session
-//! against the bundled `_bootstrap/triage-author@1.0` profile, sends
-//! a structured input, awaits the agent's `triage_decision.json`
-//! artifact, and returns a typed [`TriageDecision`].
+//! The invocation resolves the agent through the operator's profile and agent
+//! registries (ADR-0019), so triage runs on whichever provider the profile
+//! names. This module keeps only the domain: the inputs, the attempt loop with
+//! feedback, the decision parsing and the outcome/decision consistency check.
 //!
-//! Layer 2 (separate RFC, deferred) will promote Triage Author to a
-//! first-class [`NodeKind::Agent`] inside the engine state machine.
-//! When that lands, [`dispatch_triage`]'s caller-visible surface
-//! does not change — the function is either inlined into the
-//! engine's stage handler or kept as a thin test wrapper.
+//! Triage stays standalone. Running it as an engine graph node ("Layer 2")
+//! is not planned; see `docs/ARCHITECTURE.md`.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_acp::bridge::event::{BridgeEvent, SessionEndReason};
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_core::{OutcomeKey, SessionId};
+
+use crate::agent_invocation::{
+    DEFAULT_MAX_CONTRACT_REJECTIONS, InvocationFailure, InvocationRequest, invoke,
+};
+use crate::profile_loader::ProfileRegistry;
 use surge_intake::types::{Priority, TaskDetails, TaskId, TaskSummary, TriageDecision};
 
 /// Full input bundle handed to Triage Author at the start of its session.
@@ -109,18 +109,14 @@ impl TriageJson {
     }
 }
 
+/// The bundled Triage Author profile.
+pub const TRIAGE_AUTHOR_PROFILE: &str = "triage-author@1.0";
+
 /// Tunable parameters for [`dispatch_triage`].
-///
-/// Construct via [`Self::with_scratch_root`] for the typical case of
-/// passing only the per-task scratch root and Claude binary path.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct TriageOptions {
-    /// Resolved Claude binary path. If `None`, the dispatcher
-    /// returns `Ok(TriageDecision::Unclear)` immediately on the
-    /// first attempt with a configuration-hint message.
-    pub claude_binary: Option<PathBuf>,
-    /// Per-attempt timeout. Default: 5 min (matches RFC-0010 §"Bootstrap stage failures").
+    /// Per-attempt deadline. Default: 5 min (matches RFC-0010 §"Bootstrap stage failures").
     pub attempt_timeout: Duration,
     /// Maximum attempts before falling back to `Unclear`. Default: 3.
     pub max_attempts: u32,
@@ -128,297 +124,143 @@ pub struct TriageOptions {
     pub scratch_root: PathBuf,
     /// Whether to keep scratch on Unclear / TriageError for post-mortem.
     pub keep_scratch_on_failure: bool,
+    /// The profile registry the Triage Author resolves through.
+    pub profiles: Arc<ProfileRegistry>,
+    /// The operator's merged agent registry; `None` uses the builtins.
+    pub agents: Option<Arc<surge_acp::Registry>>,
 }
 
 impl TriageOptions {
-    /// Build options with sensible defaults given a scratch root and
-    /// (optional) Claude binary path.
+    /// Build options with sensible defaults given a scratch root and the
+    /// registries the Triage Author resolves through.
     #[must_use]
-    pub fn with_scratch_root(scratch_root: PathBuf, claude_binary: Option<PathBuf>) -> Self {
+    pub fn with_scratch_root(
+        scratch_root: PathBuf,
+        profiles: Arc<ProfileRegistry>,
+        agents: Option<Arc<surge_acp::Registry>>,
+    ) -> Self {
         Self {
-            claude_binary,
             attempt_timeout: Duration::from_secs(300),
             max_attempts: 3,
             scratch_root,
             keep_scratch_on_failure: true,
+            profiles,
+            agents,
         }
     }
 }
 
 /// Errors returned from [`dispatch_triage`] for invariant violations.
 ///
-/// Note: retry-eligible failures (timeout, agent crash, malformed JSON)
-/// are NOT surfaced as `TriageError` — they retry up to
+/// Retryable invocation failures (deadline, agent crash, lost events, bad or
+/// missing artifacts) are NOT surfaced here — they retry up to
 /// `opts.max_attempts` times and on exhaustion become
-/// `Ok(TriageDecision::Unclear { question })`. `TriageError` is
-/// reserved for failures that prevent any forward progress.
+/// `Ok(TriageDecision::Unclear { question })`. A provider that is not
+/// configured also becomes an `Unclear` with a configuration hint. `TriageError`
+/// is reserved for failures that prevent any forward progress.
 #[derive(Debug, thiserror::Error)]
 pub enum TriageError {
     /// Could not create or write to the per-call scratch directory.
     #[error("scratch dir setup failed: {0}")]
     Scratch(#[from] std::io::Error),
-    /// Bridge facade itself failed at the JSON-RPC / process level
-    /// (open_session / send_message / close_session).
-    #[error("acp bridge: {0}")]
-    Bridge(String),
+    /// The invocation failed terminally (dead bridge, session open or send
+    /// failure, closed stream).
+    #[error("triage agent invocation failed: {0}")]
+    Invocation(InvocationFailure),
 }
 
-/// Best-effort discovery of the Claude binary path.
-///
-/// Probe order:
-/// 1. `SURGE_CLAUDE_BINARY` env var (must point to an existing file).
-/// 2. `CLAUDE_PATH` env var (existing convention from `surge-acp::discovery`).
-/// 3. Standard install locations for the current platform: e.g.
-///    `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `~/.local/bin/claude`,
-///    `%USERPROFILE%\AppData\Local\Programs\claude\claude.exe`.
-///
-/// Returns `None` if no candidate exists. The dispatcher then surfaces
-/// a configuration-hint Unclear notification.
-#[must_use]
-pub fn find_claude_binary() -> Option<PathBuf> {
-    for var in ["SURGE_CLAUDE_BINARY", "CLAUDE_PATH"] {
-        if let Ok(v) = std::env::var(var) {
-            let p = PathBuf::from(v);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-
-    use surge_acp::discovery::Platform;
-    let bin_name = if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
-    };
-    for base in Platform::current().standard_paths() {
-        let candidate = base.join(bin_name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// Bridge-level sandbox for sessions where Surge delegates isolation
-/// to the agent itself (per Vision-2026 §"Sandbox-delegated").
-///
-/// Returns `AlwaysAllowSandbox` — the bridge applies no tool filtering,
-/// because each ACP-conformant agent (Claude Code, Codex CLI, etc.)
-/// already has its own native sandbox enforcement. The profile's
-/// `[sandbox] mode = ...` field is a semantic marker the agent reads,
-/// not a directive the bridge enforces.
-fn delegated_sandbox() -> Box<dyn surge_acp::bridge::sandbox::Sandbox> {
-    Box::new(surge_acp::bridge::sandbox::AlwaysAllowSandbox)
-}
-
-fn event_session_id(event: &BridgeEvent) -> Option<SessionId> {
-    match event {
-        BridgeEvent::SessionEstablished { session, .. }
-        | BridgeEvent::AgentMessage { session, .. }
-        | BridgeEvent::ProviderUsageObserved { session, .. }
-        | BridgeEvent::ContextUsageObserved { session, .. }
-        | BridgeEvent::ToolObserved { session, .. }
-        | BridgeEvent::ToolCall { session, .. }
-        | BridgeEvent::ToolResult { session, .. }
-        | BridgeEvent::OutcomeReported { session, .. }
-        | BridgeEvent::HumanInputRequested { session, .. }
-        | BridgeEvent::PermissionRequested { session, .. }
-        | BridgeEvent::SessionEnded { session, .. } => Some(*session),
-        BridgeEvent::Error { session, .. } => *session,
-    }
-}
-
-/// Per-attempt error type — distinguishes retryable from fatal.
-enum AttemptError {
-    /// Bridge facade itself failed (open/send/close); fatal.
-    Bridge(String),
-    /// Retryable: timeout, agent crash, malformed artifact.
-    Retryable(String),
-}
-
-/// Extract just the `[prompt].system` field from the bundled Triage Author
-/// TOML profile, parsed once at first access.
-///
-/// We don't ship the whole TOML to Claude — only the natural-language
-/// instruction. The TOML's metadata (id, version, declared_outcomes, etc.)
-/// is bookkeeping for the engine, not content for the agent.
-fn triage_system_prompt() -> &'static str {
-    static CACHED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        let parsed: toml::Value = toml::from_str(crate::BOOTSTRAP_TRIAGE_AUTHOR_TOML).expect(
-            "bundled triage-author-1.0.toml is valid TOML — checked by bootstrap_profile_tests",
-        );
-        parsed
-            .get("prompt")
-            .and_then(|p| p.get("system"))
-            .and_then(|s| s.as_str())
-            .map(str::to_string)
-            .expect("triage-author-1.0.toml must have [prompt].system field — checked by bootstrap_profile_tests")
-    });
-    CACHED.as_str()
-}
-
-fn render_prompt(input: &TriageInput, feedback: Option<&str>) -> String {
+/// The Triage Author's template bindings: the fenced input JSON and the
+/// previous attempt's feedback (empty on the first attempt).
+fn triage_bindings(input: &TriageInput, feedback: Option<&str>) -> Vec<(String, String)> {
     let json = serde_json::to_string_pretty(input).unwrap_or_else(|_| "{}".into());
-    let mut out = String::new();
-    out.push_str(triage_system_prompt());
-    out.push_str("\n\n# Inputs\n\nThe triage input is encoded as JSON. The shape is:\n");
-    out.push_str(
-        "- task: TaskDetails\n- candidates: TaskSummary[]\n- active_runs: ActiveRunSummary[]\n\n",
-    );
-    out.push_str("The literal JSON follows:\n\n");
-    out.push_str(&surge_core::untrusted::fence(
-        surge_core::untrusted::ContentSource::TrackerTriageInput,
-        &json,
-    ));
-    out.push_str(
-        "\n\n# Task\n\nDecide whether this ticket is a duplicate, out-of-scope, unclear, \
-                  or should be enqueued. Then, in your working directory:\n\n\
-                  1. Write your structured decision to `triage_decision.json` (schema below).\n\
-                  2. Write a 3-5 line markdown blurb to `inbox_summary.md` (used as the body of \
-                     the inbox card on `enqueued`; safe to omit otherwise).\n\
-                  3. Call `report_stage_outcome` with the matching `outcome` and \
-                     `artifacts_produced = [\"triage_decision.json\", \"inbox_summary.md\"]`.\n\n",
-    );
-    out.push_str(
-        "triage_decision.json schema:\n\
-                  - decision: \"enqueued\" | \"duplicate\" | \"out_of_scope\" | \"unclear\"\n\
-                  - duplicate_of: string (task id) or null\n\
-                  - priority: \"urgent\" | \"high\" | \"medium\" | \"low\"\n\
-                  - priority_reasoning: one sentence\n\
-                  - summary: one sentence\n\
-                  - question: string (only when decision = \"unclear\")\n",
-    );
-    if let Some(fb) = feedback {
-        out.push_str("\n# Feedback from previous attempt\n\n");
-        out.push_str(fb);
-        out.push('\n');
-    }
-    out
+    vec![
+        (
+            "triage_input".into(),
+            surge_core::untrusted::fence(
+                surge_core::untrusted::ContentSource::TrackerTriageInput,
+                &json,
+            ),
+        ),
+        ("feedback".into(), feedback.unwrap_or_default().to_owned()),
+    ]
+}
+
+/// One attempt's result in triage terms.
+enum Attempt {
+    Decided(TriageDecision),
+    /// Retry with this feedback.
+    Retry(String),
+    /// Stop: the decision to return.
+    Stop(Result<TriageDecision, TriageError>),
 }
 
 async fn try_one_attempt(
-    bridge: Arc<dyn BridgeFacade>,
+    bridge: &Arc<dyn BridgeFacade>,
     input: &TriageInput,
-    claude_binary: &std::path::Path,
+    opts: &TriageOptions,
     scratch_dir: &std::path::Path,
-    attempt_timeout: Duration,
-    attempt: u32,
     feedback: Option<&str>,
-) -> Result<TriageDecision, AttemptError> {
-    use std::collections::BTreeMap;
-    use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
-    use surge_acp::client::PermissionPolicy;
-
-    let prompt_text = render_prompt(input, feedback);
-
-    let declared_outcomes = vec![
-        OutcomeKey::try_from("enqueued").map_err(|e| AttemptError::Bridge(e.to_string()))?,
-        OutcomeKey::try_from("duplicate").map_err(|e| AttemptError::Bridge(e.to_string()))?,
-        OutcomeKey::try_from("out_of_scope").map_err(|e| AttemptError::Bridge(e.to_string()))?,
-        OutcomeKey::try_from("unclear").map_err(|e| AttemptError::Bridge(e.to_string()))?,
-    ];
-
-    let mut bindings = BTreeMap::new();
-    bindings.insert(
-        "intake.task_id".into(),
-        input.task.task_id.as_str().to_string(),
-    );
-    bindings.insert("intake.attempt".into(), attempt.to_string());
-
-    let cfg = SessionConfig {
-        effect_fence: None,
-        writer_id: surge_core::id::ExecutionWriterId::new(),
-        invocation: surge_core::id::StageInvocationId::new(),
-        runtime: "claude-acp".into(),
-        opening: Default::default(),
-        config_selections: Vec::new(),
-        stage_mcp: None,
-        agent_kind: AgentKind::ClaudeCode {
-            binary: claude_binary.to_path_buf(),
-            extra_args: vec![],
+) -> Attempt {
+    // Every attempt writes its own decision: never read one a previous,
+    // rejected attempt left in the shared scratch directory.
+    for stale in ["triage_decision.json", "inbox_summary.md"] {
+        let _ = std::fs::remove_file(scratch_dir.join(stale));
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let invoked = invoke(
+        bridge,
+        InvocationRequest {
+            profile: TRIAGE_AUTHOR_PROFILE,
+            bindings: triage_bindings(input, feedback),
+            working_dir: scratch_dir,
+            deadline: opts.attempt_timeout,
+            cancel: &cancel,
+            recorder: None,
+            profiles: &opts.profiles,
+            agents: opts.agents.as_deref(),
+            max_contract_rejections: DEFAULT_MAX_CONTRACT_REJECTIONS,
+            seed_agent_settings: true,
         },
-        working_dir: scratch_dir.to_path_buf(),
-        system_prompt: prompt_text.clone(),
-        declared_outcomes,
-        allows_escalation: false,
-        tools: vec![],
-        sandbox: delegated_sandbox(),
-        permission_policy: PermissionPolicy::default(),
-        bindings,
-        // Triage runs the direct-CLI Claude binary; it carries no per-agent
-        // env spec (Ollama routing lives in the `ollama-acp` registry entry,
-        // which triage does not use).
-        env: BTreeMap::new(),
-    };
-
-    let mut events = bridge.subscribe();
-
-    let session_id = bridge
-        .open_session(cfg)
-        .await
-        .map_err(|e| AttemptError::Bridge(format!("open_session: {e}")))?
-        .session;
-
-    bridge
-        .send_message(session_id, MessageContent::Text(prompt_text))
-        .await
-        .map_err(|e| AttemptError::Bridge(format!("send_message: {e}")))?;
-
-    // Drive the event loop with a single timeout.
-    let outcome_result = tokio::time::timeout(attempt_timeout, async {
-        loop {
-            match events.recv().await {
-                Ok(ev) => {
-                    if event_session_id(&ev) != Some(session_id) {
-                        continue;
-                    }
-                    match ev {
-                        BridgeEvent::OutcomeReported { outcome, .. } => return Ok(outcome),
-                        BridgeEvent::SessionEnded { reason, .. } => match reason {
-                            SessionEndReason::AgentCrashed { .. } => {
-                                return Err(format!("agent crashed: {reason:?}"));
-                            },
-                            SessionEndReason::Timeout { .. } => {
-                                return Err("session timeout".into());
-                            },
-                            SessionEndReason::Normal | SessionEndReason::ForcedClose => {
-                                return Err("session ended without outcome".into());
-                            },
-                        },
-                        _ => continue,
-                    }
-                },
-                // Lagged means the broadcast queue dropped events we didn't consume
-                // fast enough. We hold a session filter, so a missed OutcomeReported
-                // for our session would eventually trigger the attempt timeout and
-                // cause a retry — correctness is preserved at the cost of latency.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err("event stream closed".into());
-                },
-            }
-        }
-    })
+    )
     .await;
-
-    let _ = bridge.close_session(session_id).await;
-
-    let outcome = match outcome_result {
-        Err(_elapsed) => return Err(AttemptError::Retryable("timeout".into())),
-        Ok(Err(msg)) => return Err(AttemptError::Retryable(msg)),
-        Ok(Ok(outcome)) => outcome,
+    let outcome = match invoked {
+        Ok(outcome) => outcome,
+        Err(failure) if failure.is_retryable() => return Attempt::Retry(failure.to_string()),
+        Err(
+            failure @ (InvocationFailure::ProfileUnresolved { .. }
+            | InvocationFailure::ProviderUnknown { .. }
+            | InvocationFailure::ProviderEnvironment { .. }
+            | InvocationFailure::Unsupported { .. }
+            | InvocationFailure::PromptRender { .. }
+            | InvocationFailure::AgentNotStarted(_)),
+        ) => {
+            // Same operator signal as before: an `Unclear` card naming the
+            // configuration problem, never a retry.
+            return Attempt::Stop(Ok(TriageDecision::Unclear {
+                question: format!(
+                    "Triage agent is not configured ({failure}); configure the \
+                     triage-author profile's agent to enable LLM-driven triage"
+                ),
+            }));
+        },
+        Err(failure) => return Attempt::Stop(Err(TriageError::Invocation(failure))),
     };
 
-    // Read the artifact and parse.
-    let json_path = scratch_dir.join("triage_decision.json");
-    let raw = std::fs::read(&json_path)
-        .map_err(|e| AttemptError::Retryable(format!("triage_decision.json missing: {e}")))?;
-    let parsed: TriageJson = serde_json::from_slice(&raw)
-        .map_err(|e| AttemptError::Retryable(format!("triage_decision.json malformed: {e}")))?;
-    let mut decision = parsed
-        .into_decision()
-        .map_err(|e| AttemptError::Retryable(format!("decision rejected: {e}")))?;
+    let raw = match outcome.artifact("triage_decision.json") {
+        Some(artifact) => artifact.bytes.clone(),
+        None => match std::fs::read(scratch_dir.join("triage_decision.json")) {
+            Ok(raw) => raw,
+            Err(error) => return Attempt::Retry(format!("triage_decision.json missing: {error}")),
+        },
+    };
+    let parsed: TriageJson = match serde_json::from_slice(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => return Attempt::Retry(format!("triage_decision.json malformed: {error}")),
+    };
+    let mut decision = match parsed.into_decision() {
+        Ok(decision) => decision,
+        Err(error) => return Attempt::Retry(format!("decision rejected: {error}")),
+    };
 
     // For Enqueued, splice in the inbox_summary.md if present.
     if let TriageDecision::Enqueued { summary, .. } = &mut decision
@@ -428,67 +270,47 @@ async fn try_one_attempt(
         *summary = md;
     }
 
-    // Sanity-check the agent's reported outcome string against the parsed decision.
-    let outcome_str = outcome.as_str();
+    // The agent's reported outcome must match the parsed decision.
     let decision_kind = match &decision {
         TriageDecision::Enqueued { .. } => "enqueued",
         TriageDecision::Duplicate { .. } => "duplicate",
         TriageDecision::OutOfScope { .. } => "out_of_scope",
         TriageDecision::Unclear { .. } => "unclear",
     };
-    if outcome_str != decision_kind {
-        return Err(AttemptError::Retryable(format!(
-            "outcome ({outcome_str}) mismatch with decision ({decision_kind})"
-        )));
+    if outcome.outcome.as_str() != decision_kind {
+        return Attempt::Retry(format!(
+            "outcome ({}) mismatch with decision ({decision_kind})",
+            outcome.outcome
+        ));
     }
-
-    Ok(decision)
+    Attempt::Decided(decision)
 }
 
 /// Dispatch a Triage Author session against the supplied bridge.
 ///
 /// Returns `Ok(TriageDecision)` even on retry exhaustion (materialises
-/// as `Unclear` with a diagnostic question). `Err(TriageError)` is
+/// as `Unclear` with a diagnostic question), and for an agent that is not
+/// configured (`Unclear` with a configuration hint). `Err(TriageError)` is
 /// reserved for invariant violations that prevent any forward progress.
 ///
 /// # Errors
 /// - [`TriageError::Scratch`] if the per-call scratch directory
 ///   cannot be created.
-/// - [`TriageError::Bridge`] for facade-level dead-bridge or
-///   handshake failures.
+/// - [`TriageError::Invocation`] for a dead bridge or a session that cannot
+///   be opened or sent to.
 pub async fn dispatch_triage(
     bridge: Arc<dyn BridgeFacade>,
     input: TriageInput,
     opts: TriageOptions,
 ) -> Result<TriageDecision, TriageError> {
-    // Short-circuit if claude binary is not configured.
-    let Some(claude_binary) = opts.claude_binary.clone() else {
-        return Ok(TriageDecision::Unclear {
-            question: "Claude binary not configured (set SURGE_CLAUDE_BINARY or install \
-                       claude-code); install to enable LLM-driven triage"
-                .into(),
-        });
-    };
-
     // Build a fresh scratch dir for this top-level call.
     let scratch_dir = opts.scratch_root.join(ulid::Ulid::new().to_string());
     std::fs::create_dir_all(&scratch_dir)?;
 
     let mut last_err: Option<String> = None;
-
     for attempt in 1..=opts.max_attempts {
-        match try_one_attempt(
-            Arc::clone(&bridge),
-            &input,
-            &claude_binary,
-            &scratch_dir,
-            opts.attempt_timeout,
-            attempt,
-            last_err.as_deref(),
-        )
-        .await
-        {
-            Ok(decision) => {
+        match try_one_attempt(&bridge, &input, &opts, &scratch_dir, last_err.as_deref()).await {
+            Attempt::Decided(decision) => {
                 // Cleanup policy:
                 // - Decisive success (Enqueued / Duplicate / OutOfScope): always
                 //   remove scratch (best-effort) so the per-call dir doesn't leak.
@@ -501,15 +323,13 @@ pub async fn dispatch_triage(
                 }
                 return Ok(decision);
             },
-            Err(AttemptError::Bridge(e)) => {
-                // Bridge invariant failure — keep scratch for post-mortem when
-                // the caller asked us to.
+            Attempt::Stop(result) => {
                 if !opts.keep_scratch_on_failure {
                     let _ = std::fs::remove_dir_all(&scratch_dir);
                 }
-                return Err(TriageError::Bridge(e));
+                return result;
             },
-            Err(AttemptError::Retryable(msg)) => {
+            Attempt::Retry(msg) => {
                 tracing::warn!(attempt, error = %msg, "triage attempt failed; will retry");
                 last_err = Some(msg);
             },
@@ -587,20 +407,31 @@ mod tests {
         assert!(err.contains("unknown decision"));
     }
 
+    /// Render the bundled profile's prompt with triage's bindings, exactly
+    /// as the invocation does.
+    fn render_prompt(input: &TriageInput, feedback: Option<&str>) -> String {
+        let profile = surge_core::BundledRegistry::by_name_latest("triage-author").unwrap();
+        let values: Vec<_> = super::triage_bindings(input, feedback)
+            .into_iter()
+            .map(|(name, value)| (surge_core::agent_config::TemplateVar(name), value))
+            .collect();
+        crate::prompt::PromptRenderer::strict()
+            .render(&profile.prompt.system, &values)
+            .unwrap()
+    }
+
     #[test]
-    fn triage_system_prompt_extracts_only_prompt_section() {
-        let extracted = super::triage_system_prompt();
-        assert!(
-            !extracted.contains("declared_outcomes"),
-            "system prompt should not contain TOML metadata field"
+    fn the_bundled_profile_is_a_standard_registry_profile() {
+        let profile = surge_core::BundledRegistry::by_name_latest("triage-author").unwrap();
+        let outcomes: Vec<_> = profile.outcomes.iter().map(|o| o.id.to_string()).collect();
+        assert_eq!(
+            outcomes,
+            ["enqueued", "duplicate", "out_of_scope", "unclear"]
         );
+        assert_ne!(profile.runtime.agent_id, "");
         assert!(
-            !extracted.contains("display_name"),
-            "system prompt should not contain TOML metadata field"
-        );
-        assert!(
-            extracted.contains("triage incoming tickets"),
-            "system prompt should contain the actual instruction text; got: {extracted}"
+            profile.hooks.entries.is_empty(),
+            "standalone profiles run no hooks"
         );
     }
 
@@ -638,7 +469,7 @@ mod tests {
             candidates,
             active_runs,
         };
-        let rendered = super::render_prompt(&input, None);
+        let rendered = render_prompt(&input, None);
         insta::assert_snapshot!("triage_initial_prompt", rendered);
     }
 
@@ -662,64 +493,8 @@ mod tests {
             candidates: vec![],
             active_runs: vec![],
         };
-        let rendered = super::render_prompt(&input, Some("previous attempt malformed JSON"));
+        let rendered = render_prompt(&input, Some("previous attempt malformed JSON"));
         assert!(rendered.contains("# Feedback from previous attempt"));
         assert!(rendered.contains("previous attempt malformed JSON"));
-    }
-
-    #[test]
-    fn find_claude_binary_returns_env_when_set() {
-        let tmp = tempfile::tempdir().unwrap();
-        let fake = tmp.path().join("claude-fake");
-        std::fs::write(&fake, b"#!/bin/sh\necho fake\n").unwrap();
-        // SAFETY: setting an env var in a single-threaded test is fine, though
-        // Rust 2024 marks std::env::set_var as unsafe due to potential data races
-        // when other threads are running. We are inside a #[test] which Cargo
-        // executes single-threaded for unit tests by default, but if the harness
-        // ever runs tests in parallel (which it does), this is best-effort. Other
-        // tests should not depend on this var. Restore at end.
-        let _prev = std::env::var("SURGE_CLAUDE_BINARY").ok();
-        unsafe {
-            std::env::set_var("SURGE_CLAUDE_BINARY", &fake);
-        }
-        let result = super::find_claude_binary();
-        unsafe {
-            std::env::remove_var("SURGE_CLAUDE_BINARY");
-        }
-        if let Some(prev) = _prev {
-            unsafe {
-                std::env::set_var("SURGE_CLAUDE_BINARY", prev);
-            }
-        }
-        assert_eq!(result, Some(fake));
-    }
-
-    #[test]
-    fn find_claude_binary_returns_none_when_not_found() {
-        // Clear both env vars to ensure we test the standard-paths fallback.
-        let prev_surge = std::env::var("SURGE_CLAUDE_BINARY").ok();
-        let prev_claude = std::env::var("CLAUDE_PATH").ok();
-        unsafe {
-            std::env::remove_var("SURGE_CLAUDE_BINARY");
-            std::env::remove_var("CLAUDE_PATH");
-        }
-
-        // Relaxed assertion: we can't 100% guarantee `claude` isn't on PATH on
-        // this machine; if Some is returned, it must exist on disk. None is
-        // also a valid outcome.
-        if let Some(p) = super::find_claude_binary() {
-            assert!(p.exists(), "discovery returned a non-existent path: {p:?}");
-        }
-
-        if let Some(p) = prev_surge {
-            unsafe {
-                std::env::set_var("SURGE_CLAUDE_BINARY", p);
-            }
-        }
-        if let Some(p) = prev_claude {
-            unsafe {
-                std::env::set_var("CLAUDE_PATH", p);
-            }
-        }
     }
 }

@@ -1,8 +1,11 @@
+//! Feature Planner through the standalone agent invocation (#99): scripted
+//! `MockBridge` sessions in, a typed patch result (and the planner run's log
+//! evidence) out.
+
 mod fixtures;
 use fixtures::runtime_home as runtime_home_fixture;
 use runtime_home_fixture::FixtureHome;
 
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,28 +13,13 @@ use std::time::Duration;
 use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::{OutcomeKey, RunId, SessionId};
-use surge_orchestrator::engine::hooks::HookExecutor;
-use surge_orchestrator::engine::tools::{
-    ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
-};
+use surge_orchestrator::agent_invocation::InvocationFailure;
 use surge_orchestrator::feature_driver::{
-    FeaturePlannerParams, FeaturePlannerResult, run_feature_planner,
+    FeaturePlannerError, FeaturePlannerParams, FeaturePlannerResult, run_feature_planner,
 };
 use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
-use surge_persistence::artifacts::ArtifactStore;
-use surge_persistence::runs::Storage;
-use tokio::sync::Mutex;
-
-struct NoopDispatcher;
-
-#[async_trait::async_trait]
-impl ToolDispatcher for NoopDispatcher {
-    async fn dispatch(&self, _ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
-        ToolResultPayload::Unsupported {
-            message: format!("unused: {}", call.tool),
-        }
-    }
-}
+use surge_persistence::runs::{EventSeq, Storage};
+use tokio_util::sync::CancellationToken;
 
 const VALID_PATCH: &str = r#"schema_version = 1
 id = "rpatch-driver"
@@ -53,6 +41,7 @@ title = "Driver feature"
 kind = "append_to_roadmap"
 "#;
 
+/// The bundled profile's shape, launched on the in-process mock agent.
 const TEST_FEATURE_PLANNER_PROFILE: &str = r#"schema_version = 1
 
 [role]
@@ -60,7 +49,7 @@ id = "feature-planner"
 version = "1.0.0"
 display_name = "Feature Planner Test"
 category = "agents"
-description = "Test profile without shell hooks."
+description = "Feature planner on the mock agent."
 when_to_use = "Feature planner driver tests."
 
 [runtime]
@@ -89,91 +78,143 @@ edge_kind_hint = "escalate"
 system = "Request: {{request}}\nRoadmap: {{roadmap}}"
 "#;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn feature_planner_driver_reuses_agent_stage_artifact_validation() {
-    let storage_dir = FixtureHome::new().unwrap();
-    let profiles_dir = storage_dir.path().join("profiles");
-    std::fs::create_dir_all(&profiles_dir).unwrap();
-    std::fs::write(
-        profiles_dir.join("feature-planner-1.0.toml"),
-        TEST_FEATURE_PLANNER_PROFILE,
-    )
-    .unwrap();
-    let storage = Storage::open(storage_dir.path()).await.unwrap();
-    let run_id = RunId::new();
-    let writer = storage
-        .create_run(run_id, storage_dir.path(), None)
-        .await
+struct Fixture {
+    home: FixtureHome,
+    storage: Arc<Storage>,
+    run_id: RunId,
+    mock: Arc<fixtures::mock_bridge::MockBridge>,
+    bridge: Arc<dyn BridgeFacade>,
+    session: SessionId,
+    registry: Arc<ProfileRegistry>,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let home = FixtureHome::new().unwrap();
+        let profiles_dir = home.path().join("profiles");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        std::fs::write(
+            profiles_dir.join("feature-planner-1.0.toml"),
+            TEST_FEATURE_PLANNER_PROFILE,
+        )
         .unwrap();
-    let artifact_store = ArtifactStore::new(storage_dir.path().join("runs"));
-    std::fs::write(storage_dir.path().join("roadmap-patch.toml"), VALID_PATCH).unwrap();
-
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("patched").unwrap(),
-        summary: "patch drafted".into(),
-        artifacts_produced: vec!["roadmap-patch.toml".into()],
-
-        verification_report: None,
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let calls_for_pump = mock.recorded_calls.clone();
-    let pump = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let saw_send = calls_for_pump.lock().await.iter().any(|call| {
-                matches!(
-                    call,
-                    fixtures::mock_bridge::RecordedCall::SendMessage { .. }
-                )
-            });
-            if saw_send || tokio::time::Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        let storage = Storage::open(home.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let session = SessionId::new();
+        mock.pin_next_session_id(session).await;
+        Self {
+            registry: Arc::new(ProfileRegistry::new(
+                DiskProfileSet::scan(&profiles_dir).unwrap(),
+            )),
+            bridge: mock.clone(),
+            home,
+            storage,
+            run_id: RunId::new(),
+            mock,
+            session,
         }
-        mock_for_pump.pump_scripted_events().await;
-    });
+    }
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(NoopDispatcher);
-    let tool_resolutions = Arc::new(Mutex::new(HashMap::new()));
-    let profile_registry = Arc::new(ProfileRegistry::new(
-        DiskProfileSet::scan(&profiles_dir).unwrap(),
-    ));
-    let hook_executor = HookExecutor::new();
-
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        run_feature_planner(FeaturePlannerParams {
+    /// Run the planner while the agent reports `outcome` once the prompt
+    /// was sent (or, with `cancel`, cancel instead).
+    async fn run(
+        &self,
+        outcome: Option<&'static str>,
+        cancel: &CancellationToken,
+    ) -> Result<FeaturePlannerResult, FeaturePlannerError> {
+        let writer = self
+            .storage
+            .create_run(self.run_id, self.home.path(), None)
+            .await
+            .unwrap();
+        let agent = async {
+            for _ in 0..500 {
+                let sent = self.mock.recorded_calls.lock().await.iter().any(|call| {
+                    matches!(
+                        call,
+                        fixtures::mock_bridge::RecordedCall::SendMessage { .. }
+                    )
+                });
+                if sent {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            match outcome {
+                Some(outcome) => {
+                    self.mock
+                        .enqueue_event(BridgeEvent::OutcomeReported {
+                            session: self.session,
+                            outcome: OutcomeKey::from_str(outcome).unwrap(),
+                            summary: "planned".into(),
+                            artifacts_produced: if outcome == "patched" {
+                                vec!["roadmap-patch.toml".into()]
+                            } else {
+                                vec![]
+                            },
+                            verification_report: None,
+                        })
+                        .await;
+                    self.mock.pump_scripted_events().await;
+                },
+                None => cancel.cancel(),
+            }
+        };
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.home.path().join("runs"));
+        let planner = run_feature_planner(FeaturePlannerParams {
             request: "Add driver test".into(),
             roadmap: "## Milestones\n- m1".into(),
-            bridge: &bridge,
+            bridge: &self.bridge,
             writer: &writer,
             artifact_store: &artifact_store,
-            worktree_path: storage_dir.path(),
-            tool_dispatcher: &dispatcher,
-            run_memory: &surge_core::run_state::RunMemory::default(),
-            run_id,
-            tool_resolutions: &tool_resolutions,
-            human_input_timeout: Duration::from_secs(5),
-            mcp_registry: None,
-            mcp_servers: Vec::new(),
-            profile_registry,
-            hook_executor: &hook_executor,
-        }),
-    )
-    .await
-    .expect("driver should not hang")
-    .expect("driver succeeds");
+            worktree_path: self.home.path(),
+            run_id: self.run_id,
+            profile_registry: self.registry.clone(),
+            agent_registry: None,
+            cancel,
+            deadline: Duration::from_secs(2),
+        });
+        let (result, ()) = tokio::join!(planner, agent);
+        writer.close().await.unwrap();
+        result
+    }
 
-    pump.await.unwrap();
+    async fn closes(&self) -> usize {
+        self.mock
+            .recorded_calls
+            .lock()
+            .await
+            .iter()
+            .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::CloseSession(_)))
+            .count()
+    }
 
+    async fn logged_kinds(&self) -> Vec<&'static str> {
+        let reader = self.storage.open_run_reader(self.run_id).await.unwrap();
+        reader
+            .read_events(EventSeq(0)..EventSeq(64))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload.discriminant_str())
+            .collect()
+    }
+
+    fn close(self) {
+        drop(self.storage);
+        self.home.close().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_valid_patch_is_returned_and_recorded_in_the_planner_log() {
+    let fx = Fixture::new().await;
+    std::fs::write(fx.home.path().join("roadmap-patch.toml"), VALID_PATCH).unwrap();
+    let result = fx
+        .run(Some("patched"), &CancellationToken::new())
+        .await
+        .unwrap();
     match result {
         FeaturePlannerResult::Patched { patch, patch_path } => {
             assert_eq!(patch.id.as_str(), "rpatch-driver");
@@ -181,8 +222,64 @@ async fn feature_planner_driver_reuses_agent_stage_artifact_validation() {
         },
         other => panic!("expected Patched, got {other:?}"),
     }
+    assert_eq!(
+        fx.logged_kinds().await,
+        ["ArtifactProduced", "OutcomeReported"]
+    );
+    assert_eq!(fx.closes().await, 1);
+    fx.close();
+}
 
-    writer.close().await.unwrap();
-    drop(storage);
-    storage_dir.close().unwrap();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn out_of_scope_is_a_typed_result() {
+    let fx = Fixture::new().await;
+    let result = fx
+        .run(Some("out_of_scope"), &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result, FeaturePlannerResult::OutOfScope);
+    assert_eq!(fx.closes().await, 1);
+    fx.close();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_patch_that_stays_invalid_is_refused() {
+    let fx = Fixture::new().await;
+    std::fs::write(fx.home.path().join("roadmap-patch.toml"), "not = [a patch").unwrap();
+    // One report only: the in-session corrections never arrive, so the
+    // invocation fails at its deadline rather than accepting the patch.
+    let error = tokio::time::timeout(
+        Duration::from_secs(30),
+        fx.run(Some("patched"), &CancellationToken::new()),
+    )
+    .await
+    .expect("planner finishes")
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FeaturePlannerError::Invocation(InvocationFailure::DeadlineElapsed(_))
+        ),
+        "{error}"
+    );
+    assert_eq!(fx.closes().await, 1);
+    fx.close();
+}
+
+/// Regression (#99): Ctrl-C during `surge feature describe` did not cancel
+/// the agent. The planner now stops and closes its session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_stops_the_planner_and_closes_its_session() {
+    let fx = Fixture::new().await;
+    let cancel = CancellationToken::new();
+    let error = fx.run(None, &cancel).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FeaturePlannerError::Invocation(InvocationFailure::Cancelled)
+        ),
+        "{error}"
+    );
+    assert_eq!(fx.closes().await, 1);
+    fx.close();
 }

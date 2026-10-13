@@ -205,6 +205,9 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::OpenSession);
+        // Refuse what the real bridge refuses, so oversized bindings fail here
+        // too instead of only against a live agent.
+        config.validate()?;
         let id = self
             .pinned_session_ids
             .lock()

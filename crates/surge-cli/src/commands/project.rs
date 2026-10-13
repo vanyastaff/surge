@@ -71,7 +71,9 @@ async fn describe(args: ProjectDescribeArgs) -> Result<()> {
         "running project describe"
     );
 
-    let mut options = ProjectContextOptions::new(project_root, output_path);
+    // The operator's `[agents.*]` over builtins (ADR-0019).
+    let mut options = ProjectContextOptions::new(project_root, output_path)
+        .with_agent_registry(Arc::new(surge_acp::Registry::for_run(&config)));
     options.refresh = args.refresh;
     options.dry_run = args.dry_run;
     let outcome = describe_with_mode(options, args.author_mode)
@@ -121,10 +123,16 @@ async fn describe_with_mode(
 ) -> Result<surge_orchestrator::project_context::ProjectContextOutcome> {
     match mode {
         ProjectDescribeAuthorMode::Deterministic => describe_project(options).map_err(Into::into),
-        ProjectDescribeAuthorMode::Agent => describe_with_agent(options).await,
+        ProjectDescribeAuthorMode::Agent => {
+            let cancel = super::common::cancel_on_ctrl_c();
+            describe_with_agent(options, cancel.token()).await
+        },
         ProjectDescribeAuthorMode::Auto if project_context_author_runtime_available() => {
-            match describe_with_agent(options.clone()).await {
+            let cancel = super::common::cancel_on_ctrl_c();
+            match describe_with_agent(options.clone(), cancel.token()).await {
                 Ok(outcome) => Ok(outcome),
+                // The operator stopped the command: no fallback write.
+                Err(e) if cancel.token().is_cancelled() => Err(e),
                 Err(e) => {
                     warn!(
                         error = %e,
@@ -143,6 +151,7 @@ async fn describe_with_mode(
 
 async fn describe_with_agent(
     options: ProjectContextOptions,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<surge_orchestrator::project_context::ProjectContextOutcome> {
     let bridge =
         Arc::new(surge_acp::bridge::AcpBridge::with_defaults().context("start ACP bridge")?);
@@ -153,7 +162,7 @@ async fn describe_with_agent(
             storage.work_items(),
         ),
     );
-    let result = describe_project_with_bridge(options, facade).await;
+    let result = describe_project_with_bridge(options, facade, cancel).await;
     if let Ok(bridge) = Arc::try_unwrap(bridge)
         && let Err(e) = bridge.shutdown().await
     {

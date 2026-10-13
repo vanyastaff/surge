@@ -151,10 +151,12 @@ async fn describe_project_with_bridge_invokes_project_context_author() {
     // same task so a readiness panic fails the test instead of leaving the
     // author waiting on an event sent to zero receivers.
     let output = temp.path().join("project.md");
+    let cancel = tokio_util::sync::CancellationToken::new();
     let (outcome, ()) = tokio::join!(
         describe_project_with_bridge(
             ProjectContextOptions::new(temp.path().to_path_buf(), output.clone()),
             bridge,
+            &cancel,
         ),
         mock.pump_after_subscribe(1),
     );
@@ -205,14 +207,74 @@ async fn describe_project_with_bridge_rejects_artifacts_outside_project_root() {
     })
     .await;
 
+    let cancel = tokio_util::sync::CancellationToken::new();
+
     let (result, ()) = tokio::join!(
         describe_project_with_bridge(
             ProjectContextOptions::new(temp.path().to_path_buf(), temp.path().join("project.md")),
             bridge,
+            &cancel,
         ),
         mock.pump_after_subscribe(1),
     );
     let err = result.unwrap_err();
 
-    assert!(err.to_string().contains("escapes project root"));
+    assert!(
+        matches!(
+            err,
+            surge_orchestrator::project_context::ProjectContextError::Invocation(
+                surge_orchestrator::agent_invocation::InvocationFailure::ArtifactOutsideWorkingDir(
+                    _
+                )
+            )
+        ),
+        "{err}"
+    );
+    assert_eq!(close_count(&mock).await, 1, "the session closes on refusal");
+}
+
+async fn close_count(mock: &fixtures::mock_bridge::MockBridge) -> usize {
+    mock.recorded_calls
+        .lock()
+        .await
+        .iter()
+        .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::CloseSession(_)))
+        .count()
+}
+
+/// Regression (#99): an early `SessionEnded` used to leave the author's
+/// session open. It now fails retryably and closes the session exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_author_session_ending_early_is_closed_once() {
+    let temp = tempfile::tempdir().unwrap();
+    write_project_files(temp.path());
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let session = SessionId::new();
+    mock.pin_next_session_id(session).await;
+    mock.enqueue_event(BridgeEvent::SessionEnded {
+        session,
+        reason: surge_acp::bridge::event::SessionEndReason::Normal,
+    })
+    .await;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let (result, ()) = tokio::join!(
+        describe_project_with_bridge(
+            ProjectContextOptions::new(temp.path().to_path_buf(), temp.path().join("project.md")),
+            bridge,
+            &cancel,
+        ),
+        mock.pump_after_subscribe(1),
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            surge_orchestrator::project_context::ProjectContextError::Invocation(
+                surge_orchestrator::agent_invocation::InvocationFailure::SessionEnded(_)
+            )
+        ),
+        "{err}"
+    );
+    assert_eq!(close_count(&mock).await, 1);
 }

@@ -58,6 +58,7 @@
 // or integration tests — none of them is engine-only. Folding them under
 // `engine/` would force every consumer to add an `engine::` prefix without
 // any architectural benefit, so they stay at the crate root.
+pub mod agent_invocation;
 pub mod archetype_registry;
 pub mod bootstrap;
 pub mod bootstrap_driver;
@@ -78,32 +79,6 @@ pub mod roadmap_target;
 /// `.autopilot/competitive-waves/spec.md` §16.
 pub mod spill;
 pub mod triage;
-
-/// TOML source of the `Triage Author` bootstrap profile, bundled at compile time.
-///
-/// Used by `surge-orchestrator::triage` (T7.2) to spawn the agent without
-/// requiring the user to install profiles into `~/.surge/profiles/_bootstrap/`
-/// before first run.
-pub const BOOTSTRAP_TRIAGE_AUTHOR_TOML: &str =
-    include_str!("../profiles/_bootstrap/triage-author-1.0.toml");
-
-#[cfg(test)]
-mod bootstrap_profile_tests {
-    use super::*;
-
-    #[test]
-    fn triage_author_toml_parses() {
-        let value: toml::Value = toml::from_str(BOOTSTRAP_TRIAGE_AUTHOR_TOML)
-            .expect("triage-author-1.0.toml is valid TOML");
-        assert_eq!(value["id"].as_str(), Some("_bootstrap/triage-author"));
-        assert_eq!(value["display_name"].as_str(), Some("Triage Author"));
-        assert_eq!(value["version"].as_str(), Some("1.0"));
-        let outcomes = value["declared_outcomes"]
-            .as_array()
-            .expect("declared_outcomes is array");
-        assert_eq!(outcomes.len(), 4);
-    }
-}
 
 pub mod recipe_admission;
 

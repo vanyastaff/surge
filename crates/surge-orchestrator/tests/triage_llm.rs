@@ -67,7 +67,7 @@ mod llm {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "requires ANTHROPIC_TEST_KEY and a real claude binary"]
+    #[ignore = "requires ANTHROPIC_TEST_KEY and the triage-author profile's real agent"]
     async fn fixtures_against_real_haiku() {
         let bridge = Arc::new(AcpBridge::with_defaults().expect("AcpBridge"));
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/triage_fixtures");
@@ -86,9 +86,17 @@ mod llm {
                 active_runs: vec![],
             };
             let tmp = tempfile::tempdir().unwrap();
+            // Resolved through the registries like any run (#99): the
+            // triage-author profile's agent, over the operator's config.
             let mut opts = TriageOptions::with_scratch_root(
                 tmp.path().to_path_buf(),
-                surge_orchestrator::triage::find_claude_binary(),
+                Arc::new(
+                    surge_orchestrator::profile_loader::ProfileRegistry::load()
+                        .expect("profile registry"),
+                ),
+                Some(Arc::new(surge_acp::Registry::for_run(
+                    &surge_core::SurgeConfig::discover().unwrap_or_default(),
+                ))),
             );
             opts.attempt_timeout = Duration::from_secs(180);
             opts.max_attempts = 1;

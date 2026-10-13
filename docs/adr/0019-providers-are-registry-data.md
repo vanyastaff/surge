@@ -88,6 +88,7 @@ contract. There is no per-vendor branch anywhere:
 - Engine wiring must pass the merged registry (`EngineConfig::agent_registry`).
   A caller that leaves it `None` gets `Registry::builtin()` — the previous
   behaviour, which keeps tests and legacy callers working unchanged.
+- Standalone agent invocations are registry consumers too: the Triage Author, the Project Context Author and the Feature Planner run through `agent_invocation` with the merged registry (#99). The triage path's hard-coded Claude binary was the last per-vendor branch on a production path, and it is gone.
 - A user entry with a builtin id overrides the builtin entry. That is
   intentional (an operator redirecting `claude-acp` to their own wrapper is
   legitimate), and it is the one way a builtin can be shadowed.

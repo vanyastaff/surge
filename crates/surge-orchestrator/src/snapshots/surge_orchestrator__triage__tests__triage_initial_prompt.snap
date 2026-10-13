@@ -21,7 +21,6 @@ Anti-patterns to avoid:
 - Always provide priority — never skip.
 - Do not propose implementation; that's downstream.
 
-
 # Inputs
 
 The triage input is encoded as JSON. The shape is:
@@ -76,7 +75,7 @@ Decide whether this ticket is a duplicate, out-of-scope, unclear, or should be e
 
 1. Write your structured decision to `triage_decision.json` (schema below).
 2. Write a 3-5 line markdown blurb to `inbox_summary.md` (used as the body of the inbox card on `enqueued`; safe to omit otherwise).
-3. Call `report_stage_outcome` with the matching `outcome` and `artifacts_produced = ["triage_decision.json", "inbox_summary.md"]`.
+3. Call `report_stage_outcome` with the matching `outcome` and `artifacts_produced` listing exactly the files you wrote: `["triage_decision.json"]`, plus `"inbox_summary.md"` when you wrote it.
 
 triage_decision.json schema:
 - decision: "enqueued" | "duplicate" | "out_of_scope" | "unclear"
