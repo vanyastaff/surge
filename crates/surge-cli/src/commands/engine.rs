@@ -556,7 +556,15 @@ async fn replay_command(run_id: String, seq: Option<u64>, format: OutputFormat) 
     };
     let graph = match surge_orchestrator::engine::execution_state::load(&reader, position).await {
         Ok(state) => Some(state.graph),
-        Err(_) => surge_orchestrator::engine::execution_state::graph_in_force(&events, 0),
+        Err(error) => {
+            // Still draw the run, but say the graph shown may predate applied
+            // revisions: the logs that reach here are the ones being debugged.
+            eprintln!(
+                "warning: execution state of {run_id} could not be rebuilt ({error}); \
+                 showing the first materialized graph"
+            );
+            surge_orchestrator::engine::execution_state::graph_in_force(&events, 0)
+        },
     };
     let view = graph.as_ref().map(|g| build_replay_view(g, &events));
 

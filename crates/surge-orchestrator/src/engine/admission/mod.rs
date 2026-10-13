@@ -539,7 +539,10 @@ impl Admission<'_> {
             .map_err(state_rejection)
         {
             Ok(execution) => execution,
-            Err(rejection) => return Err(close_rejected(writer, rejection).await),
+            // The startup prefix is durable: end the run visibly, as a failure
+            // inside the run task would, so recovery never resumes a start
+            // that never ran.
+            Err(rejection) => return Err(fail_and_close(writer, rejection).await),
         };
         self.assemble(
             run_id,
@@ -1092,6 +1095,20 @@ fn refuse_terminal_conflict(
 
 /// Close the writer opened for a rejected admission, keeping both failures
 /// (the original rejection keeps its concrete variant as the source).
+/// Record `RunFailed` for a run whose startup prefix is already durable, then
+/// close its writer.
+async fn fail_and_close(writer: RunWriter, rejection: AdmissionRejection) -> AdmissionRejection {
+    if let Err(error) = writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunFailed {
+            error: format!("run state could not be loaded after startup: {rejection}"),
+        }))
+        .await
+    {
+        tracing::error!(%error, "could not record RunFailed for a run whose startup state did not load");
+    }
+    close_rejected(writer, rejection).await
+}
+
 async fn close_rejected(writer: RunWriter, rejection: AdmissionRejection) -> AdmissionRejection {
     match writer.close().await {
         Ok(()) => rejection,

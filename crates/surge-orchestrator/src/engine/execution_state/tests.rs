@@ -187,7 +187,10 @@ async fn a_fresh_prefix_starts_at_the_graph_start_and_says_so() {
     assert_eq!(state.cursor_source, CursorSource::GraphStart);
     assert_eq!(state.position, 2);
     assert_eq!(state.memory_applied_seq, 2);
-    assert_eq!((state.frames.len(), state.root_traversal_counts.len()), (0, 0));
+    assert_eq!(
+        (state.frames.len(), state.root_traversal_counts.len()),
+        (0, 0)
+    );
     assert_eq!(state.graph, graph);
     assert_eq!(state.terminal_verdict, TerminalVerdict::Open);
     fx.close().await;
