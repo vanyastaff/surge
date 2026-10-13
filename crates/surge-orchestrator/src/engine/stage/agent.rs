@@ -2112,7 +2112,7 @@ async fn apply_memory_claim_pack(
     let Some(snapshot_ref) = p
         .run_memory
         .artifacts
-        .get(crate::engine::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME)
+        .get(crate::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME)
     else {
         return Ok(None);
     };

@@ -227,6 +227,7 @@ pub(crate) async fn settle_terminal(
 }
 
 /// Preserve the original error while awaiting every ordinary preparation failure's writer exit.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn close_after_error(
     writer: RunWriter,
     operation: super::error::EngineError,

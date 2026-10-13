@@ -27,6 +27,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 // Submodules added incrementally as later phases land.
+pub(crate) mod admission;
 pub mod bootstrap;
 pub mod capacity;
 pub(crate) mod capacity_routes;
@@ -64,10 +65,10 @@ pub mod validate;
 pub mod version_probe;
 pub(crate) mod writer_coverage;
 
+pub use admission::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME;
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy, escalation_config};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
 pub use engine::Engine;
-pub use engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME;
 pub use error::EngineError;
 pub use event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 pub use facade::{EngineFacade, LocalEngineFacade};
