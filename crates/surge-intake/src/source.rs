@@ -43,6 +43,10 @@ pub struct PullRequestDraft {
 /// the same head branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenedPullRequest {
+    /// The PR's host provider (`github`), not the tracker's source name.
+    pub provider: String,
+    /// `owner/repo` the PR belongs to.
+    pub repository: String,
     /// Provider PR number.
     pub number: u64,
     /// Web URL of the PR.

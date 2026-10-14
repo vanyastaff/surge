@@ -239,6 +239,8 @@ impl TaskSource for MockTaskSource {
         });
         let number = 100 + index as u64;
         Ok(crate::source::OpenedPullRequest {
+            provider: "github".to_owned(),
+            repository: repository.clone(),
             number,
             url: format!("https://github.com/{repository}/pull/{number}"),
             adopted: existing.is_some(),
