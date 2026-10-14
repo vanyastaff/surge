@@ -1555,9 +1555,9 @@ mod tests {
         // (doing so would double the flag and break the launch).
         let kind = AgentKind::Custom {
             binary: PathBuf::from("npx"),
-            args: vec!["@zed-industries/codex-acp".into()],
+            args: vec!["@agentclientprotocol/codex-acp".into()],
         };
-        assert_eq!(launch_args(&kind), vec!["@zed-industries/codex-acp"]);
+        assert_eq!(launch_args(&kind), vec!["@agentclientprotocol/codex-acp"]);
     }
 
     #[test]
