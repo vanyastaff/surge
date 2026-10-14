@@ -2,7 +2,7 @@
 //!
 //! Proves the integration end to end **at the transport level**: surge
 //! launches the `ollama-acp` registry entry exactly as the engine does
-//! (npx + `@zed-industries/claude-agent-acp`, with the entry's `env` spec
+//! (npx + `@agentclientprotocol/claude-agent-acp`, with the entry's `env` spec
 //! resolved), completes the ACP handshake, dispatches a prompt, and observes
 //! a non-empty agent reply. That is the whole contract the Ollama runtime
 //! adds — provider routing through the adapter's environment.

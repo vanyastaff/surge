@@ -39,11 +39,11 @@ never clobbered.
 
 | Runtime | Registry id | Launch (registry / npx) | Direct-CLI invocation | Live-validated |
 |---|---|---|---|---|
-| Claude Code | `claude-acp` | `npx @zed-industries/claude-agent-acp` | `claude --acp` | ✅ (v0.1, end-to-end) |
-| Codex | `codex-acp` | `npx @zed-industries/codex-acp` | `codex acp` | ⬜ wired + arg-tested; operator-pending |
+| Claude Code | `claude-acp` | `npx @agentclientprotocol/claude-agent-acp` | `claude --acp` | ✅ (v0.1, end-to-end) |
+| Codex | `codex-acp` | `npx @agentclientprotocol/codex-acp` | `codex acp` | ✅ live `surge doctor agent codex-acp`: spawn → handshake → prompt (adapter 2.2.2, Codex 0.160) |
 | Gemini CLI | `gemini` | `npx @google/gemini-cli --acp` | `gemini --acp` | ⬜ wired + arg-tested; operator-pending |
 | GitHub Copilot | `github-copilot-cli` | `npx @github/copilot --acp` | (via npx) | ⬜ wired; operator-pending |
-| Ollama (local or cloud) | `ollama-acp` | `npx -y @zed-industries/claude-agent-acp` + `ANTHROPIC_*` routing | (via npx) | ✅ transport handshake → prompt → reply, live |
+| Ollama (local or cloud) | `ollama-acp` | `npx -y @agentclientprotocol/claude-agent-acp` + `ANTHROPIC_*` routing | (via npx) | ✅ transport handshake → prompt → reply, live |
 | DeepSeek Harness (**developer preview**) | `dsh-acp` | `npx -y @deepseek-ai/dsh --profile acp` | (via npx) | ⬜ wired + arg-tested; scheduled CI canary only (`.github/workflows/dsh-canary.yml`: a hard pin+handshake gate plus a soft full-flow step that needs model credentials), not the PR gate |
 
 The registry ([`crates/surge-acp/builtin_registry.json`](../crates/surge-acp/builtin_registry.json))
@@ -68,7 +68,7 @@ Binary resolution is PATHEXT-aware (`which`), so bare `npx` resolves to the
 ## Ollama
 
 Ollama exposes an Anthropic-compatible endpoint, and
-`@zed-industries/claude-agent-acp` drives Claude Code over ACP against it.
+`@agentclientprotocol/claude-agent-acp` drives Claude Code over ACP against it.
 The `ollama-acp` builtin entry is pure data:
 
 ```json
@@ -130,6 +130,13 @@ Tracker polling cadence is per-source and tier-aware (L1 5min / L2 2min /
 L3 1min, with rate-limit backoff) for the **GitHub** source; see
 [`tracker-automation.md`](tracker-automation.md). This is independent of the
 agent runtime.
+
+> **Adapter packages moved.** `@zed-industries/claude-agent-acp` and
+> `@zed-industries/codex-acp` are deprecated in favour of
+> `@agentclientprotocol/claude-agent-acp` and `@agentclientprotocol/codex-acp`.
+> The old Codex adapter (≤ 0.16) cannot read a config written by a current
+> `codex` (its `[agents]` table) and fails the handshake; the builtin registry
+> launches the new packages.
 
 ## Validating a runtime live
 

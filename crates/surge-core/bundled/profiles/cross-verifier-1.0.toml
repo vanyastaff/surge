@@ -17,7 +17,7 @@
 # `cross-verifier@1.0` and the finding goes away for the right reason.
 #
 # Requires the Codex CLI on PATH (`codex`, launched over ACP via
-# `npx @zed-industries/codex-acp`). `surge doctor` reports whether it is
+# `npx @agentclientprotocol/codex-acp`). `surge doctor` reports whether it is
 # present; a flow that names this profile on a machine without Codex fails at
 # graph load with `ProfileNotFound`-adjacent resolution, not mid-run.
 
