@@ -183,7 +183,11 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
                 outcome: outcome_blocked,
             },
             to: failure_key,
-            kind: EdgeKind::Escalate,
+            // Forward: reaching the failure terminal on `blocked` is an
+            // ordinary transition. An `Escalate` edge does not count toward
+            // reachability, so the engine refused this graph at start_run and
+            // no L1/L3 ticket could ever run.
+            kind: EdgeKind::Forward,
             policy: EdgePolicy::default(),
         },
     ];
@@ -235,14 +239,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn produces_graph_for_valid_prompt() {
+    async fn produces_a_graph_the_engine_accepts_at_start() {
         let builder = MinimalBootstrapGraphBuilder::new();
-        let _graph = builder
+        let graph = builder
             .build(RunId::new(), sample_prompt(), std::env::temp_dir())
             .await
             .expect("builds");
-        // Structural validation is performed by the engine on start_run.
-        // Here we only assert that no error was returned.
+        // The same validation `Engine::start_run` runs: a ticket graph the
+        // engine refuses means no L1/L3 ticket can run at all.
+        crate::engine::validate::validate_for_m6(&graph)
+            .expect("the engine accepts the ticket graph");
     }
 
     #[tokio::test]
