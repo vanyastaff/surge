@@ -251,17 +251,35 @@ fn make_consumer(
         ))
         .expect("from_dir on missing path returns empty registry"),
     );
+    let worktrees_root = storage.home().join("worktrees");
+    let project_root = committed_project(&storage.home().join("project"));
     InboxActionConsumer {
         storage,
         bootstrap,
         engine,
         archetypes,
         sources: Arc::new(sources),
-        worktrees_root: std::env::temp_dir().join("inbox_test_worktrees"),
-        project_root: std::env::temp_dir(),
+        worktrees_root,
+        project_root,
         config: SurgeConfig::default(),
         poll_interval: Duration::from_millis(50),
     }
+}
+
+/// A git repository with one commit: ticket runs are git worktrees of the
+/// project on their own branch, based on its clean HEAD (#127).
+fn committed_project(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(path).unwrap();
+    let repo = git2::Repository::init(path).unwrap();
+    std::fs::write(path.join("README.md"), "fixture project\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("README.md")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("test", "test@example.com").unwrap();
+    repo.commit(Some("HEAD"), &signature, &signature, "base", &tree, &[])
+        .unwrap();
+    path.to_path_buf()
 }
 
 // ===== Scenarios ========================================================
@@ -304,8 +322,13 @@ async fn scenario_a_start_happy_path() {
     shutdown.cancel();
     consumer_handle.await.unwrap();
 
-    // 1. engine.start_run was called.
-    assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
+    // 1. engine.start_run was called (the ticket's comments say why if not).
+    let comments = mock.posted_comments().await;
+    assert_eq!(
+        engine_state.start_calls.lock().unwrap().len(),
+        1,
+        "comments: {comments:?}"
+    );
     // 2. ticket_index reached Completed (via TicketStateSync after engine emits terminal).
     assert_eq!(fetch_state(&storage, "mock:t#1"), TicketState::Completed);
     // The standalone inbox scaffold does not run main's shared outbox worker.
@@ -720,4 +743,100 @@ async fn cancellation_precedes_ready_first_tick() {
     drop(source);
     drop(storage);
     home.close().unwrap();
+}
+
+/// Drive one Start action for `mock:t#1` through a fresh consumer and return
+/// the started run ids and the ticket's comments.
+async fn start_one_ticket(
+    storage: &Arc<Storage>,
+    prepare_project: impl FnOnce(&std::path::Path),
+) -> (Vec<RunId>, Vec<String>) {
+    insert_ticket(storage, "mock:t#1", "tok_start_1");
+    let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
+    mock.put_task(make_task_details("mock:t#1")).await;
+    let (engine, engine_state) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(storage));
+    let consumer = make_consumer(
+        Arc::clone(storage),
+        engine.clone() as Arc<dyn EngineFacade>,
+        Arc::clone(&mock),
+    );
+    prepare_project(&storage.home().join("project"));
+    {
+        let conn = storage.acquire_registry_conn().unwrap();
+        inbox_queue::append_action(
+            &conn,
+            InboxActionKind::Start,
+            "mock:t#1",
+            "tok_start_1",
+            "telegram",
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    let shutdown = CancellationToken::new();
+    let consumer_handle = tokio::spawn(consumer.run(shutdown.clone()));
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    shutdown.cancel();
+    consumer_handle.await.unwrap();
+    let started = engine_state.start_calls.lock().unwrap().clone();
+    let comments = mock
+        .posted_comments()
+        .await
+        .into_iter()
+        .map(|(_, body)| body)
+        .collect();
+    (started, comments)
+}
+
+/// #127: a ticket run works in a git worktree of the project, on its own
+/// branch, based on the project's HEAD — not in an empty directory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ticket_run_gets_a_worktree_on_its_own_branch() {
+    let (storage, _tmp) = build_storage().await;
+    let (started, comments) = start_one_ticket(&storage, |_| {}).await;
+    assert_eq!(started.len(), 1, "comments: {comments:?}");
+    let run_id = started[0];
+    let worktree = storage
+        .home()
+        .join("worktrees")
+        .canonicalize()
+        .unwrap()
+        .join(run_id.to_string());
+    let checkout = git2::Repository::open(&worktree).expect("the run directory is a git checkout");
+    assert!(checkout.is_worktree());
+    let head = checkout.head().unwrap();
+    assert_eq!(
+        head.shorthand().unwrap(),
+        surge_git::run_worktree::run_branch_name(&run_id)
+    );
+    let project = git2::Repository::open(storage.home().join("project")).unwrap();
+    assert_eq!(
+        head.peel_to_commit().unwrap().id(),
+        project.head().unwrap().peel_to_commit().unwrap().id(),
+        "the run starts from the project's HEAD"
+    );
+    assert!(
+        worktree.join("README.md").exists(),
+        "the checkout has the project's files"
+    );
+}
+
+/// #127: a project with uncommitted changes gives no clean base, so the run
+/// does not start and the ticket says why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dirty_project_does_not_start_and_the_ticket_says_why() {
+    let (storage, _tmp) = build_storage().await;
+    let (started, comments) = start_one_ticket(&storage, |project| {
+        std::fs::write(project.join("scratch.txt"), "uncommitted").unwrap();
+    })
+    .await;
+    assert!(started.is_empty(), "no run on a dirty base");
+    assert!(
+        comments
+            .iter()
+            .any(|body| body.contains("could not start") && body.contains("uncommitted changes")),
+        "{comments:?}"
+    );
 }
