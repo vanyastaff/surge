@@ -9,7 +9,7 @@ pub mod notify;
 pub(crate) mod outcome_acceptance;
 mod session_lease;
 pub mod skill_binding;
-mod stage_tools;
+pub(crate) mod stage_tools;
 pub mod subgraph_stage;
 pub mod terminal;
 

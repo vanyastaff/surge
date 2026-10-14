@@ -594,3 +594,49 @@ fn fixture_profiles_parse() {
         toml::from_str(&profile_toml("invoker", "mock", "")).unwrap();
     assert_eq!(profile.outcomes.len(), 2);
 }
+
+/// The `mock_acp_agent` binary, found from the workspace's `target/debug`.
+fn mock_agent_path() -> std::path::PathBuf {
+    let bin = if cfg!(windows) {
+        "mock_acp_agent.exe"
+    } else {
+        "mock_acp_agent"
+    };
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        return std::path::PathBuf::from(target).join("debug").join(bin);
+    }
+    let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    while !dir.join("Cargo.lock").exists() && dir.pop() {}
+    dir.join("target").join("debug").join(bin)
+}
+
+/// #127 live finding: a real agent reports its outcome by calling
+/// `report_stage_outcome` on the stage MCP server. A standalone invocation
+/// must give it that server, or the agent can only run into the deadline.
+/// Real `AcpBridge` + `mock_acp_agent`, which calls the tool through the
+/// stage MCP when the session offers it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_real_agent_reports_its_outcome_through_the_stage_mcp_server() {
+    let fx = Fixture::new();
+    let mut agents = HashMap::new();
+    agents.insert(
+        "my-provider".to_string(),
+        surge_core::config::AgentConfig {
+            command: mock_agent_path().display().to_string(),
+            args: vec!["--scenario".into(), "report_outcome=skipped".into()],
+            transport: surge_core::config::Transport::Stdio,
+            mcp_servers: vec![],
+            capabilities: vec![],
+            env: BTreeMap::new(),
+            capacity_route: None,
+            settings_files: vec![],
+        },
+    );
+    let registry = surge_acp::Registry::from_config(agents);
+    let bridge: Arc<dyn BridgeFacade> =
+        Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap());
+    let mut request = fx.request("custom-agent@1.0", Some(&registry));
+    request.deadline = Duration::from_secs(30);
+    let outcome = invoke(&bridge, request).await.unwrap();
+    assert_eq!(outcome.outcome.as_str(), "skipped");
+}

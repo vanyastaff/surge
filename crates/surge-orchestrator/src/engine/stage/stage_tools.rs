@@ -281,6 +281,24 @@ pub(super) fn prepare(
     ),
     StageError,
 > {
+    let (endpoint, receiver) = open_endpoint(config, context.clone())?;
+    Ok((endpoint, receiver, StageCalls::new(context)))
+}
+
+/// Open the stage MCP endpoint for `context` and point `config` at it, so
+/// the agent sees the stage tools (`report_stage_outcome`, …). Calls arrive
+/// on the receiver; answering them is the caller's job. Shared by engine
+/// stages and standalone invocations.
+pub(crate) fn open_endpoint(
+    config: &mut surge_acp::bridge::session::SessionConfig,
+    context: StageToolContext,
+) -> Result<
+    (
+        surge_mcp::stage::StageEndpoint,
+        tokio::sync::mpsc::Receiver<StageToolCall>,
+    ),
+    StageError,
+> {
     let catalog = config
         .stage_tools()
         .into_iter()
@@ -290,10 +308,11 @@ pub(super) fn prepare(
             input_schema: tool.input_schema,
         })
         .collect();
-    let (endpoint, receiver) = surge_mcp::stage::StageEndpoint::open(context.clone(), catalog)
+    let session = context.session;
+    let (endpoint, receiver) = surge_mcp::stage::StageEndpoint::open(context, catalog)
         .map_err(|error| StageError::Bridge(error.to_string()))?;
     config.stage_mcp = Some(Box::new(surge_acp::bridge::session::StageMcpConfig {
-        session: context.session,
+        session,
         server: surge_acp::bridge::McpServerStdio::new("surge-stage", helper_path()?)
             .args(vec!["internal-stage-mcp".into()])
             .env(vec![
@@ -307,7 +326,7 @@ pub(super) fn prepare(
                 ),
             ]),
     }));
-    Ok((endpoint, receiver, StageCalls::new(context)))
+    Ok((endpoint, receiver))
 }
 
 fn helper_path() -> Result<std::path::PathBuf, StageError> {
