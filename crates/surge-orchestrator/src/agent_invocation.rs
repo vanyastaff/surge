@@ -297,8 +297,12 @@ pub async fn invoke(
     request: InvocationRequest<'_>,
 ) -> Result<InvocationOutcome, InvocationFailure> {
     let profile = resolve_profile(&request)?;
-    let config = session_config(&request, &profile)?;
+    let mut config = session_config(&request, &profile)?;
     let prompt = config.system_prompt.clone();
+    // A real agent reports its outcome through the stage MCP server's
+    // `report_stage_outcome` tool, as in an engine stage; without it the agent
+    // has no way to finish and runs into the deadline.
+    let (stage_endpoint, mut stage_calls) = open_stage_tools(&mut config, &request)?;
 
     // Subscribe before opening: no event of the new session can be missed.
     let mut events = bridge.subscribe();
@@ -309,10 +313,21 @@ pub async fn invoke(
         .session;
     tracing::debug!(target: "agent_invocation", profile = request.profile, %session, "session opened");
 
-    let result = drive(bridge, &request, &profile, session, &mut events, prompt).await;
+    let result = drive(
+        bridge,
+        &request,
+        &profile,
+        session,
+        (&mut events, &mut stage_calls),
+        prompt,
+    )
+    .await;
     // Exactly once, on every path after a successful open.
     if let Err(error) = bridge.close_session(session).await {
         tracing::warn!(target: "agent_invocation", %session, %error, "session close failed");
+    }
+    if let Err(error) = stage_endpoint.close().await {
+        tracing::warn!(target: "agent_invocation", %session, %error, "stage tool endpoint close failed");
     }
     match &result {
         Ok(outcome) => tracing::info!(target: "agent_invocation", profile = request.profile,
@@ -422,15 +437,91 @@ fn session_config(
     })
 }
 
+/// Open the stage MCP endpoint that gives the agent `report_stage_outcome`,
+/// the way an engine stage does, with the invocation's identity.
+fn open_stage_tools(
+    config: &mut SessionConfig,
+    request: &InvocationRequest<'_>,
+) -> Result<
+    (
+        surge_mcp::stage::StageEndpoint,
+        tokio::sync::mpsc::Receiver<surge_mcp::stage::StageToolCall>,
+    ),
+    InvocationFailure,
+> {
+    let node = match request.recorder {
+        Some(recorder) => recorder.node.clone(),
+        None => NodeKey::try_from("invocation")
+            .map_err(|error| InvocationFailure::SessionOpen(error.to_string()))?,
+    };
+    let context = surge_core::stage_tool::StageToolContext {
+        run: request
+            .recorder
+            .map_or_else(surge_core::RunId::new, |recorder| recorder.run_id),
+        node,
+        session: SessionId::new(),
+        generation: surge_core::id::StageGenerationId::new(),
+    };
+    crate::engine::stage::stage_tools::open_endpoint(config, context)
+        .map_err(|error| InvocationFailure::SessionOpen(format!("stage tools: {error}")))
+}
+
+/// Answer one stage tool call. A `report_stage_outcome` with a declared
+/// outcome is the agent's candidate (validated afterwards, as in the engine);
+/// anything else is refused: a standalone invocation takes no human input.
+fn answer_stage_call(
+    call: surge_mcp::stage::StageToolCall,
+    declared: &[OutcomeKey],
+) -> Option<(OutcomeKey, String, Vec<String>)> {
+    use surge_mcp::stage::StageToolReply;
+    if call.tool != surge_acp::bridge::tools::REPORT_STAGE_OUTCOME {
+        let _ = call.reply.send(StageToolReply::rejected(format!(
+            "{} is not available in this invocation",
+            call.tool
+        )));
+        return None;
+    }
+    match serde_json::from_value::<surge_core::stage_tool::StageOutcomeCandidate>(
+        call.arguments.clone(),
+    ) {
+        Ok(candidate) if declared.contains(&candidate.outcome) => {
+            let _ = call.reply.send(StageToolReply {
+                is_error: false,
+                value: serde_json::json!({"status": "candidate received; final validation pending"}),
+            });
+            Some((
+                candidate.outcome,
+                candidate.summary,
+                candidate.artifacts_produced,
+            ))
+        },
+        _ => {
+            let _ = call.reply.send(StageToolReply::rejected(
+                "invalid or undeclared outcome candidate",
+            ));
+            None
+        },
+    }
+}
+
 /// Send the prompt and wait for an accepted outcome; never closes the session.
 async fn drive(
     bridge: &Arc<dyn BridgeFacade>,
     request: &InvocationRequest<'_>,
     profile: &ResolvedProfile,
     session: SessionId,
-    events: &mut tokio::sync::broadcast::Receiver<BridgeEvent>,
+    (events, stage_calls): (
+        &mut tokio::sync::broadcast::Receiver<BridgeEvent>,
+        &mut tokio::sync::mpsc::Receiver<surge_mcp::stage::StageToolCall>,
+    ),
     prompt: String,
 ) -> Result<InvocationOutcome, InvocationFailure> {
+    let declared: Vec<OutcomeKey> = profile
+        .profile
+        .outcomes
+        .iter()
+        .map(|outcome| outcome.id.clone())
+        .collect();
     let deadline = tokio::time::sleep(request.deadline);
     tokio::pin!(deadline);
     let mut rejections = 0_u32;
@@ -458,6 +549,11 @@ async fn drive(
                     result = &mut send, if !sent => {
                         result.map_err(|error| InvocationFailure::Send(error.to_string()))?;
                         sent = true;
+                    },
+                    Some(call) = stage_calls.recv() => {
+                        if let Some(candidate) = answer_stage_call(call, &declared) {
+                            reported.get_or_insert(candidate);
+                        }
                     },
                     event = events.recv() => match event {
                         Ok(BridgeEvent::OutcomeReported {
@@ -603,4 +699,61 @@ async fn record(
         .await
         .map(|_| ())
         .map_err(|error| InvocationFailure::Record(error.to_string()))
+}
+
+#[cfg(test)]
+mod stage_call_tests {
+    use super::*;
+
+    fn call(
+        tool: &str,
+        arguments: serde_json::Value,
+    ) -> (
+        surge_mcp::stage::StageToolCall,
+        tokio::sync::oneshot::Receiver<surge_mcp::stage::StageToolReply>,
+    ) {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        (
+            surge_mcp::stage::StageToolCall {
+                context: surge_core::stage_tool::StageToolContext {
+                    run: surge_core::RunId::new(),
+                    node: NodeKey::try_from("invocation").unwrap(),
+                    session: SessionId::new(),
+                    generation: surge_core::id::StageGenerationId::new(),
+                },
+                tool: tool.into(),
+                arguments,
+                reply,
+            },
+            answer,
+        )
+    }
+
+    #[test]
+    fn a_declared_outcome_is_the_candidate_and_anything_else_is_refused() {
+        let declared = [OutcomeKey::try_from("done").unwrap()];
+        let (report, answer) = call(
+            "report_stage_outcome",
+            serde_json::json!({"call_id": "c1", "outcome": "done", "summary": "ok",
+                "artifacts_produced": ["a.md"]}),
+        );
+        let candidate = answer_stage_call(report, &declared).expect("accepted");
+        assert_eq!(candidate.0.as_str(), "done");
+        assert_eq!(candidate.2, ["a.md"]);
+        assert!(!answer.blocking_recv().unwrap().is_error);
+
+        let (undeclared, answer) = call(
+            "report_stage_outcome",
+            serde_json::json!({"call_id": "c2", "outcome": "other", "summary": "x"}),
+        );
+        assert!(answer_stage_call(undeclared, &declared).is_none());
+        assert!(answer.blocking_recv().unwrap().is_error);
+
+        let (question, answer) = call(
+            "request_human_input",
+            serde_json::json!({"call_id": "c3", "question": "?"}),
+        );
+        assert!(answer_stage_call(question, &declared).is_none());
+        assert!(answer.blocking_recv().unwrap().is_error);
+    }
 }
