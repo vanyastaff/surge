@@ -118,7 +118,10 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v21:** adds [`EventPayload::StageRuntimeRotated`] (a stage moved to a
 /// fallback agent on an exhausted usage limit). A v20 reader would replay the
 /// stage on the exhausted agent, so it rejects v21.
-pub const MAX_SUPPORTED_VERSION: u32 = 21;
+/// **v22:** adds [`EventPayload::PullRequestOpened`] (the PR carrying a run's
+/// work, #127). A v21 reader would not see which PR the merge gate must
+/// resolve, so it rejects v22.
+pub const MAX_SUPPORTED_VERSION: u32 = 22;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -478,6 +481,20 @@ impl Migration for IdentityV21 {
     }
 }
 
+/// Identity decoder for pull-request records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV22;
+impl Migration for IdentityV22 {
+    fn version(&self) -> u32 {
+        22
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v22 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -489,7 +506,7 @@ impl MigrationChain {
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
     /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
     /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], [`IdentityV19`],
-    /// [`IdentityV20`], and [`IdentityV21`].
+    /// [`IdentityV20`], [`IdentityV21`], and [`IdentityV22`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -515,6 +532,7 @@ impl MigrationChain {
                 Box::new(IdentityV19),
                 Box::new(IdentityV20),
                 Box::new(IdentityV21),
+                Box::new(IdentityV22),
             ],
         }
     }
@@ -702,13 +720,36 @@ mod tests {
             same_as_partner: true,
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 21);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("stage_runtime_rotated"));
         assert_eq!(migrate_payload(21, &bytes).unwrap(), payload);
+    }
+
+    #[test]
+    fn v22_pull_request_record_round_trips_and_v21_readers_reject_it() {
+        let payload = EventPayload::PullRequestOpened {
+            pr: serde_json::from_value(serde_json::json!({
+                "provider": "github",
+                "repository": "acme/app",
+                "number": 57,
+                "url": "https://github.com/acme/app/pull/57",
+            }))
+            .unwrap(),
+            head_branch: "surge/run-01abc".into(),
+            head_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("pull_request_opened"));
+        assert_eq!(migrate_payload(22, &bytes).unwrap(), payload);
+        // A reader whose maximum is below 22 rejects it; today's maximum
+        // decodes it, and the next version up is still refused.
         assert!(matches!(
-            migrate_payload(22, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
+            migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+            Err(SurgeError::SchemaTooNew { found, max })
+                if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
         ));
     }
 
@@ -736,8 +777,9 @@ mod tests {
             assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
             assert_eq!(migrate_payload(20, &bytes).unwrap(), payload);
             assert!(matches!(
-                migrate_payload(22, &bytes),
-                Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
+                migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+                Err(SurgeError::SchemaTooNew { found, max })
+                    if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
             ));
         }
     }

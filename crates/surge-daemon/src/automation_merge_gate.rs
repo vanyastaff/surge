@@ -287,8 +287,73 @@ async fn handle_completion(
         info!(target: "intake::merge_gate", task_id = %row.task_id, %run_id, tier = policy.tier_code(), "non-L3 merge gate no-op");
         return;
     }
-    let readiness = check_merge_readiness(&source, &task_id).await;
-    apply_merge_decision(&ctx, readiness).await;
+    let pr = match resolve_pull_request(&ctx).await {
+        Ok(pr) => pr,
+        Err(reason) => {
+            record_blocked(&ctx, &format!("Surge L3 auto-merge: blocked — {reason}")).await;
+            return;
+        },
+    };
+    let readiness = check_merge_readiness(&source, &task_id, pr).await;
+    apply_merge_decision(&ctx, pr, readiness).await;
+}
+
+/// The pull request this run's work is in (#127). The run's own log is the
+/// record: the latest `PullRequestOpened`. Without one, the provider's links
+/// decide (on GitHub, open PRs that close the issue), and only an unambiguous
+/// single link counts. The PR is never derived from the ticket number.
+async fn resolve_pull_request(ctx: &MergeCtx<'_>) -> Result<u64, String> {
+    if let Some(pr) = recorded_pull_request(ctx.runs, ctx.run_id).await {
+        return Ok(pr);
+    }
+    match ctx.source.linked_pull_requests(ctx.task_id).await {
+        Ok(linked) => match linked.as_slice() {
+            [pr] => Ok(*pr),
+            [] => Err(
+                "no pull request is linked to this ticket (Surge records the PR it opens; \
+                 otherwise a PR must close the issue)"
+                    .into(),
+            ),
+            several => Err(format!(
+                "several open pull requests close this ticket ({}); Surge will not guess which to merge",
+                several
+                    .iter()
+                    .map(|pr| format!("#{pr}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        },
+        Err(error) => Err(format!(
+            "could not read the ticket's linked pull requests: {error}"
+        )),
+    }
+}
+
+/// The PR number of the run's latest `PullRequestOpened`, if any. An
+/// unreadable log counts as "no record" and falls back to the provider's
+/// links, which still refuse to guess.
+async fn recorded_pull_request(
+    runs: &Arc<surge_persistence::runs::Storage>,
+    run_id: RunId,
+) -> Option<u64> {
+    let reader = match runs.open_run_reader(run_id).await {
+        Ok(reader) => reader,
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, %run_id, "cannot open the run log to read its pull request");
+            return None;
+        },
+    };
+    let events = match reader.read_run_events().await {
+        Ok(events) => events,
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, %run_id, "cannot read the run log to find its pull request");
+            return None;
+        },
+    };
+    events.iter().rev().find_map(|event| match &event.payload {
+        surge_core::run_event::EventPayload::PullRequestOpened { pr, .. } => Some(pr.number),
+        _ => None,
+    })
 }
 
 /// Classification precedes tracker reads and current policy: a revoked label
@@ -457,12 +522,12 @@ async fn reserve_marker(ctx: &MergeCtx<'_>, kind: EmitEventKind) -> bool {
     }
 }
 
-async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
+async fn apply_merge_decision(ctx: &MergeCtx<'_>, pr: u64, readiness: MergeReadiness) {
     match readiness {
         // The readiness gate already confirmed the PR exists, is open,
         // mergeable, and approved — execute the real merge, pinned to the
         // head the verdict was computed against.
-        MergeReadiness::Ready { head_ref } => attempt_merge(ctx, head_ref.as_deref()).await,
+        MergeReadiness::Ready { head_ref } => attempt_merge(ctx, pr, head_ref.as_deref()).await,
         // Red checks / missing review / errored readiness check. Comment +
         // label + escalate so an L3 run never silently fails to merge.
         MergeReadiness::Blocked(reason) => {
@@ -473,11 +538,11 @@ async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
 
 /// Execute the merge for a `Ready` PR and record the outcome. `expected_head`
 /// pins the merge to the revision the readiness verdict approved.
-async fn attempt_merge(ctx: &MergeCtx<'_>, expected_head: Option<&str>) {
+async fn attempt_merge(ctx: &MergeCtx<'_>, pr: u64, expected_head: Option<&str>) {
     if !reserve_marker(ctx, EmitEventKind::MergeAttempted).await {
         return;
     }
-    match ctx.source.merge_pr(ctx.task_id, expected_head).await {
+    match ctx.source.merge_pr(ctx.task_id, pr, expected_head).await {
         Ok(MergeOutcome::Merged | MergeOutcome::AlreadyMerged) => {
             // The merge is irreversible. Record the terminal `Merged` dedup
             // row FIRST: even if the follow-up comment/label fail, a
@@ -915,8 +980,12 @@ async fn escalate(ctx: &MergeCtx<'_>, severity: NotifySeverity, title: &str, bod
 /// reason — the gate retries during durable reconciliation because the
 /// `intake_emit_log` row is only written after both side-effects
 /// succeed.
-async fn check_merge_readiness(source: &Arc<dyn TaskSource>, task_id: &TaskId) -> MergeReadiness {
-    match source.check_merge_readiness(task_id).await {
+async fn check_merge_readiness(
+    source: &Arc<dyn TaskSource>,
+    task_id: &TaskId,
+    pr: u64,
+) -> MergeReadiness {
+    match source.check_merge_readiness(task_id, pr).await {
         Ok(verdict) => verdict,
         Err(e) => {
             warn!(

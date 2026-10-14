@@ -23,8 +23,24 @@ pub struct GitHubClient {
 impl GitHubClient {
     /// Construct a new client authenticated with the given Personal Access Token.
     pub fn new(api_token: &str, owner: String, repo: String) -> Result<Self> {
-        let octo = Octocrab::builder()
-            .personal_token(api_token.to_string())
+        Self::with_api_base(api_token, owner, repo, None)
+    }
+
+    /// Like [`Self::new`], against another API root (GitHub Enterprise, or a
+    /// local stub in tests). `None` is `https://api.github.com`.
+    pub fn with_api_base(
+        api_token: &str,
+        owner: String,
+        repo: String,
+        api_base: Option<&str>,
+    ) -> Result<Self> {
+        let mut builder = Octocrab::builder().personal_token(api_token.to_string());
+        if let Some(base) = api_base {
+            builder = builder
+                .base_uri(base)
+                .map_err(|e| Error::AuthFailed(format!("octocrab base uri {base}: {e}")))?;
+        }
+        let octo = builder
             .build()
             .map_err(|e| Error::AuthFailed(format!("octocrab build: {e}")))?;
         Ok(Self {

@@ -536,6 +536,7 @@ pub fn maintain(
         | EventPayload::ExecutionWriterGroupStopped { .. }
         | EventPayload::TaskSplit { .. }
         | EventPayload::StageRuntimeRotated { .. }
+        | EventPayload::PullRequestOpened { .. }
         | EventPayload::RequirementRevised { task: None, .. }
         | EventPayload::TaskAcceptedByHuman { task: None, .. }
         | EventPayload::SessionEstablishmentRequested { .. }
