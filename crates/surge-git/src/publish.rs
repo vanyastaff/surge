@@ -79,6 +79,10 @@ pub fn commit_changes(
 ///
 /// `token`, when given, authenticates HTTPS remotes the way GitHub expects a
 /// personal access token (`x-access-token` user). It never appears in errors.
+/// With a token, an SSH remote (`git@host:owner/repo`, `ssh://git@host/...`)
+/// is pushed to over its HTTPS equivalent, because a library push cannot use
+/// the keys `ssh` finds through `~/.ssh/config` or a keychain. Without one,
+/// SSH remotes authenticate with ssh-agent, then the default key files.
 ///
 /// # Errors
 /// Git failures, and [`GitError::PushRejected`] when the remote refuses the
@@ -90,16 +94,26 @@ pub fn push_branch(
     token: Option<&str>,
 ) -> Result<(), GitError> {
     let repo = Repository::open(checkout)?;
-    let mut remote = repo.find_remote(remote)?;
+    let named = repo.find_remote(remote)?;
+    let https = token.and(named.url().ok()).and_then(https_equivalent);
+    let mut remote = match https {
+        Some(url) => repo.remote_anonymous(&url)?,
+        None => named,
+    };
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     let rejected = std::cell::RefCell::new(None::<(String, String)>);
     {
         let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(|_url, username, allowed| match token {
-            Some(token) if allowed.is_user_pass_plaintext() => {
-                Cred::userpass_plaintext("x-access-token", token)
-            },
-            _ => Cred::default().or_else(|_| Cred::username(username.unwrap_or("git"))),
+        callbacks.credentials(|_url, username, allowed| {
+            let user = username.unwrap_or("git");
+            match token {
+                Some(token) if allowed.is_user_pass_plaintext() => {
+                    Cred::userpass_plaintext("x-access-token", token)
+                },
+                _ if allowed.is_ssh_key() => ssh_credentials(user),
+                _ if allowed.is_username() => Cred::username(user),
+                _ => Cred::default(),
+            }
         });
         callbacks.push_update_reference(|reference, status| {
             if let Some(reason) = status {
@@ -116,6 +130,48 @@ pub fn push_branch(
     }
     tracing::info!(branch, "pushed run branch");
     Ok(())
+}
+
+/// `https://host/owner/repo.git` for an SSH remote URL; `None` for anything
+/// that is not SSH (HTTPS and local remotes are pushed to as they are).
+fn https_equivalent(url: &str) -> Option<String> {
+    let (host, path) = if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.split_once('@').map_or(rest, |(_, after)| after);
+        let (host, path) = rest.split_once('/')?;
+        (host.split(':').next()?, path)
+    } else {
+        let (user_host, path) = url.split_once(':')?;
+        let host = user_host.split_once('@')?.1;
+        if host.contains('/') || path.starts_with("//") {
+            return None;
+        }
+        (host, path)
+    };
+    let path = path.trim_start_matches('/').trim_end_matches(".git");
+    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}.git"))
+}
+
+/// ssh-agent first, then the default private key files (unencrypted).
+fn ssh_credentials(user: &str) -> Result<Cred, git2::Error> {
+    if let Ok(cred) = Cred::ssh_key_from_agent(user) {
+        return Ok(cred);
+    }
+    let ssh_dir = dirs_home().map(|home| home.join(".ssh"));
+    for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
+        if let Some(key) = ssh_dir.as_ref().map(|dir| dir.join(name))
+            && key.exists()
+            && let Ok(cred) = Cred::ssh_key(user, None, &key, None)
+        {
+            return Ok(cred);
+        }
+    }
+    Err(git2::Error::from_str(
+        "no SSH credentials: add a key to ssh-agent, or use an HTTPS remote with a token",
+    ))
+}
+
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 #[cfg(test)]
@@ -179,6 +235,34 @@ mod tests {
         assert!(tree.get_path(Path::new(".surge/user_prompt.txt")).is_err());
         assert!(tree.get_path(Path::new("pr.md")).is_err());
         assert_ne!(oid, base);
+    }
+
+    #[test]
+    fn ssh_remotes_map_to_their_https_equivalent() {
+        for (ssh, https) in [
+            (
+                "git@github.com:acme/app.git",
+                "https://github.com/acme/app.git",
+            ),
+            ("git@github.com:acme/app", "https://github.com/acme/app.git"),
+            (
+                "ssh://git@github.com/acme/app.git",
+                "https://github.com/acme/app.git",
+            ),
+            (
+                "ssh://git@ghe.example.com:2222/team/app.git",
+                "https://ghe.example.com/team/app.git",
+            ),
+        ] {
+            assert_eq!(https_equivalent(ssh).as_deref(), Some(https), "{ssh}");
+        }
+        for not_ssh in [
+            "https://github.com/acme/app.git",
+            "/tmp/remote.git",
+            "file:///tmp/remote.git",
+        ] {
+            assert_eq!(https_equivalent(not_ssh), None, "{not_ssh}");
+        }
     }
 
     #[test]
