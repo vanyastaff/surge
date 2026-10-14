@@ -40,7 +40,8 @@ fn startup_run_events(
         bootstrap_edit_loop_cap: Some(run_config.bootstrap.edit_loop_cap),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
-        auto_pr: false,
+        // Recorded as what the run will do: publish only with a publisher.
+        auto_pr: run_config.pull_request_publisher.is_some(),
         mcp_servers: if run_config.owned_flow_inputs.is_some() {
             Vec::new()
         } else {

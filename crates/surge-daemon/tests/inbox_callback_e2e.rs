@@ -101,6 +101,8 @@ enum EngineBehavior {
 #[derive(Debug, Default, Clone)]
 struct EngineState {
     pub start_calls: Arc<StdMutex<Vec<RunId>>>,
+    /// Whether each started run came with a pull-request publisher (#127).
+    publishers: Arc<StdMutex<Vec<bool>>>,
     terminal_publications: Arc<StdMutex<Vec<RunId>>>,
 }
 
@@ -131,9 +133,14 @@ impl EngineFacade for MockEngineFacade {
         run_id: RunId,
         _graph: surge_core::graph::Graph,
         _worktree_path: PathBuf,
-        _run_config: EngineRunConfig,
+        run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
         self.state.start_calls.lock().unwrap().push(run_id);
+        self.state
+            .publishers
+            .lock()
+            .unwrap()
+            .push(run_config.pull_request_publisher.is_some());
         let behavior = self.behavior.lock().await.clone();
 
         // Insert a fake `runs` row so that the `ticket_index.run_id` FK
@@ -751,9 +758,22 @@ async fn start_one_ticket(
     storage: &Arc<Storage>,
     prepare_project: impl FnOnce(&std::path::Path),
 ) -> (Vec<RunId>, Vec<String>) {
+    let (started, comments, _) = start_labelled_ticket(storage, &[], prepare_project).await;
+    (started, comments)
+}
+
+/// Like [`start_one_ticket`] for a ticket carrying `labels`; also returns
+/// whether each started run came with a pull-request publisher.
+async fn start_labelled_ticket(
+    storage: &Arc<Storage>,
+    labels: &[&str],
+    prepare_project: impl FnOnce(&std::path::Path),
+) -> (Vec<RunId>, Vec<String>, Vec<bool>) {
     insert_ticket(storage, "mock:t#1", "tok_start_1");
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
-    mock.put_task(make_task_details("mock:t#1")).await;
+    let mut details = make_task_details("mock:t#1");
+    details.labels = labels.iter().map(|label| (*label).to_owned()).collect();
+    mock.put_task(details).await;
     let (engine, engine_state) =
         MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(storage));
     let consumer = make_consumer(
@@ -781,13 +801,14 @@ async fn start_one_ticket(
     shutdown.cancel();
     consumer_handle.await.unwrap();
     let started = engine_state.start_calls.lock().unwrap().clone();
+    let publishers = engine_state.publishers.lock().unwrap().clone();
     let comments = mock
         .posted_comments()
         .await
         .into_iter()
         .map(|(_, body)| body)
         .collect();
-    (started, comments)
+    (started, comments, publishers)
 }
 
 /// #127: a ticket run works in a git worktree of the project, on its own
@@ -839,4 +860,16 @@ async fn a_dirty_project_does_not_start_and_the_ticket_says_why() {
             .any(|body| body.contains("could not start") && body.contains("uncommitted changes")),
         "{comments:?}"
     );
+}
+
+/// #127: only an L3 ticket (`surge:auto`) runs with a pull-request publisher.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_an_l3_ticket_publishes_its_pull_request() {
+    for (labels, publishes) in [(vec!["surge:auto"], true), (vec!["surge:enabled"], false)] {
+        let (storage, _tmp) = build_storage().await;
+        let (started, comments, publishers) =
+            start_labelled_ticket(&storage, &labels, |_| {}).await;
+        assert_eq!(started.len(), 1, "{labels:?}: {comments:?}");
+        assert_eq!(publishers, [publishes], "{labels:?}");
+    }
 }

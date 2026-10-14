@@ -27,6 +27,7 @@ pub struct MockTaskSource {
     merge_calls: Mutex<Vec<(TaskId, Option<String>)>>,
     merged_prs: Mutex<Vec<u64>>,
     linked_prs: Mutex<Vec<u64>>,
+    opened_prs: Mutex<Vec<crate::source::PullRequestDraft>>,
     fetch_task_calls: Mutex<u32>,
 }
 
@@ -49,6 +50,7 @@ impl MockTaskSource {
             merged_prs: Mutex::new(Vec::new()),
             // One linked PR (#1) by default: "the ticket has its PR".
             linked_prs: Mutex::new(vec![1]),
+            opened_prs: Mutex::new(Vec::new()),
             fetch_task_calls: Mutex::new(0),
         }
     }
@@ -104,6 +106,13 @@ impl MockTaskSource {
     /// PR numbers `merge_pr` was asked to merge, in order.
     pub async fn merged_prs(&self) -> Vec<u64> {
         self.merged_prs.lock().await.clone()
+    }
+
+    /// Drafts `open_pull_request` received, in order. Each opens PR
+    /// `100 + its index` (GitHub URL shape), or adopts the earlier one for
+    /// the same branch.
+    pub async fn opened_pull_requests(&self) -> Vec<crate::source::PullRequestDraft> {
+        self.opened_prs.lock().await.clone()
     }
 
     /// Set the PRs the provider links to every task (default `[1]`).
@@ -205,6 +214,35 @@ impl TaskSource for MockTaskSource {
             .get(id)
             .map(|d| d.labels.clone())
             .unwrap_or_default())
+    }
+
+    async fn open_pull_request(
+        &self,
+        id: &TaskId,
+        draft: &crate::source::PullRequestDraft,
+    ) -> Result<crate::source::OpenedPullRequest> {
+        // GitHub's URL shape for the ticket's repository (`provider:owner/repo#N`).
+        let id = id.as_str();
+        let repository = id
+            .split_once(':')
+            .map_or(id, |(_, rest)| rest)
+            .rsplit_once('#')
+            .map_or(id, |(repository, _)| repository)
+            .to_owned();
+        let mut opened = self.opened_prs.lock().await;
+        let existing = opened
+            .iter()
+            .position(|earlier| earlier.head_branch == draft.head_branch);
+        let index = existing.unwrap_or_else(|| {
+            opened.push(draft.clone());
+            opened.len() - 1
+        });
+        let number = 100 + index as u64;
+        Ok(crate::source::OpenedPullRequest {
+            number,
+            url: format!("https://github.com/{repository}/pull/{number}"),
+            adopted: existing.is_some(),
+        })
     }
 
     async fn linked_pull_requests(&self, _id: &TaskId) -> Result<Vec<u64>> {

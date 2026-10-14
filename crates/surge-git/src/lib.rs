@@ -36,6 +36,7 @@ pub mod checkpoint;
 pub mod cleanup;
 pub mod fingerprint;
 pub mod orphan;
+pub mod publish;
 pub mod run_worktree;
 pub mod worktree;
 

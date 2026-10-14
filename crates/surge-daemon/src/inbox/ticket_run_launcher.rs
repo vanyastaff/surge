@@ -168,6 +168,42 @@ impl TicketRunLauncher {
         }))
     }
 
+    /// The run's configuration: project context, plus — for L3 (`surge:auto`,
+    /// merge when clean) — the publisher that opens the run's pull request
+    /// for the merge gate (#127).
+    fn run_config_for(
+        &self,
+        source: &Arc<dyn TaskSource>,
+        task_id: &TaskId,
+        details: &TaskDetails,
+        source_id: &str,
+    ) -> EngineRunConfig {
+        let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
+            EngineRunConfig::default(),
+            &self.project_root,
+            &self.config,
+        );
+        // L3 (`surge:auto`, merge when clean) publishes its work as a pull
+        // request the merge gate can then resolve and merge (#127).
+        if matches!(
+            surge_intake::policy::resolve_policy(&details.labels),
+            surge_intake::policy::AutomationPolicy::Auto {
+                merge_when_clean: true
+            }
+        ) {
+            run_config.pull_request_publisher = Some(Arc::new(
+                crate::pr_publisher::TicketPullRequestPublisher::new(
+                    Arc::clone(source),
+                    task_id.clone(),
+                    details.title.clone(),
+                    self.project_root.clone(),
+                    push_token(&self.config, source_id),
+                ),
+            ));
+        }
+        run_config
+    }
+
     /// Provision a worktree, build the run graph (bootstrap or
     /// archetype-template depending on `policy_hint`), start the run,
     /// transition `ticket_index` to `RunStarted`, and post the tracker
@@ -238,11 +274,7 @@ impl TicketRunLauncher {
             .await?;
 
         // Start the run with project-context + mcp_servers seeds applied.
-        let run_config = surge_orchestrator::project_context::with_project_context_seed(
-            EngineRunConfig::default(),
-            &self.project_root,
-            &self.config,
-        );
+        let run_config = self.run_config_for(&source, &task_id, &details, &ticket_row.source_id);
         let handle = self
             .engine
             .start_run(run_id, graph, worktree, run_config)
@@ -408,6 +440,19 @@ async fn provision_run_worktree(
     })
     .await
     .map_err(|error| format!("worktree task failed: {error}"))?
+}
+
+/// The HTTPS push token of the tracker `source_id`, from the environment
+/// variable its configuration names. `None` leaves authentication to git.
+fn push_token(config: &SurgeConfig, source_id: &str) -> Option<String> {
+    config.task_sources.iter().find_map(|source| match source {
+        surge_core::config::TaskSourceConfig::GithubIssues(github) if github.id == source_id => {
+            std::env::var(&github.api_token_env)
+                .ok()
+                .filter(|token| !token.is_empty())
+        },
+        _ => None,
+    })
 }
 
 #[cfg(test)]

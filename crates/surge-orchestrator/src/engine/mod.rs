@@ -50,6 +50,7 @@ pub mod ipc;
 mod owned_effects;
 pub mod owned_flow;
 pub mod predicates;
+pub mod publish;
 pub(crate) mod quota_recovery;
 pub mod replay_view;
 pub mod routing;
