@@ -202,10 +202,27 @@ impl TicketRunLauncher {
             details,
         } = start;
 
-        // Provision worktree.
+        // Provision a real git worktree of the project on the run's own
+        // branch, pinned to the project's clean HEAD (#127): the agent edits,
+        // and the run publishes, that branch. A project that cannot give a
+        // clean base does not start the run, and the ticket says why.
         let run_id = RunId::new();
-        let worktree = self.worktrees_root.join(run_id.to_string());
-        std::fs::create_dir_all(&worktree).map_err(|e| format!("worktree mkdir: {e}"))?;
+        let worktree = match provision_run_worktree(
+            self.project_root.clone(),
+            &self.worktrees_root,
+            run_id,
+        )
+        .await
+        {
+            Ok(worktree) => worktree,
+            Err(reason) => {
+                let body = format!("Surge could not start this ticket: {reason}");
+                if let Err(error) = source.post_comment(&task_id, &body).await {
+                    warn!(%error, task_id = %task_id, "could not tell the ticket why its run did not start");
+                }
+                return Err(format!("worktree: {reason}"));
+            },
+        };
 
         // Build the run graph — L2 template path takes priority; everything
         // else falls back to the configured bootstrap builder.
@@ -351,6 +368,46 @@ pub fn render_via_label(decided_via: &str) -> &str {
         "desktop" => "the desktop notification",
         other => other,
     }
+}
+
+/// Create the run's git worktree of `project` under `worktrees_root`, on
+/// branch `surge/run-<short>`, based on the project's clean `HEAD`, and
+/// return its path. The root is canonicalized first: run worktrees refuse
+/// symlinked paths (on macOS the temp and home trees sit under symlinks).
+/// Returns an operator-readable reason on failure.
+async fn provision_run_worktree(
+    project: PathBuf,
+    worktrees_root: &std::path::Path,
+    run_id: RunId,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(worktrees_root)
+        .map_err(|error| format!("cannot create {}: {error}", worktrees_root.display()))?;
+    let root = worktrees_root
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve {}: {error}", worktrees_root.display()))?;
+    let worktree = root.join(run_id.to_string());
+    tokio::task::spawn_blocking(move || {
+        use surge_git::run_worktree::{ReconcilePhase, RunWorktreeSpec};
+        let git = surge_git::GitManager::new(project.clone())
+            .map_err(|error| format!("{} is not a git repository: {error}", project.display()))?;
+        let base = git.capture_clean_base().map_err(|error| match error {
+            surge_git::GitError::DirtyRepository => format!(
+                "{} has uncommitted changes; commit or stash them so the run starts from a clean base",
+                project.display()
+            ),
+            surge_git::GitError::EmptyRepository => {
+                format!("{} has no commits to base the run on", project.display())
+            },
+            other => format!("cannot pin the base commit of {}: {other}", project.display()),
+        })?;
+        let spec = RunWorktreeSpec::new(run_id, base, worktree.clone())
+            .map_err(|error| format!("invalid run worktree: {error}"))?;
+        git.prepare_run_worktree(&spec, ReconcilePhase::BeforeExecution)
+            .map(|_| worktree)
+            .map_err(|error| format!("cannot create the run worktree: {error}"))
+    })
+    .await
+    .map_err(|error| format!("worktree task failed: {error}"))?
 }
 
 #[cfg(test)]
