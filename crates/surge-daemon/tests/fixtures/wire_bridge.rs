@@ -104,7 +104,22 @@ impl BridgeFacade for WireBridge {
         self.bridge.session_state(id).await
     }
     async fn close_session(&self, id: SessionId) -> Result<(), CloseSessionError> {
-        if let Some(barrier) = std::env::var_os("SURGE_TEST_CLOSE_BARRIER") {
+        let selected = if let Ok(node) = std::env::var("SURGE_TEST_CLOSE_NODE") {
+            let (storage, run) = self
+                .session_commit_check
+                .as_ref()
+                .expect("selected close journal");
+            let inspected = storage.inspect_run(*run).await.unwrap();
+            let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+                inspected.database
+            else {
+                panic!("missing selected close journal")
+            };
+            events.iter().any(|event| matches!(event.payload.payload(), surge_core::EventPayload::SessionOpened { session, node: opened_node, .. } if *session == id && opened_node.as_str() == node))
+        } else {
+            true
+        };
+        if selected && let Some(barrier) = std::env::var_os("SURGE_TEST_CLOSE_BARRIER") {
             let barrier = PathBuf::from(barrier);
             std::fs::write(barrier.with_extension("ready"), b"close reached").unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(20), async {

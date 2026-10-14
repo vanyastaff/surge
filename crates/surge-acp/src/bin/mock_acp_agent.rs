@@ -15,6 +15,7 @@
 //!
 //! **Flags (CLI args — preferred for tests; env vars retained for back-compat)**
 //!
+//! - `--stage-script <path>` — ordered real-MCP turn script with a persistent cursor
 //! - `--usage`               — equivalent to `MOCK_ACP_USAGE=on`
 //! - `--handshake-fail`      — equivalent to `MOCK_ACP_HANDSHAKE_FAIL=1`
 //! - `--log-stderr`          — equivalent to `MOCK_ACP_LOG=stderr`
@@ -484,7 +485,19 @@ impl MockAgent {
                     return Err(acp::Error::new(-32000, "missing outcome reminder"));
                 }
             }
-            peer.exercise(&case, count).await?;
+            if let Some(script) = env::args()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .find(|pair| pair[0] == "--stage-script")
+                .map(|pair| pair[1].clone())
+            {
+                let prompt =
+                    serde_json::to_string(&req.prompt).map_err(|_| acp::Error::internal_error())?;
+                peer.scripted_turn(std::path::Path::new(&script), &prompt)
+                    .await?;
+            } else {
+                peer.exercise(&case, count).await?;
+            }
             return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
         }
         let sid = req.session_id.clone();

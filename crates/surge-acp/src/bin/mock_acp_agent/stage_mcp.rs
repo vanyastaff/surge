@@ -261,3 +261,49 @@ fn content_value(result: &Value) -> Result<Value, Error> {
         .ok_or_else(Error::internal_error)?;
     serde_json::from_str(text).map_err(|_| Error::internal_error())
 }
+
+impl Peer {
+    /// An ordered, persistent real-wire script for isolated crash-recovery fixtures.
+    pub async fn scripted_turn(&self, script: &std::path::Path, prompt: &str) -> Result<(), Error> {
+        let read =
+            |path| std::fs::read(path).map_err(|error| Error::new(-32000, error.to_string()));
+        let turns: Vec<Value> =
+            serde_json::from_slice(&read(script)?).map_err(|_| Error::internal_error())?;
+        let cursor = script.with_extension("cursor");
+        let index: usize = match std::fs::read_to_string(&cursor) {
+            Ok(value) => value.parse().map_err(|_| Error::internal_error())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(Error::new(-32000, error.to_string())),
+        };
+        let turn = turns
+            .get(index)
+            .ok_or_else(|| Error::new(-32000, "unexpected extra provider turn"))?;
+        let expected = turn["prompt_contains"]
+            .as_str()
+            .ok_or_else(Error::internal_error)?;
+        if !prompt.contains(expected) {
+            return Err(Error::new(
+                -32000,
+                format!("turn {index}: expected prompt {expected:?}; got {prompt}"),
+            ));
+        }
+        let mut artifacts = Vec::new();
+        if let Some(content) = turn.get("split_artifact").and_then(Value::as_str) {
+            std::fs::write("discovered-tasks.toml", content)
+                .map_err(|_| Error::internal_error())?;
+            artifacts.push("discovered-tasks.toml");
+        }
+        std::fs::write(cursor, (index + 1).to_string()).map_err(|_| Error::internal_error())?;
+        let reply = self.call("report_stage_outcome", json!({
+            "call_id":format!("script-{index}"), "outcome":turn["outcome"],
+            "summary":format!("controlled recovery turn {index}"), "artifacts_produced":artifacts
+        })).await?;
+        if reply.get("isError") == Some(&Value::Bool(true)) {
+            return Err(Error::new(
+                -32000,
+                format!("script {index} rejected: {reply}"),
+            ));
+        }
+        Ok(())
+    }
+}
