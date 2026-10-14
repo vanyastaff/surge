@@ -8,6 +8,11 @@ use surge_orchestrator::engine::{
     Engine, EngineConfig, EngineRunConfig, tools::worktree::WorktreeToolDispatcher,
 };
 use surge_persistence::runs::Storage;
+/// A genuine hang fails here. Sized like the crate's other engine round-trip
+/// tests: a loaded Windows runner needs several seconds for the durable
+/// open/append/reopen steps of the scenario, which the former 5 s budget also
+/// had to absorb together with fixture setup and teardown.
+const WATCHDOG: Duration = Duration::from_secs(30);
 const FLOW: &str = r#"# Smallest possible flow.toml — single Terminal node.
 #
 # When run via `surge engine run examples/flow_terminal_only.toml`,
@@ -89,8 +94,11 @@ on_max_exceeded = "fail"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn old_card_cannot_resolve_a_new_visit_to_the_same_gate() {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let temp = FixtureHome::new().unwrap();
+    // Home creation and removal are filesystem setup/teardown, not the
+    // behaviour under test; on Windows they run native ACL work and bounded
+    // retries on handle release, so they stay outside the hang watchdog.
+    let temp = FixtureHome::new().unwrap();
+    tokio::time::timeout(WATCHDOG, async {
         {
             let storage = Storage::open(temp.path()).await.unwrap();
             let engine = Engine::new(
@@ -171,10 +179,10 @@ async fn old_card_cannot_resolve_a_new_visit_to_the_same_gate() {
                 surge_orchestrator::engine::RunOutcome::Completed { .. }
             ));
         }
-        temp.close().unwrap();
     })
     .await
     .expect("gate identity fixture exceeded watchdog");
+    temp.close().unwrap();
 }
 
 async fn next_request(
@@ -220,8 +228,11 @@ async fn next_request_after(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_identity() {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let temp = FixtureHome::new().unwrap();
+    // Home creation and removal are filesystem setup/teardown, not the
+    // behaviour under test; on Windows they run native ACL work and bounded
+    // retries on handle release, so they stay outside the hang watchdog.
+    let temp = FixtureHome::new().unwrap();
+    tokio::time::timeout(WATCHDOG, async {
         {
             let storage = Storage::open(temp.path()).await.unwrap();
             let build = |storage| {
@@ -283,8 +294,8 @@ async fn reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_ident
                 surge_orchestrator::engine::RunOutcome::Completed { .. }
             ));
         }
-        temp.close().unwrap();
     })
     .await
     .expect("restart identity fixture exceeded watchdog");
+    temp.close().unwrap();
 }
