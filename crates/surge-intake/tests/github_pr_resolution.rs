@@ -182,3 +182,74 @@ async fn an_open_pr_for_the_branch_is_adopted_not_duplicated() {
         .unwrap();
     assert_eq!((opened.number, opened.adopted), (57, true));
 }
+
+/// An open PR #57 as GitHub returns it, with `mergeable_state`.
+fn open_pr(mergeable_state: &str) -> serde_json::Value {
+    let side = |r: &str| serde_json::json!({ "ref": r, "sha": "0123456789abcdef0123456789abcdef01234567" });
+    serde_json::json!({
+        "url": "https://api.github.com/repos/acme/app/pulls/57",
+        "id": 1,
+        "number": 57,
+        "state": "open",
+        "locked": false,
+        "maintainer_can_modify": false,
+        "draft": false,
+        "mergeable_state": mergeable_state,
+        "head": side("surge/run-01abc"),
+        "base": side("main"),
+    })
+}
+
+#[tokio::test]
+async fn a_pr_github_is_still_computing_is_read_again_until_its_state_settles() {
+    let server = MockServer::start().await;
+    // Right after the PR is opened GitHub has not computed its state yet.
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/57"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(open_pr("unknown")))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/57"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(open_pr("clean")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/57/reviews"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let source = source(&server).with_mergeable_state_waits(vec![Duration::from_millis(1); 3]);
+
+    let readiness = source.check_merge_readiness(&issue_42(), 57).await.unwrap();
+    let MergeReadiness::Blocked(reason) = readiness else {
+        panic!("no review yet: {readiness:?}");
+    };
+    assert!(
+        !reason.contains("mergeable_state"),
+        "the verdict comes from the settled state, not the first read: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_state_that_never_settles_blocks_after_the_last_wait() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/57"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(open_pr("unknown")))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let source = source(&server).with_mergeable_state_waits(vec![Duration::from_millis(1); 2]);
+
+    assert_eq!(
+        source.check_merge_readiness(&issue_42(), 57).await.unwrap(),
+        MergeReadiness::Blocked(
+            "PR #57 mergeable_state still not computed by GitHub after 2 re-reads".into()
+        )
+    );
+}

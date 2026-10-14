@@ -63,7 +63,19 @@ pub struct GitHubIssuesTaskSource {
     cadence: Mutex<CadenceController>,
     /// Monotonic poll counter feeding the jitter seed.
     poll_attempt: AtomicU64,
+    /// Pauses before re-reading a PR whose `mergeable_state` GitHub has not
+    /// computed yet (it does so in the background after the first read).
+    mergeable_state_waits: Vec<Duration>,
 }
+
+/// Default [`GitHubIssuesTaskSource::with_mergeable_state_waits`] schedule:
+/// about 7 s in total, enough for GitHub to compute a fresh PR's state while
+/// leaving most of the merge gate's 30 s completion budget to the merge.
+const MERGEABLE_STATE_WAITS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
 
 impl GitHubIssuesTaskSource {
     /// Construct a source from configuration. Builds an authenticated octocrab
@@ -95,7 +107,18 @@ impl GitHubIssuesTaskSource {
             last_seen_updated_at: Mutex::new(None),
             cadence: Mutex::new(CadenceController::new()),
             poll_attempt: AtomicU64::new(0),
+            mergeable_state_waits: MERGEABLE_STATE_WAITS.to_vec(),
         })
+    }
+
+    /// Replace the pauses between re-reads of a PR whose `mergeable_state`
+    /// GitHub is still computing. A PR the gate checks right after it was
+    /// opened is usually in that state; once the waits run out, readiness
+    /// is `Blocked`.
+    #[must_use]
+    pub fn with_mergeable_state_waits(mut self, waits: Vec<Duration>) -> Self {
+        self.mergeable_state_waits = waits;
+        self
     }
 
     /// Sleep until the next poll using the tier-aware cadence: the interval
@@ -588,19 +611,38 @@ impl TaskSource for GitHubIssuesTaskSource {
             .octocrab
             .pulls(&self.client.owner, &self.client.repo);
 
+        use octocrab::models::pulls::MergeableState;
+
         // 1. Resolve the PR. Match on the structured HTTP status code so
         // a permission-denied 404 (e.g., private repo + insufficient
         // token scope) does not get misreported as "no PR found" — only
         // a genuine "not a PR" 404 maps to Blocked here; everything else
         // propagates as a transport error for the gate to surface.
-        let pr = match pulls.get(number).await {
-            Ok(p) => p,
-            Err(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 404 => {
-                return Ok(MergeReadiness::Blocked(format!(
-                    "pull request #{number} not found"
-                )));
-            },
-            Err(e) => return Err(Self::map_octocrab_error(&e)),
+        //
+        // GitHub computes `mergeable_state` in the background after a PR's
+        // first read, so an open PR still in `unknown` is read again after
+        // each wait in turn.
+        let mut waits = self.mergeable_state_waits.iter();
+        let pr = loop {
+            let pr = match pulls.get(number).await {
+                Ok(p) => p,
+                Err(octocrab::Error::GitHub { source, .. })
+                    if source.status_code.as_u16() == 404 =>
+                {
+                    return Ok(MergeReadiness::Blocked(format!(
+                        "pull request #{number} not found"
+                    )));
+                },
+                Err(e) => return Err(Self::map_octocrab_error(&e)),
+            };
+            let computing = matches!(pr.mergeable_state, Some(MergeableState::Unknown) | None)
+                && pr.merged_at.is_none()
+                && !matches!(pr.draft, Some(true))
+                && matches!(pr.state, Some(octocrab::models::IssueState::Open));
+            match waits.next() {
+                Some(wait) if computing => tokio::time::sleep(*wait).await,
+                _ => break pr,
+            }
         };
 
         // Capture the head SHA the rest of this verdict is computed against.
@@ -625,7 +667,6 @@ impl TaskSource for GitHubIssuesTaskSource {
 
         // 3. Inspect mergeable_state — only `Clean` and `HasHooks` proceed.
         // See octocrab::models::pulls::MergeableState for canonical values.
-        use octocrab::models::pulls::MergeableState;
         match pr.mergeable_state {
             Some(MergeableState::Clean) | Some(MergeableState::HasHooks) => {
                 // proceed to review check
@@ -657,7 +698,8 @@ impl TaskSource for GitHubIssuesTaskSource {
             },
             Some(MergeableState::Unknown) | None => {
                 return Ok(MergeReadiness::Blocked(format!(
-                    "PR #{number} mergeable_state not yet computed by GitHub"
+                    "PR #{number} mergeable_state still not computed by GitHub after {} re-reads",
+                    self.mergeable_state_waits.len()
                 )));
             },
             Some(other) => {
