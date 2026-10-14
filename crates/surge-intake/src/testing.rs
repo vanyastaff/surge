@@ -25,6 +25,8 @@ pub struct MockTaskSource {
     merge_readiness_override: Mutex<Option<MergeReadiness>>,
     merge_outcome_override: Mutex<Option<MergeOutcome>>,
     merge_calls: Mutex<Vec<(TaskId, Option<String>)>>,
+    merged_prs: Mutex<Vec<u64>>,
+    linked_prs: Mutex<Vec<u64>>,
     fetch_task_calls: Mutex<u32>,
 }
 
@@ -44,6 +46,9 @@ impl MockTaskSource {
             merge_readiness_override: Mutex::new(None),
             merge_outcome_override: Mutex::new(None),
             merge_calls: Mutex::new(Vec::new()),
+            merged_prs: Mutex::new(Vec::new()),
+            // One linked PR (#1) by default: "the ticket has its PR".
+            linked_prs: Mutex::new(vec![1]),
             fetch_task_calls: Mutex::new(0),
         }
     }
@@ -94,6 +99,16 @@ impl MockTaskSource {
     /// double-merge) and pins the readiness-approved head SHA.
     pub async fn merge_calls(&self) -> Vec<(TaskId, Option<String>)> {
         self.merge_calls.lock().await.clone()
+    }
+
+    /// PR numbers `merge_pr` was asked to merge, in order.
+    pub async fn merged_prs(&self) -> Vec<u64> {
+        self.merged_prs.lock().await.clone()
+    }
+
+    /// Set the PRs the provider links to every task (default `[1]`).
+    pub async fn set_linked_pull_requests(&self, prs: Vec<u64>) {
+        *self.linked_prs.lock().await = prs;
     }
 
     /// Count of `fetch_task` invocations. A positive anchor for tests that
@@ -192,7 +207,11 @@ impl TaskSource for MockTaskSource {
             .unwrap_or_default())
     }
 
-    async fn check_merge_readiness(&self, _id: &TaskId) -> Result<MergeReadiness> {
+    async fn linked_pull_requests(&self, _id: &TaskId) -> Result<Vec<u64>> {
+        Ok(self.linked_prs.lock().await.clone())
+    }
+
+    async fn check_merge_readiness(&self, _id: &TaskId, _pr: u64) -> Result<MergeReadiness> {
         if let Some(r) = self.merge_readiness_override.lock().await.clone() {
             return Ok(r);
         }
@@ -205,7 +224,13 @@ impl TaskSource for MockTaskSource {
         ))
     }
 
-    async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
+    async fn merge_pr(
+        &self,
+        id: &TaskId,
+        pr: u64,
+        expected_head: Option<&str>,
+    ) -> Result<MergeOutcome> {
+        self.merged_prs.lock().await.push(pr);
         self.merge_calls
             .lock()
             .await
@@ -277,7 +302,7 @@ mod tests {
     async fn mock_merge_readiness_defaults_to_blocked() {
         let src = MockTaskSource::new("mock:test", "mock");
         let id = TaskId::try_new("mock:test#1").unwrap();
-        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        let verdict = src.check_merge_readiness(&id, 1).await.unwrap();
         assert!(matches!(verdict, MergeReadiness::Blocked(_)));
     }
 
@@ -287,12 +312,12 @@ mod tests {
         let id = TaskId::try_new("mock:test#1").unwrap();
         src.arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
             .await;
-        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        let verdict = src.check_merge_readiness(&id, 1).await.unwrap();
         assert_eq!(verdict, MergeReadiness::Ready { head_ref: None });
 
         src.arm_merge_readiness(MergeReadiness::Blocked("custom reason".into()))
             .await;
-        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        let verdict = src.check_merge_readiness(&id, 1).await.unwrap();
         assert_eq!(verdict, MergeReadiness::Blocked("custom reason".into()));
     }
 
@@ -302,7 +327,7 @@ mod tests {
         let id = TaskId::try_new("mock:test#1").unwrap();
         src.arm_merge_outcome(MergeOutcome::Merged).await;
 
-        let outcome = src.merge_pr(&id, Some("deadbeef")).await.unwrap();
+        let outcome = src.merge_pr(&id, 1, Some("deadbeef")).await.unwrap();
         assert_eq!(outcome, MergeOutcome::Merged);
 
         let calls = src.merge_calls().await;
@@ -313,7 +338,7 @@ mod tests {
     async fn mock_merge_pr_unarmed_errors() {
         let src = MockTaskSource::new("mock:test", "mock");
         let id = TaskId::try_new("mock:test#1").unwrap();
-        let err = src.merge_pr(&id, None).await.unwrap_err();
+        let err = src.merge_pr(&id, 1, None).await.unwrap_err();
         assert!(matches!(err, Error::Internal(_)));
         // The call is still recorded even on the error path.
         assert_eq!(src.merge_calls().await.len(), 1);

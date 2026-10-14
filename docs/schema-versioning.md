@@ -7,7 +7,7 @@ the memory database version independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **21** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **22** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **3** (see below) |
 
 ## `surge.toml` (config)
@@ -142,6 +142,12 @@ Version 21 adds `EventPayload::StageRuntimeRotated`: a stage moved to a
 fallback agent because its own agent's usage limit was exhausted
 (`[capacity].fallback_agents`). A v20 reader would replay the stage on the
 exhausted agent, so it rejects v21 envelopes with `SchemaTooNew`.
+
+Version 22 adds `EventPayload::PullRequestOpened`: the pull request Surge
+opened (or adopted) for a run, recorded in the run's log so the L3 merge gate
+resolves the PR from it instead of from the ticket number (#127). A v21 reader
+would not know which PR to merge, so it rejects v22 envelopes with
+`SchemaTooNew`.
 Older binaries may reject these envelopes before decoding; forward readability does
 not provide downgrade support. SQLite storage migrations are separate from payload
 versions. See [Release and rollback procedure](release-procedure.md).

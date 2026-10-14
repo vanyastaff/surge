@@ -90,7 +90,19 @@ pub trait TaskSource: Send + Sync {
     /// Read the current labels on the task.
     async fn read_labels(&self, id: &TaskId) -> Result<Vec<String>>;
 
-    /// Evaluate whether the PR linked to this task is ready to auto-merge.
+    /// Open pull requests the provider itself links to this task (on GitHub,
+    /// PRs whose body closes the issue). The L3 gate uses this only when the
+    /// run's log holds no `PullRequestOpened` record, and never guesses among
+    /// several. Default: none (PR-less providers).
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error if the underlying API call fails.
+    async fn linked_pull_requests(&self, _id: &TaskId) -> Result<Vec<u64>> {
+        Ok(Vec::new())
+    }
+
+    /// Evaluate whether pull request `pr` of this task is ready to auto-merge.
     ///
     /// Default implementation returns `MergeReadiness::Blocked` —
     /// providers that have a PR concept (e.g. GitHub) override this to
@@ -104,13 +116,13 @@ pub trait TaskSource: Send + Sync {
     /// Returns a transport error if the underlying API call fails.
     /// Logical "not ready" outcomes are returned as
     /// [`MergeReadiness::Blocked`], not errors.
-    async fn check_merge_readiness(&self, _id: &TaskId) -> Result<MergeReadiness> {
+    async fn check_merge_readiness(&self, _id: &TaskId, _pr: u64) -> Result<MergeReadiness> {
         Ok(MergeReadiness::Blocked(
             "provider does not implement merge readiness checks".into(),
         ))
     }
 
-    /// Merge the PR linked to this task.
+    /// Merge pull request `pr` of this task.
     ///
     /// The L3 auto-merge gate calls this only after
     /// [`TaskSource::check_merge_readiness`] returned [`MergeReadiness::Ready`].
@@ -134,7 +146,12 @@ pub trait TaskSource: Send + Sync {
     /// Returns a transport error if the merge API call fails for a reason
     /// other than "not mergeable" (those are reported as
     /// [`MergeOutcome::Conflict`], not errors).
-    async fn merge_pr(&self, _id: &TaskId, _expected_head: Option<&str>) -> Result<MergeOutcome> {
+    async fn merge_pr(
+        &self,
+        _id: &TaskId,
+        _pr: u64,
+        _expected_head: Option<&str>,
+    ) -> Result<MergeOutcome> {
         Err(crate::Error::Internal(
             "provider does not implement PR merge".into(),
         ))

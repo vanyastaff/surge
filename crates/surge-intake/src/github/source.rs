@@ -72,7 +72,18 @@ impl GitHubIssuesTaskSource {
     /// Returns `Error::AuthFailed` if the API token is invalid or the octocrab
     /// client cannot be constructed.
     pub fn new(config: GitHubConfig) -> Result<Self> {
-        let client = GitHubClient::new(&config.api_token, config.owner, config.repo)?;
+        Self::with_api_base(config, None)
+    }
+
+    /// Like [`Self::new`], against another API root (GitHub Enterprise, or a
+    /// local stub in tests). `None` is `https://api.github.com`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`], plus an unparsable `api_base`.
+    pub fn with_api_base(config: GitHubConfig, api_base: Option<&str>) -> Result<Self> {
+        let client =
+            GitHubClient::with_api_base(&config.api_token, config.owner, config.repo, api_base)?;
         Ok(Self {
             id: config.id,
             display_name: config.display_name,
@@ -506,8 +517,27 @@ impl TaskSource for GitHubIssuesTaskSource {
     /// PR not found, draft, merged) are returned as
     /// [`MergeReadiness::Blocked`] with a human-readable reason. Transport
     /// failures (network, auth, rate-limit) propagate as [`Error`].
-    async fn check_merge_readiness(&self, id: &TaskId) -> Result<MergeReadiness> {
-        let number = parse_issue_number(id.as_str())?;
+    async fn linked_pull_requests(&self, id: &TaskId) -> Result<Vec<u64>> {
+        let issue = parse_issue_number(id.as_str())?;
+        let query = serde_json::json!({
+            "query": LINKED_PULL_REQUESTS_QUERY,
+            "variables": {
+                "owner": self.client.owner,
+                "repo": self.client.repo,
+                "number": issue,
+            },
+        });
+        let response: serde_json::Value = self
+            .client
+            .octocrab
+            .graphql(&query)
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
+        Ok(open_pull_requests_closing(&response))
+    }
+
+    async fn check_merge_readiness(&self, _id: &TaskId, pr: u64) -> Result<MergeReadiness> {
+        let number = pr;
         let pulls = self
             .client
             .octocrab
@@ -522,7 +552,7 @@ impl TaskSource for GitHubIssuesTaskSource {
             Ok(p) => p,
             Err(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 404 => {
                 return Ok(MergeReadiness::Blocked(format!(
-                    "no pull request found for #{number} (Surge assumes PR# == issue#)"
+                    "pull request #{number} not found"
                 )));
             },
             Err(e) => return Err(Self::map_octocrab_error(&e)),
@@ -615,10 +645,16 @@ impl TaskSource for GitHubIssuesTaskSource {
         Ok(evaluate_reviews(number, &all_reviews, head_sha))
     }
 
-    async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
-        // Surge assumes PR# == issue#; the readiness gate already confirmed
-        // the PR exists, is open, mergeable, and approved before we get here.
-        let number = parse_issue_number(id.as_str())?;
+    async fn merge_pr(
+        &self,
+        _id: &TaskId,
+        pr: u64,
+        expected_head: Option<&str>,
+    ) -> Result<MergeOutcome> {
+        // The gate resolved `pr` (from the run's record or the issue's own
+        // links) and its readiness check confirmed it is open, mergeable and
+        // approved before we get here.
+        let number = pr;
         let pulls = self
             .client
             .octocrab
@@ -736,6 +772,28 @@ fn evaluate_reviews(
     MergeReadiness::Ready {
         head_ref: Some(head_sha),
     }
+}
+
+/// Open PRs that close an issue, as GitHub links them (`Closes #N`).
+const LINKED_PULL_REQUESTS_QUERY: &str = "query($owner: String!, $repo: String!, $number: Int!) { \
+    repository(owner: $owner, name: $repo) { issue(number: $number) { \
+    closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { \
+    nodes { number state } } } } }";
+
+/// The open PR numbers in a `LINKED_PULL_REQUESTS_QUERY` response, sorted
+/// and deduplicated; anything unreadable counts as "no link", never a guess.
+fn open_pull_requests_closing(response: &serde_json::Value) -> Vec<u64> {
+    let mut numbers: Vec<u64> = response
+        .pointer("/data/repository/issue/closedByPullRequestsReferences/nodes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|node| node["state"] == "OPEN")
+        .filter_map(|node| node["number"].as_u64())
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
 }
 
 fn parse_issue_number(task_id: &str) -> Result<u64> {

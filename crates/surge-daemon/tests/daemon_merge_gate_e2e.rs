@@ -1122,3 +1122,115 @@ async fn published_merge_error_is_durable_uncertainty_and_never_replayed() {
     assert_eq!(setup.notifier.snapshot().await.len(), 1);
     setup.close();
 }
+
+/// Record the PR Surge opened for `run_id` in the run's own log (#127).
+async fn record_pull_request(setup: &Setup, run_id: RunId, number: u64) {
+    let project = std::env::temp_dir().join(format!("surge-merge-gate-pr-{run_id}"));
+    let writer = setup.runs.create_run(run_id, &project, None).await.unwrap();
+    writer
+        .append_events(vec![
+            surge_core::run_event::VersionedEventPayload::new(
+                surge_core::run_event::EventPayload::PullRequestOpened {
+                    pr: serde_json::from_value(serde_json::json!({
+                        "provider": "github",
+                        "repository": "acme/app",
+                        "number": number,
+                        "url": format!("https://github.com/acme/app/pull/{number}"),
+                    }))
+                    .unwrap(),
+                    head_branch: format!("surge/run-{run_id}"),
+                    head_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+                },
+            ),
+            surge_core::run_event::VersionedEventPayload::new(
+                surge_core::run_event::EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_new("end").unwrap(),
+                },
+            ),
+        ])
+        .await
+        .unwrap();
+    writer.flush().await.unwrap();
+    writer.close().await.unwrap();
+}
+
+/// #127: the PR recorded in the run's log is the one merged, even when the
+/// ticket's number and the provider's links say otherwise.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l3_merges_the_pr_recorded_in_the_run_log() {
+    let setup = make_setup().await;
+    let task_id_str = "mock:test#42";
+    seed_l3_task(&setup.src, task_id_str).await;
+    setup.src.set_linked_pull_requests(vec![1, 2]).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+    let run_id = RunId::new();
+    record_pull_request(&setup, run_id, 57).await;
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task_id_str, &run_id.to_string());
+    }
+
+    let rx = setup.tx.subscribe();
+    let handle = spawn_gate(&setup, rx, false);
+    setup.tx.send(completed_event(run_id)).unwrap();
+
+    let comments = wait_for_comments(&setup.src, 1).await;
+    assert!(comments[0].1.contains("merged"), "{}", comments[0].1);
+    assert_eq!(setup.src.merged_prs().await, [57]);
+    setup.finish(handle).await;
+}
+
+/// #127: without a record, the gate merges the provider's single linked PR,
+/// and refuses to guess when there is none or several.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l3_uses_one_linked_pr_and_blocks_on_none_or_several() {
+    for (linked, expected_merge, reason) in [
+        (vec![57], Some(57), None),
+        (vec![], None, Some("no pull request is linked")),
+        (
+            vec![57, 61],
+            None,
+            Some("several open pull requests close this ticket (#57, #61)"),
+        ),
+    ] {
+        let setup = make_setup().await;
+        let task_id_str = "mock:test#42";
+        seed_l3_task(&setup.src, task_id_str).await;
+        setup.src.set_linked_pull_requests(linked.clone()).await;
+        setup
+            .src
+            .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+            .await;
+        setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+        let run_id = RunId::new();
+        {
+            let guard = setup.conn.lock().await;
+            seed_ticket(&guard, task_id_str, &run_id.to_string());
+        }
+        let rx = setup.tx.subscribe();
+        let handle = spawn_gate(&setup, rx, false);
+        setup.tx.send(completed_event(run_id)).unwrap();
+
+        let comments = wait_for_comments(&setup.src, 1).await;
+        match (expected_merge, reason) {
+            (Some(pr), _) => assert_eq!(setup.src.merged_prs().await, [pr], "{linked:?}"),
+            (None, Some(reason)) => {
+                let body = &comments[0].1;
+                assert!(
+                    body.contains("blocked") && body.contains(reason),
+                    "{linked:?}: {body}"
+                );
+                assert!(
+                    setup.src.merged_prs().await.is_empty(),
+                    "{linked:?}: no guess"
+                );
+            },
+            (None, None) => unreachable!(),
+        }
+        setup.finish(handle).await;
+    }
+}

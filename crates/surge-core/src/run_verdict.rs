@@ -252,6 +252,7 @@ fn classify(payload: &EventPayload) -> EventClass {
         | EventPayload::TaskDiscovered { .. }
         | EventPayload::TaskVerified { .. }
         | EventPayload::StageRuntimeRotated { .. }
+        | EventPayload::PullRequestOpened { .. }
         | EventPayload::RequirementRevised { .. }
         | EventPayload::SteerDelivered { .. }
         | EventPayload::HumanInputRequested { .. }

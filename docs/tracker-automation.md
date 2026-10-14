@@ -209,9 +209,12 @@ Before the attachment is posted:
 `TaskSource::check_merge_readiness` is implemented for GitHub via
 [`octocrab`](https://docs.rs/octocrab/0.42). For an L3 ticket the gate:
 
-1. Resolves the PR (MVP assumption: PR number equals issue number — the
-   default surge workflow creates one PR per ticket in the same numbering
-   sequence; multi-PR or branch-linked workflows are a follow-up).
+1. Resolves the PR (#127). GitHub issues and PRs share one numbering
+   sequence, so the PR is never derived from the ticket number. The run's log
+   is the record: the latest `PullRequestOpened`. Without one, the gate asks
+   GitHub for the open PRs that close the issue (`closedByPullRequestsReferences`)
+   and uses the PR only when exactly one is linked; none or several block the
+   merge with a comment naming them.
 2. Rejects terminal states up front: already merged, draft, or not open.
 3. Inspects `mergeable_state`: only `Clean` and `HasHooks` proceed.
    `Behind`, `Blocked`, `Dirty`, `Unstable`, `Draft`, and `Unknown` each

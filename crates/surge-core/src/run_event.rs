@@ -467,6 +467,18 @@ pub enum EventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         comment: Option<String>,
     },
+    /// Surge opened (or adopted) the pull request that carries this run's
+    /// work (#127). The run's log is the record the L3 merge gate resolves
+    /// the PR from; GitHub issue and PR numbers never coincide, so the PR is
+    /// never derived from the ticket.
+    PullRequestOpened {
+        /// Provider, repository, number and URL of the PR.
+        pr: crate::work_item::WorkItemPr,
+        /// The branch the PR merges from.
+        head_branch: String,
+        /// The commit the PR pointed at when it was opened.
+        head_sha: String,
+    },
     /// A stage moved to another agent because its own agent's usage limit was
     /// exhausted (v1 task 1.4). Recorded before the next attempt opens a
     /// session; the stage keeps that agent until it routes an outcome.
@@ -891,6 +903,7 @@ impl EventPayload {
             Self::TaskAcceptedByHuman { .. } => "TaskAcceptedByHuman",
             Self::RequirementRevised { .. } => "RequirementRevised",
             Self::StageRuntimeRotated { .. } => "StageRuntimeRotated",
+            Self::PullRequestOpened { .. } => "PullRequestOpened",
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",
