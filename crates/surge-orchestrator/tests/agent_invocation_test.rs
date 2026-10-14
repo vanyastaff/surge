@@ -3,6 +3,8 @@
 //! bridge's observed open/send/close calls.
 
 mod fixtures;
+#[path = "agent_invocation/settlement_lifecycle.rs"]
+mod settlement_lifecycle;
 use fixtures::runtime_home as runtime_home_fixture;
 
 use std::collections::{BTreeMap, HashMap};
@@ -198,6 +200,208 @@ fn reported(session: SessionId, outcome: &str, artifacts: &[&str]) -> BridgeEven
         summary: "did it".into(),
         artifacts_produced: artifacts.iter().map(|path| (*path).to_owned()).collect(),
         verification_report: None,
+    }
+}
+
+#[tokio::test]
+async fn unconfirmed_cleanup_never_accepts_a_successful_body() {
+    let fx = &Fixture::new();
+    *fx.mock.next_close_error.lock().await = Some(
+        surge_acp::bridge::error::CloseSessionError::SessionNotFound {
+            session: fx.session,
+        },
+    );
+    let result = fx
+        .run(fx.request("invoker@1.0", None), |session| async move {
+            fx.emit(reported(session, "skipped", &[])).await;
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "unconfirmed cleanup accepted an outcome: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn unconfirmed_cleanup_makes_a_retryable_body_terminal() {
+    let fx = &Fixture::new();
+    *fx.mock.next_close_error.lock().await = Some(
+        surge_acp::bridge::error::CloseSessionError::SessionNotFound {
+            session: fx.session,
+        },
+    );
+    let failure = fx
+        .run(fx.request("invoker@1.0", None), |session| async move {
+            fx.emit(reported(session, "undeclared", &[])).await;
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        !failure.is_retryable(),
+        "cleanup uncertainty must forbid another writer: {failure:?}"
+    );
+    let InvocationFailure::Settlement(settlement) = &failure else {
+        panic!("{failure:?}")
+    };
+    assert!(matches!(
+        settlement.original(),
+        Some(InvocationFailure::UndeclaredOutcome(_))
+    ));
+    assert!(std::error::Error::source(settlement).is_some());
+    assert!(failure.to_string().contains("undeclared outcome"));
+    assert_eq!(settlement.failures().len(), 1);
+}
+
+#[tokio::test]
+async fn confirmed_forced_reap_preserves_the_body_result() {
+    for outcome in ["skipped", "undeclared"] {
+        let fx = &Fixture::new();
+        *fx.mock.next_close_error.lock().await = Some(
+            surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
+                session: fx.session,
+                killed: true,
+            },
+        );
+        let result = fx
+            .run(fx.request("invoker@1.0", None), |session| async move {
+                fx.emit(reported(session, outcome, &[])).await;
+            })
+            .await;
+        if outcome == "skipped" {
+            assert_eq!(result.unwrap().outcome.as_str(), "skipped");
+        } else {
+            assert!(matches!(
+                result,
+                Err(InvocationFailure::UndeclaredOutcome(_))
+            ));
+        }
+        assert_eq!(fx.closes().await, 1);
+    }
+}
+
+#[tokio::test]
+async fn cancellation_retains_its_cause_but_uncertain_cleanup_is_terminal() {
+    for unconfirmed in [false, true] {
+        let fx = &Fixture::new();
+        if unconfirmed {
+            *fx.mock.next_close_error.lock().await = Some(
+                surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
+                    session: fx.session,
+                    killed: false,
+                },
+            );
+        }
+        let failure = fx
+            .run(fx.request("invoker@1.0", None), |_| async {
+                fx.cancel.cancel();
+            })
+            .await
+            .unwrap_err();
+        if unconfirmed {
+            let InvocationFailure::Settlement(ref cleanup) = failure else {
+                panic!("{failure:?}")
+            };
+            assert_eq!(cleanup.original(), Some(&InvocationFailure::Cancelled));
+        } else {
+            assert_eq!(failure, InvocationFailure::Cancelled);
+        }
+        assert!(!failure.is_retryable());
+        assert_eq!(fx.closes().await, 1);
+    }
+}
+
+#[tokio::test]
+async fn a_bridge_worker_failure_is_typed_and_terminal() {
+    use surge_orchestrator::agent_invocation::{
+        InvocationCleanupFailure, SessionSettlementFailureKind,
+    };
+    let fx = &Fixture::new();
+    *fx.mock.next_close_error.lock().await =
+        Some(surge_acp::bridge::error::CloseSessionError::Bridge(
+            surge_acp::bridge::error::BridgeError::WorkerDead,
+        ));
+    let failure = fx
+        .run(fx.request("invoker@1.0", None), |session| async move {
+            fx.emit(reported(session, "skipped", &[])).await;
+        })
+        .await
+        .unwrap_err();
+    assert!(!failure.is_retryable());
+    let InvocationFailure::Settlement(cleanup) = failure else {
+        panic!("{failure:?}")
+    };
+    assert!(
+        matches!(cleanup.failures(), [InvocationCleanupFailure::Session {
+        kind: SessionSettlementFailureKind::Bridge, session, ..
+    }] if *session == fx.session)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_evidence_is_recorded_only_after_confirmed_cleanup() {
+    use surge_core::{RunId, keys::NodeKey, run_event::EventPayload};
+    use surge_orchestrator::agent_invocation::InvocationRecorder;
+    use surge_persistence::runs::{EventSeq, Storage};
+
+    for unconfirmed in [false, true] {
+        let fx = &Fixture::new();
+        fx.write("description.md", DESCRIPTION);
+        let home = runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let run = RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let reader = storage.open_run_reader(run).await.unwrap();
+        let before = reader.current_seq().await.unwrap();
+        let artifacts = surge_persistence::artifacts::ArtifactStore::new(home.path().join("runs"));
+        let node = NodeKey::try_from("invocation").unwrap();
+        let mut request = fx.request("invoker@1.0", None);
+        request.recorder = Some(InvocationRecorder {
+            writer: &writer,
+            node: &node,
+            artifact_store: &artifacts,
+            run_id: run,
+        });
+        if unconfirmed {
+            *fx.mock.next_close_error.lock().await = Some(
+                surge_acp::bridge::error::CloseSessionError::SessionNotFound {
+                    session: fx.session,
+                },
+            );
+        }
+        let result = fx
+            .run(request, |session| async move {
+                fx.emit(reported(session, "done", &["description.md"]))
+                    .await;
+            })
+            .await;
+        let after = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(before.as_u64() + 1)..EventSeq(after.as_u64() + 1))
+            .await
+            .unwrap();
+        let accepted_events = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload.payload,
+                    EventPayload::ArtifactProduced { .. } | EventPayload::OutcomeReported { .. }
+                )
+            })
+            .count();
+        if unconfirmed {
+            assert!(matches!(result, Err(InvocationFailure::Settlement(_))));
+            assert_eq!(accepted_events, 0);
+        } else {
+            assert_eq!(
+                result.unwrap().artifact("description.md").unwrap().bytes,
+                DESCRIPTION.as_bytes()
+            );
+            assert_eq!(accepted_events, 2);
+        }
+        drop((reader, artifacts));
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 }
 
