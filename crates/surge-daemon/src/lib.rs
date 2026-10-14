@@ -24,6 +24,7 @@ pub mod intake_completion;
 mod intake_delivery;
 pub mod lifecycle;
 pub mod pidfile;
+pub mod pr_publisher;
 pub mod recovery;
 pub mod server;
 #[cfg(unix)]

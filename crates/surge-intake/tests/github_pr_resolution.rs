@@ -104,3 +104,81 @@ async fn readiness_and_merge_ask_for_the_resolved_pr_not_the_issue_number() {
         "a missing PR is not merged"
     );
 }
+
+fn draft() -> surge_intake::source::PullRequestDraft {
+    surge_intake::source::PullRequestDraft {
+        head_branch: "surge/run-01abc".into(),
+        title: "Fix the parser panic".into(),
+        body: "Closes #42".into(),
+    }
+}
+
+#[tokio::test]
+async fn opening_a_pr_targets_the_default_branch_from_the_run_branch() {
+    use wiremock::matchers::{body_partial_json, query_param};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls"))
+        .and(query_param("head", "acme:surge/run-01abc"))
+        .and(query_param("state", "open"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"default_branch": "trunk"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/pulls"))
+        .and(body_partial_json(serde_json::json!({
+            "head": "surge/run-01abc",
+            "base": "trunk",
+            "title": "Fix the parser panic",
+            "body": "Closes #42",
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "number": 57,
+            "html_url": "https://github.com/acme/app/pull/57",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let opened = source(&server)
+        .open_pull_request(&issue_42(), &draft())
+        .await
+        .unwrap();
+    assert_eq!(opened.number, 57);
+    assert_eq!(opened.url, "https://github.com/acme/app/pull/57");
+    assert!(!opened.adopted);
+}
+
+#[tokio::test]
+async fn an_open_pr_for_the_branch_is_adopted_not_duplicated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "number": 57,
+                "html_url": "https://github.com/acme/app/pull/57",
+            }])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/pulls"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let opened = source(&server)
+        .open_pull_request(&issue_42(), &draft())
+        .await
+        .unwrap();
+    assert_eq!((opened.number, opened.adopted), (57, true));
+}

@@ -28,6 +28,29 @@ pub enum MergeReadiness {
     Blocked(String),
 }
 
+/// A pull request to open for a task (#127).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestDraft {
+    /// The pushed branch the PR merges from.
+    pub head_branch: String,
+    /// Title.
+    pub title: String,
+    /// Body; carries the provider's closing reference (`Closes #N`).
+    pub body: String,
+}
+
+/// A pull request the provider opened, or an open one it already had for
+/// the same head branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedPullRequest {
+    /// Provider PR number.
+    pub number: u64,
+    /// Web URL of the PR.
+    pub url: String,
+    /// Whether an existing open PR for the branch was reused.
+    pub adopted: bool,
+}
+
 /// Outcome of an attempted PR merge.
 ///
 /// Returned by [`TaskSource::merge_pr`] and consumed by the L3 auto-merge
@@ -100,6 +123,24 @@ pub trait TaskSource: Send + Sync {
     /// Returns a transport error if the underlying API call fails.
     async fn linked_pull_requests(&self, _id: &TaskId) -> Result<Vec<u64>> {
         Ok(Vec::new())
+    }
+
+    /// Open a pull request for this task from `draft.head_branch` into the
+    /// repository's default branch, or return the open one that already has
+    /// that head branch (so publishing again after a resume never duplicates
+    /// it). Default: unsupported (PR-less providers).
+    ///
+    /// # Errors
+    ///
+    /// Transport failures, and providers without pull requests.
+    async fn open_pull_request(
+        &self,
+        _id: &TaskId,
+        _draft: &PullRequestDraft,
+    ) -> Result<OpenedPullRequest> {
+        Err(crate::Error::Internal(
+            "provider does not open pull requests".into(),
+        ))
     }
 
     /// Evaluate whether pull request `pr` of this task is ready to auto-merge.

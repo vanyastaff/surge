@@ -129,6 +129,12 @@ pub struct EngineRunConfig {
     /// In-process host capability for frozen owned Flow inputs. Wire data cannot mint it.
     #[serde(skip)]
     pub owned_flow_inputs: Option<Arc<surge_persistence::work_items::AuthenticatedOwnedFlowInputs>>,
+    /// In-process host capability that publishes a successful run's work as a
+    /// pull request before `RunCompleted` (#127). Set by the host only for runs
+    /// that should publish (L3 tickets); wire data cannot mint it, and a cold
+    /// resume has none, so such a run completes unpublished.
+    #[serde(skip)]
+    pub pull_request_publisher: Option<Arc<dyn crate::engine::publish::PullRequestPublisher>>,
     /// Host-frozen per-stage quota fallback candidates for persistent tasks.
     /// Candidate order and launch fingerprints are accepted before reservation
     /// and remain unchanged across daemon restarts.
@@ -346,6 +352,7 @@ impl Default for EngineRunConfig {
     fn default() -> Self {
         Self {
             owned_flow_inputs: None,
+            pull_request_publisher: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(300),
@@ -418,6 +425,7 @@ mod tests {
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
             owned_flow_inputs: None,
+            pull_request_publisher: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(120),
@@ -466,6 +474,7 @@ mod tests {
     fn engine_run_config_serializes_initial_prompt() {
         let cfg = EngineRunConfig {
             owned_flow_inputs: None,
+            pull_request_publisher: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),
@@ -495,6 +504,7 @@ mod tests {
         let parent = RunId::new();
         let cfg = EngineRunConfig {
             owned_flow_inputs: None,
+            pull_request_publisher: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             bootstrap_parent: Some(parent),
@@ -524,6 +534,7 @@ mod tests {
     fn bootstrap_run_config_serde_roundtrip() {
         let cfg = EngineRunConfig {
             owned_flow_inputs: None,
+            pull_request_publisher: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),

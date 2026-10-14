@@ -107,15 +107,43 @@ flowchart LR
     Merged["surge:merged<br/>+ comment + success escalation"]
     Blocked["surge:merge-blocked<br/>+ reason comment + warn escalation"]
 
+    Publish["Publish PR<br/>commit · push · open<br/>Closes #N"]
+
     Ticket --> Triage
     Triage -->|Enqueued + L3| Card
     Card --> Run
-    Run --> Gate
+    Run --> Publish
+    Publish --> Gate
     Gate -->|Ready| Merge
     Gate -->|Blocked| Blocked
     Merge -->|Merged| Merged
     Merge -->|Conflict / error| Blocked
 ```
+
+### Where the run works, and how its PR is opened
+
+Every ticket run (L1, L2 and L3) works in a git worktree of the project on
+its own branch `surge/run-<short>`, based on the project's clean `HEAD`. A
+project with uncommitted changes, or no commits, does not start the run; the
+ticket gets a comment saying why.
+
+An L3 run (`surge:auto`, merge when clean) publishes its work before it
+completes, so its own log records the PR (#127):
+
+1. Commit everything the agent changed on the run branch, except Surge's own
+   files (`.surge/`, the `pr.md` draft).
+2. Push the branch to the project's `origin`, authenticated with the
+   tracker's `api_token_env` token.
+3. Open the PR into the repository's default branch, or adopt the open one
+   for that branch. Title and body come from `pr.md` (`title`, `---`, body)
+   when the flow wrote one, otherwise from the ticket; the body always says
+   `Closes #N`.
+4. Record `PullRequestOpened` in the run's log, then `RunCompleted`.
+
+A run that changed nothing publishes nothing. A publish failure never fails
+the run: it completes unpublished, and the merge gate then blocks with "no
+pull request is linked" and comments on the ticket. A run resumed after a
+daemon restart has no publisher yet and completes unpublished the same way.
 
 ### L3 merge gate
 

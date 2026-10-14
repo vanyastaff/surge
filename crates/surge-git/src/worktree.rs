@@ -59,6 +59,15 @@ pub enum GitError {
     #[error("repository has tracked or untracked changes")]
     DirtyRepository,
 
+    /// The remote refused to update a pushed reference.
+    #[error("push of {reference} was rejected: {reason}")]
+    PushRejected {
+        /// The reference that was not updated.
+        reference: String,
+        /// The remote's reason.
+        reason: String,
+    },
+
     #[error("worktree identity conflict at {path}: {reason}")]
     WorktreeConflict {
         path: PathBuf,
@@ -83,6 +92,9 @@ impl From<GitError> for surge_core::SurgeError {
             },
             GitError::EmptyRepository => {
                 surge_core::SurgeError::git("repository has no commits".to_string())
+            },
+            rejected @ GitError::PushRejected { .. } => {
+                surge_core::SurgeError::git(rejected.to_string())
             },
             GitError::MergeConflict { conflicting_files } => surge_core::SurgeError::git(format!(
                 "merge conflict in {} file(s)",

@@ -3,7 +3,9 @@
 use crate::cadence::{self, CadenceController};
 use crate::github::client::GitHubClient;
 use crate::policy::{AutomationPolicy, resolve_policy};
-use crate::source::{MergeOutcome, MergeReadiness, TaskSource};
+use crate::source::{
+    MergeOutcome, MergeReadiness, OpenedPullRequest, PullRequestDraft, TaskSource,
+};
 use crate::types::{TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary};
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -536,6 +538,49 @@ impl TaskSource for GitHubIssuesTaskSource {
         Ok(open_pull_requests_closing(&response))
     }
 
+    async fn open_pull_request(
+        &self,
+        _id: &TaskId,
+        draft: &PullRequestDraft,
+    ) -> Result<OpenedPullRequest> {
+        let (owner, repo) = (&self.client.owner, &self.client.repo);
+        let octocrab = &self.client.octocrab;
+        let pulls_route = format!("/repos/{owner}/{repo}/pulls");
+        let existing: serde_json::Value = octocrab
+            .get(
+                &pulls_route,
+                Some(&serde_json::json!({
+                    "state": "open",
+                    "head": format!("{owner}:{}", draft.head_branch),
+                })),
+            )
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
+        if let Some(open) = existing.as_array().and_then(|pulls| pulls.first()) {
+            return pull_request_from_json(open, true);
+        }
+        let repository: serde_json::Value = octocrab
+            .get(format!("/repos/{owner}/{repo}"), None::<&()>)
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
+        let base = repository["default_branch"]
+            .as_str()
+            .ok_or_else(|| Error::Internal("repository has no default branch".into()))?;
+        let created: serde_json::Value = octocrab
+            .post(
+                &pulls_route,
+                Some(&serde_json::json!({
+                    "title": draft.title,
+                    "head": draft.head_branch,
+                    "base": base,
+                    "body": draft.body,
+                })),
+            )
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
+        pull_request_from_json(&created, false)
+    }
+
     async fn check_merge_readiness(&self, _id: &TaskId, pr: u64) -> Result<MergeReadiness> {
         let number = pr;
         let pulls = self
@@ -772,6 +817,22 @@ fn evaluate_reviews(
     MergeReadiness::Ready {
         head_ref: Some(head_sha),
     }
+}
+
+/// Number and web URL of a pull request in GitHub's REST shape.
+fn pull_request_from_json(pull: &serde_json::Value, adopted: bool) -> Result<OpenedPullRequest> {
+    let number = pull["number"]
+        .as_u64()
+        .ok_or_else(|| Error::Internal("pull request has no number".into()))?;
+    let url = pull["html_url"]
+        .as_str()
+        .ok_or_else(|| Error::Internal("pull request has no html_url".into()))?
+        .to_owned();
+    Ok(OpenedPullRequest {
+        number,
+        url,
+        adopted,
+    })
 }
 
 /// Open PRs that close an issue, as GitHub links them (`Closes #N`).

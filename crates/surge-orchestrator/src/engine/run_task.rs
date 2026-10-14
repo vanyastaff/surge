@@ -2022,6 +2022,19 @@ async fn dispatch_terminal_node(
 
     match crate::engine::frames::on_terminal_decision(&state.frames, &state.cursor) {
         TerminalSignal::OuterComplete => {
+            if matches!(cfg.kind, surge_core::terminal_config::TerminalKind::Success)
+                && let Some(publisher) = params.run_config.pull_request_publisher.as_deref()
+            {
+                crate::engine::publish::publish_before_terminal(
+                    publisher,
+                    &params.writer,
+                    crate::engine::publish::PublishRequest {
+                        run_id: params.run_id,
+                        worktree: params.worktree_path.clone(),
+                    },
+                )
+                .await;
+            }
             let result = execute_terminal_stage(TerminalStageParams {
                 node: &state.cursor.node,
                 terminal_config: cfg,
