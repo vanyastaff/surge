@@ -179,7 +179,16 @@ impl TicketRunLauncher {
         source_id: &str,
     ) -> EngineRunConfig {
         let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
-            EngineRunConfig::default(),
+            EngineRunConfig {
+                // The ticket is the run's spec: the ticket graph binds the
+                // implementer's `spec` to this initial prompt.
+                initial_prompt: format!(
+                    "{}\n\n{}",
+                    details.title.trim(),
+                    details.description.trim()
+                ),
+                ..EngineRunConfig::default()
+            },
             &self.project_root,
             &self.config,
         );

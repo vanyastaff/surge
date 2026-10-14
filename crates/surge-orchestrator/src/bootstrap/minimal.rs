@@ -6,7 +6,9 @@ use crate::bootstrap::builder::{BootstrapBuildError, BootstrapGraphBuilder, Boot
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use surge_core::agent_config::{AgentConfig, NodeLimits, PromptOverride};
+use surge_core::agent_config::{
+    AgentConfig, ArtifactSource, Binding, NodeLimits, PromptOverride, TemplateVar,
+};
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
@@ -136,7 +138,14 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
             tool_overrides: None,
             sandbox_override: None,
             approvals_override: None,
-            bindings: Vec::new(),
+            // The implementer profile requires its `spec`; for a ticket run the
+            // spec is the ticket, which the launcher passes as the run's
+            // initial prompt (seeded as the `user_prompt` artifact).
+            bindings: vec![Binding {
+                source: ArtifactSource::InitialPrompt,
+                target: TemplateVar("spec".into()),
+                optional: false,
+            }],
             rules_overrides: None,
             limits: NodeLimits::default(),
             hooks: Vec::new(),
@@ -245,10 +254,16 @@ mod tests {
             .build(RunId::new(), sample_prompt(), std::env::temp_dir())
             .await
             .expect("builds");
-        // The same validation `Engine::start_run` runs: a ticket graph the
-        // engine refuses means no L1/L3 ticket can run at all.
+        // The same validation `Engine::start_run` runs, including the profile
+        // contract (the implementer's required `spec` binding): a ticket graph
+        // the engine refuses means no L1/L3 ticket can run at all.
         crate::engine::validate::validate_for_m6(&graph)
             .expect("the engine accepts the ticket graph");
+        let profiles = crate::profile_loader::ProfileRegistry::new(
+            crate::profile_loader::DiskProfileSet::empty(),
+        );
+        crate::engine::validate::validate_graph_against(&graph, Some(&profiles))
+            .expect("the ticket graph satisfies the bundled implementer profile");
     }
 
     #[tokio::test]
