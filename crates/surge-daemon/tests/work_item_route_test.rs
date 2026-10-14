@@ -465,6 +465,32 @@ async fn reserve_fixture_graph_timeout(
     surge_core::work_item::WorkItemWorkspace,
     surge_core::work_item::WorkItemCommand,
 ) {
+    reserve_fixture_with_graph(
+        home,
+        project,
+        agent,
+        successor_gate,
+        loop_gate,
+        timeout_seconds,
+        None,
+    )
+    .await
+}
+
+async fn reserve_fixture_with_graph(
+    home: &Path,
+    project: &Path,
+    agent: bool,
+    successor_gate: bool,
+    loop_gate: bool,
+    timeout_seconds: Option<u32>,
+    graph_override: Option<surge_core::Graph>,
+) -> (
+    Arc<Storage>,
+    surge_core::work_item::WorkItemAttempt,
+    surge_core::work_item::WorkItemWorkspace,
+    surge_core::work_item::WorkItemCommand,
+) {
     use surge_core::{Graph, RunId, id::WorkItemOperationId, work_item::*};
     for args in [
         vec!["init"],
@@ -558,6 +584,7 @@ async fn reserve_fixture_graph_timeout(
             graph.edges.push(edge);
         }
     }
+    let graph = graph_override.unwrap_or(graph);
     let start = WorkItemCommand::Start {
         operation_id: WorkItemOperationId::new(),
         item: created.item.id,
@@ -5175,3 +5202,6 @@ async fn wait_for_listener(
     .await
     .expect("daemon must accept a connection within its readiness deadline");
 }
+
+#[path = "fixtures/task_split_recovery.rs"]
+mod task_split_recovery;
