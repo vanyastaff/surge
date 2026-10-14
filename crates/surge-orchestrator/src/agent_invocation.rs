@@ -25,8 +25,10 @@
 //! - Only events of the opened session are considered.
 //! - A broadcast lag is a retryable [`InvocationFailure::EventsLost`], never a
 //!   silent skip.
-//! - Once `open_session` succeeds, `close_session` is called **exactly once**
-//!   on every exit path. A close error is logged and never masks the result.
+//! - Endpoint authority is revoked before the owned session is closed. Success
+//!   and recording require confirmed settlement (including a forced reap).
+//! - Unconfirmed cleanup is terminal, retaining any original failure as its
+//!   source. A dropped invocation schedules best-effort cleanup without evidence.
 //! - The deadline covers the whole invocation, from the first send to the
 //!   accepted outcome.
 //! - Cancellation wins unless an outcome was already accepted.
@@ -61,6 +63,13 @@ use crate::engine::stage::outcome_acceptance::{
 };
 use crate::profile_loader::ProfileRegistry;
 use crate::prompt::PromptRenderer;
+
+mod settlement;
+use settlement::InvocationResources;
+pub use settlement::{
+    EndpointSettlementFailureKind, InvocationCleanupFailure, InvocationSettlementFailure,
+    SessionSettlementFailureKind,
+};
 
 /// Default number of contract rejections one invocation absorbs before it
 /// fails: the agent gets this many corrected turns in the same session.
@@ -228,13 +237,16 @@ pub enum InvocationFailure {
     /// Recording evidence in the caller's run log failed.
     #[error("recording invocation evidence failed: {0}")]
     Record(String),
+    /// Resource cleanup was not confirmed; another attempt could overlap a writer.
+    #[error(transparent)]
+    Settlement(#[from] InvocationSettlementFailure),
 }
 
 impl InvocationFailure {
     /// Whether another attempt may succeed: deadline, crash, early end, lost
     /// events, invalid or missing artifacts, and outcome mistakes are
-    /// retryable; configuration, a dead bridge, cancellation and recording
-    /// failures are terminal.
+    /// retryable; configuration, a dead bridge, cancellation, recording
+    /// failures and unconfirmed resource settlement are terminal.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
@@ -306,11 +318,12 @@ pub async fn invoke(
 
     // Subscribe before opening: no event of the new session can be missed.
     let mut events = bridge.subscribe();
-    let session = bridge
-        .open_session(config)
-        .await
-        .map_err(open_failure)?
-        .session;
+    let mut resources = InvocationResources::new(bridge, stage_endpoint);
+    let session = match bridge.open_session(config).await {
+        Ok(opened) => opened.session,
+        Err(error) => return resources.settle(Err(open_failure(error))).await,
+    };
+    resources.opened(session);
     tracing::debug!(target: "agent_invocation", profile = request.profile, %session, "session opened");
 
     let result = drive(
@@ -322,13 +335,18 @@ pub async fn invoke(
         prompt,
     )
     .await;
-    // Exactly once, on every path after a successful open.
-    if let Err(error) = bridge.close_session(session).await {
-        tracing::warn!(target: "agent_invocation", %session, %error, "session close failed");
-    }
-    if let Err(error) = stage_endpoint.close().await {
-        tracing::warn!(target: "agent_invocation", %session, %error, "stage tool endpoint close failed");
-    }
+    let result = resources.settle(result).await;
+    let result = match result {
+        Ok(outcome) => record(
+            &request,
+            &outcome.outcome,
+            &outcome.summary,
+            &outcome.artifacts,
+        )
+        .await
+        .map(|()| outcome),
+        Err(error) => Err(error),
+    };
     match &result {
         Ok(outcome) => tracing::info!(target: "agent_invocation", profile = request.profile,
             outcome = %outcome.outcome, artifacts = outcome.artifacts.len(), "invocation accepted"),
@@ -606,7 +624,6 @@ async fn drive(
         {
             None => {
                 let artifacts = read_artifacts(request.working_dir, &produced)?;
-                record(request, &outcome, &summary, &artifacts).await?;
                 return Ok(InvocationOutcome {
                     outcome,
                     summary,

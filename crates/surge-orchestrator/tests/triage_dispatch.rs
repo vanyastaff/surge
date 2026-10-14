@@ -176,6 +176,51 @@ async fn enqueued_happy_path() {
 }
 
 #[tokio::test]
+async fn unconfirmed_cleanup_does_not_start_a_second_triage_attempt() {
+    use fixtures::mock_bridge::RecordedCall;
+    use surge_acp::bridge::error::CloseSessionError;
+
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let session = SessionId::new();
+    bridge.pin_next_session_id(session).await;
+    *bridge.next_close_error.lock().await = Some(CloseSessionError::SessionNotFound { session });
+    let tmp = TempDir::new().unwrap();
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), profiles(None), None);
+    opts.attempt_timeout = Duration::from_millis(200);
+    opts.max_attempts = 3;
+    opts.keep_scratch_on_failure = false;
+    let drive = tokio::spawn(drive_one_attempt(
+        bridge.clone(),
+        tmp.path().to_path_buf(),
+        session,
+        "undeclared",
+        "{}",
+        "",
+    ));
+    let result = dispatch_triage(bridge.clone() as Arc<dyn BridgeFacade>, input(), opts).await;
+    drive.await.unwrap();
+    assert!(
+        result.is_err(),
+        "uncertain cleanup must remain terminal: {result:?}"
+    );
+    let calls = bridge.recorded_calls.lock().await;
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::OpenSession))
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::CloseSession(_)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn duplicate_happy_path() {
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let session = SessionId::new();
