@@ -7,13 +7,47 @@ use surge_acp::bridge::error::{
 };
 use surge_acp::bridge::event::ToolResultPayload;
 use surge_acp::bridge::session::{MessageContent, SessionConfig, SessionState};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Semaphore};
+
+struct CapturedEndpoint {
+    address: String,
+    auth: String,
+}
+
+impl CapturedEndpoint {
+    async fn catalog(&self) -> std::io::Result<serde_json::Value> {
+        #[cfg(unix)]
+        let mut stream = tokio::net::UnixStream::connect(&self.address).await?;
+        #[cfg(windows)]
+        let mut stream =
+            tokio::net::windows::named_pipe::ClientOptions::new().open(&self.address)?;
+        let request = serde_json::to_vec(&serde_json::json!({
+            "auth": self.auth,
+            "operation": "Catalog",
+        }))?;
+        stream
+            .write_u32(u32::try_from(request.len()).unwrap())
+            .await?;
+        stream.write_all(&request).await?;
+        stream.flush().await?;
+        let length = stream.read_u32().await? as usize;
+        if length > 256 * 1024 {
+            return Err(std::io::Error::other(
+                "catalog frame exceeds transport limit",
+            ));
+        }
+        let mut response = vec![0; length];
+        stream.read_exact(&mut response).await?;
+        Ok(serde_json::from_slice(&response)?)
+    }
+}
 
 struct ObservedBridge {
     inner: Arc<MockBridge>,
     open_fails: bool,
     hold_close: bool,
-    endpoint: Mutex<Option<String>>,
+    endpoint: Mutex<Option<CapturedEndpoint>>,
     close_entered: Semaphore,
     release_close: Semaphore,
 }
@@ -39,14 +73,17 @@ impl ObservedBridge {
     }
 
     async fn assert_endpoint_revoked(&self) {
-        let endpoint = self.endpoint.lock().await.clone().unwrap();
-        #[cfg(unix)]
-        assert!(tokio::net::UnixStream::connect(&endpoint).await.is_err());
-        #[cfg(windows)]
+        let endpoint = self.endpoint.lock().await;
+        // Windows IOCP may retain a cancelled listener handle after the owner
+        // task has joined. A raw open can still succeed, but the authenticated
+        // endpoint must fail the roundtrip rather than serve any authority.
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), endpoint.as_ref().unwrap().catalog())
+                .await
+                .expect("revoked endpoint must terminate the protocol roundtrip");
         assert!(
-            tokio::net::windows::named_pipe::ClientOptions::new()
-                .open(&endpoint)
-                .is_err()
+            result.is_err(),
+            "revoked endpoint still serves an authenticated catalog"
         );
     }
 }
@@ -61,17 +98,25 @@ impl BridgeFacade for ObservedBridge {
         &self,
         config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
-        let endpoint = config
-            .stage_mcp
-            .as_ref()
-            .unwrap()
-            .server
-            .env
+        let env = &config.stage_mcp.as_ref().unwrap().server.env;
+        let address = env
             .iter()
             .find(|entry| entry.name == surge_mcp::stage::ENDPOINT_ENV)
             .unwrap()
             .value
             .clone();
+        let auth = env
+            .iter()
+            .find(|entry| entry.name == surge_mcp::stage::AUTH_ENV)
+            .unwrap()
+            .value
+            .clone();
+        let endpoint = CapturedEndpoint { address, auth };
+        let catalog = tokio::time::timeout(Duration::from_secs(2), endpoint.catalog())
+            .await
+            .expect("live endpoint must answer the protocol roundtrip")
+            .unwrap();
+        assert!(catalog.as_array().is_some_and(|tools| !tools.is_empty()));
         *self.endpoint.lock().await = Some(endpoint);
         if self.open_fails {
             return Err(OpenSessionError::HandshakeTimedOut {
