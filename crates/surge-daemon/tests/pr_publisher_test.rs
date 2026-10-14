@@ -79,7 +79,10 @@ fn request(fx: &Fixture) -> PublishRequest {
 #[tokio::test]
 async fn the_run_branch_is_committed_pushed_and_opened_as_a_pr() {
     let fx = fixture();
-    let source = Arc::new(MockTaskSource::new("github_issues:acme/app", "github"));
+    let source = Arc::new(MockTaskSource::new(
+        "github_issues:acme/app",
+        "github_issues",
+    ));
     std::fs::write(fx.worktree.join("parser.rs"), "fn parse() {}\n").unwrap();
     std::fs::create_dir_all(fx.worktree.join(".surge")).unwrap();
     std::fs::write(fx.worktree.join(".surge/user_prompt.txt"), "prompt").unwrap();
@@ -94,6 +97,8 @@ async fn the_run_branch_is_committed_pushed_and_opened_as_a_pr() {
     let branch = surge_git::run_worktree::run_branch_name(&fx.run_id);
     assert_eq!(published.head_branch, branch);
     assert_eq!(published.pr.number, 100);
+    // The PR host, not the tracker's source name (`github_issues`).
+    assert_eq!(published.pr.provider, "github");
     assert_eq!(published.pr.repository, "acme/app");
 
     // The branch is on origin, at the committed head, without Surge's files.
@@ -127,7 +132,10 @@ async fn the_run_branch_is_committed_pushed_and_opened_as_a_pr() {
 #[tokio::test]
 async fn a_run_that_changed_nothing_publishes_nothing() {
     let fx = fixture();
-    let source = Arc::new(MockTaskSource::new("github_issues:acme/app", "github"));
+    let source = Arc::new(MockTaskSource::new(
+        "github_issues:acme/app",
+        "github_issues",
+    ));
     let outcome = publisher(&fx, &source)
         .publish(&request(&fx))
         .await

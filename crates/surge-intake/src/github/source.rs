@@ -557,7 +557,7 @@ impl TaskSource for GitHubIssuesTaskSource {
             .await
             .map_err(|e| Self::map_octocrab_error(&e))?;
         if let Some(open) = existing.as_array().and_then(|pulls| pulls.first()) {
-            return pull_request_from_json(open, true);
+            return pull_request_from_json(open, &format!("{owner}/{repo}"), true);
         }
         let repository: serde_json::Value = octocrab
             .get(format!("/repos/{owner}/{repo}"), None::<&()>)
@@ -578,7 +578,7 @@ impl TaskSource for GitHubIssuesTaskSource {
             )
             .await
             .map_err(|e| Self::map_octocrab_error(&e))?;
-        pull_request_from_json(&created, false)
+        pull_request_from_json(&created, &format!("{owner}/{repo}"), false)
     }
 
     async fn check_merge_readiness(&self, _id: &TaskId, pr: u64) -> Result<MergeReadiness> {
@@ -820,7 +820,11 @@ fn evaluate_reviews(
 }
 
 /// Number and web URL of a pull request in GitHub's REST shape.
-fn pull_request_from_json(pull: &serde_json::Value, adopted: bool) -> Result<OpenedPullRequest> {
+fn pull_request_from_json(
+    pull: &serde_json::Value,
+    repository: &str,
+    adopted: bool,
+) -> Result<OpenedPullRequest> {
     let number = pull["number"]
         .as_u64()
         .ok_or_else(|| Error::Internal("pull request has no number".into()))?;
@@ -829,6 +833,8 @@ fn pull_request_from_json(pull: &serde_json::Value, adopted: bool) -> Result<Ope
         .ok_or_else(|| Error::Internal("pull request has no html_url".into()))?
         .to_owned();
     Ok(OpenedPullRequest {
+        provider: "github".to_owned(),
+        repository: repository.to_owned(),
         number,
         url,
         adopted,

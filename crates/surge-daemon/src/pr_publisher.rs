@@ -94,9 +94,11 @@ impl PullRequestPublisher for TicketPullRequestPublisher {
             )
             .await
             .map_err(|error| format!("could not open the pull request: {error}"))?;
+        // The PR's identity comes from the provider that opened it (the
+        // tracker source's own name, e.g. `github_issues`, is not a PR host).
         let pr = serde_json::from_value(serde_json::json!({
-            "provider": self.source.provider(),
-            "repository": repository_of(&self.task_id),
+            "provider": opened.provider,
+            "repository": opened.repository,
             "number": opened.number,
             "url": opened.url,
         }))
@@ -143,16 +145,6 @@ fn closing_reference(task_id: &TaskId) -> Result<String, String> {
         .and_then(|(_, number)| number.parse::<u64>().ok())
         .map(|number| format!("Closes #{number}"))
         .ok_or_else(|| format!("ticket {task_id} has no issue number to close"))
-}
-
-/// `owner/repo` of a ticket `provider:owner/repo#N`.
-fn repository_of(task_id: &TaskId) -> String {
-    let id = task_id.as_str();
-    let after_provider = id.split_once(':').map_or(id, |(_, rest)| rest);
-    after_provider
-        .rsplit_once('#')
-        .map_or(after_provider, |(repository, _)| repository)
-        .to_owned()
 }
 
 /// The PR draft a flow may write (`pr.md`: title, `---`, body).
@@ -211,10 +203,9 @@ mod tests {
     }
 
     #[test]
-    fn ticket_identity_yields_the_issue_and_the_repository() {
+    fn ticket_identity_yields_the_issue_to_close() {
         let id = TaskId::try_new("github_issues:acme/app#42").unwrap();
         assert_eq!(closing_reference(&id).unwrap(), "Closes #42");
-        assert_eq!(repository_of(&id), "acme/app");
         assert!(closing_reference(&TaskId::try_new("mock:t").unwrap()).is_err());
     }
 }
