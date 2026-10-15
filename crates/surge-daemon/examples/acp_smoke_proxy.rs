@@ -151,6 +151,33 @@ fn input_reader() -> (
 fn fixture_provider() -> bool {
     let mut args = std::env::args_os().skip(1);
     match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some(mode @ ("--fixture-diagnostic-failure" | "--fixture-diagnostic-unconfirmed")) => {
+            let path = PathBuf::from(args.next().unwrap());
+            let mut report = capture::EvidenceFile::create(&path).unwrap();
+            report
+                .write_diagnostic(&capture::SmokeDiagnostic {
+                    phase: capture::SmokePhase::Completion,
+                    failure: Some(capture::SmokeFailure::ProviderFailed),
+                    settled: mode != "--fixture-diagnostic-unconfirmed",
+                    binding_verified: false,
+                    counts: Some(capture::SmokeCounts {
+                        run_failed: 1,
+                        ..Default::default()
+                    }),
+                })
+                .unwrap();
+            drop(report);
+            eprintln!(
+                "AUTH_SENTINEL PROMPT_SENTINEL TOOL_SENTINEL NONCE_SENTINEL RAW_ERROR_SENTINEL"
+            );
+            std::process::exit(7);
+        },
+        Some("--fixture-raw-failure") => {
+            eprintln!(
+                "AUTH_SENTINEL PROMPT_SENTINEL TOOL_SENTINEL NONCE_SENTINEL RAW_ERROR_SENTINEL"
+            );
+            std::process::exit(7);
+        },
         Some("--fixture-wire") => {
             fixture_wire(
                 args.next().unwrap().into_string().unwrap(),

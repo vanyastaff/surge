@@ -596,11 +596,164 @@ pub async fn forward<W: tokio::io::AsyncWrite + Unpin>(
     writer.flush().await
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmokePhase {
+    Preparing,
+    Running,
+    Completion,
+    Completed,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmokeFailure {
+    ProviderAuthenticationUnavailable,
+    ProviderTimedOut,
+    ProviderModelUnavailable,
+    ProviderFailed,
+    HostFailed,
+    VerificationFailed,
+    CleanupUnconfirmed,
+    WatchdogTimedOut,
+    ChildFailed,
+    DiagnosticUnavailable,
+    DiagnosticInvalid,
+    DiagnosticOversized,
+    CaptureUnavailable,
+    CaptureInvalid,
+    CaptureOversized,
+    OutputUnavailable,
+    FixtureCleanupFailed,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmokeCounts {
+    pub session_opened: u64,
+    pub human_input_requested: u64,
+    pub human_input_resolved: u64,
+    pub stage_tool_receipt: u64,
+    pub outcome_reported: u64,
+    pub run_completed: u64,
+    pub run_failed: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmokeDiagnostic {
+    pub phase: SmokePhase,
+    pub failure: Option<SmokeFailure>,
+    pub settled: bool,
+    pub binding_verified: bool,
+    pub counts: Option<SmokeCounts>,
+}
+impl Default for SmokeDiagnostic {
+    fn default() -> Self {
+        Self {
+            phase: SmokePhase::Preparing,
+            failure: None,
+            settled: false,
+            binding_verified: false,
+            counts: None,
+        }
+    }
+}
+impl EvidenceFile {
+    pub fn write_diagnostic(&mut self, diagnostic: &SmokeDiagnostic) -> Result<(), &'static str> {
+        let bytes = serde_json::to_vec(diagnostic).map_err(|_| "diagnostic encode")?;
+        self.replace_diagnostic_bytes(&bytes)
+    }
+    fn replace_diagnostic_bytes(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+        #[cfg(not(windows))]
+        {
+            use std::io::{Seek, Write};
+            self.file.rewind().map_err(|_| "diagnostic seek")?;
+            self.file.set_len(0).map_err(|_| "diagnostic truncate")?;
+            self.file.write_all(bytes).map_err(|_| "diagnostic write")?;
+            self.file.flush().map_err(|_| "diagnostic flush")
+        }
+        #[cfg(windows)]
+        {
+            self.file
+                .replace_bytes(bytes)
+                .map_err(|_| "diagnostic write")
+        }
+    }
+    #[cfg(test)]
+    pub fn write_diagnostic_fixture(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+        self.replace_diagnostic_bytes(bytes)
+    }
+}
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadStatus {
+    Valid,
+    Missing,
+    Invalid,
+    Oversized,
+    Unconfirmed,
+}
+#[cfg(test)]
+pub fn read_bounded<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> Result<T, ReadStatus> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| ReadStatus::Missing)?;
+    let mut bytes = Vec::new();
+    file.take(65537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ReadStatus::Invalid)?;
+    if bytes.len() > 65536 {
+        return Err(ReadStatus::Oversized);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ReadStatus::Invalid)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     const MODEL: &str = "gpt-6.1-sol";
+    #[test]
+    fn private_diagnostic_reader_is_bounded_and_rejects_unknown_fields() {
+        #[cfg(windows)]
+        let root =
+            tempfile::tempdir_in(surge_persistence::RuntimeHomeOwner::user_profile_path().unwrap())
+                .unwrap();
+        #[cfg(not(windows))]
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let owner =
+            surge_persistence::RuntimeHomeOwner::prepare(&root.path().join("state")).unwrap();
+        #[cfg(windows)]
+        let path = owner.path().join("daemon/report.json");
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            root.path().join("report.json")
+        };
+        assert_eq!(
+            read_bounded::<SmokeDiagnostic>(&path).unwrap_err(),
+            ReadStatus::Missing
+        );
+        let mut file = EvidenceFile::create(&path).unwrap();
+        file.write_diagnostic(&SmokeDiagnostic::default()).unwrap();
+        assert!(!read_bounded::<SmokeDiagnostic>(&path).unwrap().settled);
+        file.write_diagnostic_fixture(br#"{"unknown":"SECRET"}"#)
+            .unwrap();
+        assert_eq!(
+            read_bounded::<SmokeDiagnostic>(&path).unwrap_err(),
+            ReadStatus::Invalid
+        );
+        file.write_diagnostic_fixture(&vec![b'x'; 65537]).unwrap();
+        assert_eq!(
+            read_bounded::<SmokeDiagnostic>(&path).unwrap_err(),
+            ReadStatus::Oversized
+        );
+        assert_ne!(ReadStatus::Valid, ReadStatus::Unconfirmed);
+        drop(file);
+        root.close().unwrap();
+    }
+
     fn session(c: &mut ProtocolCapture) {
         c.client(&json!({"id":1,"method":"initialize","params":{}}))
             .unwrap();

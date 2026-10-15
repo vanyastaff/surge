@@ -31,6 +31,20 @@ impl FixtureHome {
         &self.path
     }
 
+    /// Keep fixture paths intact when writer settlement is unconfirmed.
+    /// This releases the parent directory lease without deleting any pathname.
+    pub fn retain(self) -> std::path::PathBuf {
+        let Self {
+            #[cfg(windows)]
+            owner,
+            path: _,
+            outer,
+        } = self;
+        #[cfg(windows)]
+        drop(owner);
+        outer.keep()
+    }
+
     // Call only after writers, tasks, stores and pools have been dropped.
     // TempDir's implicit destructor is just a panic-unwind fallback.
     //
@@ -69,11 +83,23 @@ fn remove_dir_waiting_for_handles(path: &std::path::Path) -> std::io::Result<()>
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        let retry = error.raw_os_error() == Some(SHARING_VIOLATION)
-            && std::time::Instant::now() < deadline;
+        let retry =
+            error.raw_os_error() == Some(SHARING_VIOLATION) && std::time::Instant::now() < deadline;
         if !retry {
             return Err(error);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[cfg(test)]
+mod retained_home_tests {
+    #[test]
+    fn retained_fixture_is_not_removed_by_scope_exit() {
+        let home = super::FixtureHome::new().unwrap();
+        let state = home.path().to_path_buf();
+        let outer = home.retain();
+        assert!(state.is_dir());
+        std::fs::remove_dir_all(outer).unwrap();
     }
 }

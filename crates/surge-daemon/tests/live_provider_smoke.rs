@@ -5,6 +5,7 @@
 mod live_provider_capture;
 #[path = "support/runtime_home.rs"]
 mod runtime_home_fixture;
+use live_provider_capture::{ReadStatus, SmokeCounts, SmokeDiagnostic, SmokeFailure, SmokePhase};
 use runtime_home_fixture::FixtureHome;
 
 use std::{
@@ -49,19 +50,27 @@ fn live_codex_daemon_mcp_smoke() {
 
 fn watchdog(live: bool) {
     if let Some(root) = std::env::var_os("SURGE_SMOKE_CHILD") {
+        let home = PathBuf::from(std::env::var_os("SURGE_HOME").unwrap());
+        let mut diagnostic = SmokeDiagnostic::default();
         let result = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(journey(
                 PathBuf::from(root),
-                PathBuf::from(std::env::var_os("SURGE_HOME").unwrap()),
+                home.clone(),
                 live,
+                &mut diagnostic,
             ));
+        if result.is_err() && diagnostic.failure.is_none() {
+            diagnostic.failure = Some(SmokeFailure::HostFailed);
+        }
+        let published = live_provider_capture::EvidenceFile::create(&diagnostic_path(&home))
+            .and_then(|mut file| file.write_diagnostic(&diagnostic));
         assert!(
-            result.is_ok(),
-            "smoke failed: {}",
-            result.err().unwrap_or_default()
+            result.is_ok() && published.is_ok(),
+            "smoke child failed: {:?}",
+            diagnostic.failure
         );
         return;
     }
@@ -85,32 +94,210 @@ fn watchdog(live: bool) {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let status = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(watch_owned(command))
-        .unwrap();
-    let capture: live_provider_capture::Capture =
-        serde_json::from_slice(&std::fs::read(capture_path(home.path())).unwrap()).unwrap();
-    eprintln!(
-        "smoke model metadata: {}",
-        serde_json::to_string(&capture).unwrap()
-    );
-    home.close().unwrap();
+        .block_on(watch_owned(command));
+    let model = provider_launch(live)
+        .map(|launch| launch.model)
+        .unwrap_or_else(|_| "requested-model-unavailable".into());
+    let result = finish_parent(status, home, root, &model, &mut std::io::stderr());
+    assert!(result.is_ok(), "smoke failed: {:?}", result.err());
 }
 
-async fn watch_owned(mut command: std::process::Command) -> Result<(), String> {
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WatchStatus {
+    Succeeded,
+    Failed,
+    TimedOut,
+    Unconfirmed,
+}
+fn diagnostic_path(home: &Path) -> PathBuf {
+    capture_path(home).with_file_name("smoke-diagnostic.json")
+}
+#[derive(serde::Serialize)]
+struct ParentObservation {
+    process: WatchStatus,
+    report_status: ReadStatus,
+    diagnostic: Option<SmokeDiagnostic>,
+    capture_status: ReadStatus,
+    requested_model: String,
+    offered_exact_observed: Option<bool>,
+    selected_exact_observed: Option<bool>,
+    provider_session_observed: Option<bool>,
+    adapter_metadata_observed: Option<bool>,
+    selection_mode: Option<live_provider_capture::SelectionMode>,
+    selection_source: Option<live_provider_capture::SelectionMode>,
+    prompt_admissions: Option<usize>,
+    failure: Option<SmokeFailure>,
+    retained_paths: Vec<PathBuf>,
+}
+fn read_observation(
+    status: Result<WatchStatus, SmokeFailure>,
+    home: &Path,
+    model: &str,
+) -> ParentObservation {
+    let mut observed = ParentObservation {
+        process: status.unwrap_or(WatchStatus::Unconfirmed),
+        report_status: ReadStatus::Unconfirmed,
+        diagnostic: None,
+        capture_status: ReadStatus::Unconfirmed,
+        requested_model: model.into(),
+        offered_exact_observed: None,
+        selected_exact_observed: None,
+        provider_session_observed: None,
+        adapter_metadata_observed: None,
+        selection_mode: None,
+        selection_source: None,
+        prompt_admissions: None,
+        failure: status.err(),
+        retained_paths: vec![],
+    };
+    if status.is_err() {
+        return observed;
+    }
+    let diagnostic = live_provider_capture::read_bounded::<SmokeDiagnostic>(&diagnostic_path(home));
+    match diagnostic {
+        Ok(report) => {
+            observed.report_status = ReadStatus::Valid;
+            observed.diagnostic = Some(report);
+        },
+        Err(status) => {
+            observed.report_status = status;
+            observed.failure = Some(match status {
+                ReadStatus::Oversized => SmokeFailure::DiagnosticOversized,
+                ReadStatus::Missing => SmokeFailure::DiagnosticUnavailable,
+                _ => SmokeFailure::DiagnosticInvalid,
+            });
+            return observed;
+        },
+    }
+    let report = observed.diagnostic.clone().unwrap();
+    if !report.settled {
+        observed.failure = Some(SmokeFailure::CleanupUnconfirmed);
+        return observed;
+    }
+    observed.failure = report.failure.or(match observed.process {
+        WatchStatus::Failed => Some(SmokeFailure::ChildFailed),
+        WatchStatus::TimedOut => Some(SmokeFailure::WatchdogTimedOut),
+        _ => None,
+    });
+    project_capture(&mut observed, home, model);
+    if observed.failure.is_none() && !success_verified(&observed, &report) {
+        observed.failure = Some(SmokeFailure::VerificationFailed);
+    }
+    observed
+}
+fn project_capture(observed: &mut ParentObservation, home: &Path, model: &str) {
+    match live_provider_capture::read_bounded::<live_provider_capture::Capture>(&capture_path(home))
+    {
+        Ok(capture) if capture.required_model == model && capture.prompts <= 1 => {
+            observed.capture_status = ReadStatus::Valid;
+            observed.offered_exact_observed = Some(
+                capture
+                    .offered_models
+                    .iter()
+                    .any(|offered| offered == model),
+            );
+            observed.selected_exact_observed =
+                Some(capture.selected_model.as_deref() == Some(model));
+            observed.provider_session_observed = Some(capture.provider_session.is_some());
+            observed.adapter_metadata_observed =
+                Some(capture.adapter_name.is_some() && capture.adapter_version.is_some());
+            observed.selection_mode = Some(capture.selection_mode);
+            observed.selection_source = capture.selection_source;
+            observed.prompt_admissions = Some(capture.prompts);
+        },
+        Ok(_) => {
+            observed.capture_status = ReadStatus::Invalid;
+        },
+        Err(status) => {
+            observed.capture_status = status;
+        },
+    }
+}
+fn success_verified(observed: &ParentObservation, report: &SmokeDiagnostic) -> bool {
+    !(observed.capture_status != ReadStatus::Valid
+        || observed.offered_exact_observed != Some(true)
+        || observed.selected_exact_observed != Some(true)
+        || observed.provider_session_observed != Some(true)
+        || observed.adapter_metadata_observed != Some(true)
+        || observed.selection_mode != Some(live_provider_capture::SelectionMode::ExplicitSetAck)
+        || observed.selection_source != Some(live_provider_capture::SelectionMode::ExplicitSetAck)
+        || observed.prompt_admissions != Some(1)
+        || !report.binding_verified
+        || report.phase != SmokePhase::Completed
+        || report.counts.as_ref()
+            != Some(&SmokeCounts {
+                session_opened: 1,
+                human_input_requested: 1,
+                human_input_resolved: 1,
+                stage_tool_receipt: 2,
+                outcome_reported: 1,
+                run_completed: 1,
+                run_failed: 0,
+            }))
+}
+fn finish_parent(
+    status: Result<WatchStatus, SmokeFailure>,
+    home: FixtureHome,
+    root: tempfile::TempDir,
+    model: &str,
+    output: &mut impl std::io::Write,
+) -> Result<(), SmokeFailure> {
+    let mut observed = read_observation(status, home.path(), model);
+    let may_close = observed
+        .diagnostic
+        .as_ref()
+        .is_some_and(|report| report.settled)
+        && !matches!(observed.process, WatchStatus::Unconfirmed);
+    if !may_close {
+        observed.retained_paths = vec![home.retain(), root.keep()];
+        let _published = serde_json::to_writer(&mut *output, &observed).is_ok()
+            && output.write_all(b"\n").is_ok();
+        return Err(observed.failure.unwrap_or(SmokeFailure::CleanupUnconfirmed));
+    }
+    // Close fixtures even if publication fails; original provider failure wins.
+    let published =
+        serde_json::to_writer(&mut *output, &observed).is_ok() && output.write_all(b"\n").is_ok();
+    let closed = home.close().is_ok() & root.close().is_ok();
+    if let Some(failure) = observed.failure {
+        return Err(failure);
+    }
+    if !closed {
+        return Err(SmokeFailure::FixtureCleanupFailed);
+    }
+    if !published {
+        return Err(SmokeFailure::OutputUnavailable);
+    }
+    Ok(())
+}
+
+async fn watch_owned(mut command: std::process::Command) -> Result<WatchStatus, SmokeFailure> {
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = live_provider_capture::OwnedProcess::spawn(command, true)
-        .map_err(|_| "smoke child spawn")?;
+        .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
     if child.id() == 0 {
-        return Err("smoke child identity unavailable".into());
+        return Err(SmokeFailure::CleanupUnconfirmed);
     }
-    let (input, mut output, mut error) = child.pipes().map_err(|_| "smoke child pipes")?;
+    #[cfg(unix)]
+    let container = surge_acp::process_evidence::observe_container(
+        child.id(),
+        surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+    )
+    .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
+    #[cfg(windows)]
+    let container = child
+        .container()
+        .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
+    let (input, mut output, mut error) = child
+        .pipes()
+        .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
     drop(input);
     let stdout =
         tokio::spawn(async move { tokio::io::copy(&mut output, &mut tokio::io::sink()).await });
@@ -119,31 +306,38 @@ async fn watch_owned(mut command: std::process::Command) -> Result<(), String> {
     let result = child.wait(Duration::from_secs(150)).await;
     child
         .terminate()
-        .map_err(|_| "smoke child termination unconfirmed")?;
+        .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
     child
         .wait(Duration::from_secs(10))
         .await
-        .map_err(|_| "smoke child settlement unconfirmed")?;
+        .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
     tokio::time::timeout(Duration::from_secs(10), async {
         stdout
             .await
-            .map_err(|_| "smoke stdout task")?
-            .map_err(|_| "smoke stdout drain")?;
+            .map_err(|_| SmokeFailure::CleanupUnconfirmed)?
+            .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
         stderr
             .await
-            .map_err(|_| "smoke stderr task")?
-            .map_err(|_| "smoke stderr drain")?;
-        Ok::<(), String>(())
+            .map_err(|_| SmokeFailure::CleanupUnconfirmed)?
+            .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
+        Ok::<(), SmokeFailure>(())
     })
     .await
-    .map_err(|_| "smoke descendant drain deadline")??;
-    if !result
-        .map_err(|_| "smoke exceeded 150s watchdog")?
-        .success()
-    {
-        return Err("isolated smoke failed; provider output withheld".into());
-    }
-    Ok(())
+    .map_err(|_| SmokeFailure::CleanupUnconfirmed)??;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while surge_acp::process_evidence::group_state(&container)
+            != surge_acp::process_evidence::GroupState::Empty
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| SmokeFailure::CleanupUnconfirmed)?;
+    Ok(match result {
+        Ok(status) if status.success() => WatchStatus::Succeeded,
+        Ok(_) => WatchStatus::Failed,
+        Err(_) => WatchStatus::TimedOut,
+    })
 }
 
 fn git(path: &Path, args: &[&str]) {
@@ -319,12 +513,8 @@ fn check_provider_capture(
     events: &[surge_core::RunEvent],
     model: &str,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|_| "provider capture missing")?;
-    if bytes.len() > 65536 {
-        return Err("provider capture limit".into());
-    }
-    let capture: live_provider_capture::Capture =
-        serde_json::from_slice(&bytes).map_err(|_| "provider capture invalid")?;
+    let capture: live_provider_capture::Capture = live_provider_capture::read_bounded(path)
+        .map_err(|_| "provider capture missing, invalid or oversized")?;
     let mut sessions = events.iter().filter_map(|event| {
         if let EventPayload::SessionOpened {
             session,
@@ -437,7 +627,12 @@ async fn connect(socket: PathBuf) -> Result<DaemonEngineFacade, String> {
     .map_err(|_| "daemon connection timeout".into())
 }
 
-async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String> {
+async fn journey(
+    root: PathBuf,
+    home: PathBuf,
+    live: bool,
+    diagnostic: &mut SmokeDiagnostic,
+) -> Result<(), String> {
     let nonce = RunId::new().to_string();
     let (worktree, config, profiles) = prepare(&root, &home, live);
     let pins = [
@@ -480,9 +675,9 @@ async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String>
         &storage,
         &worktree,
         &nonce,
-        live,
         &launch.model,
         run_id,
+        diagnostic,
     )
     .await;
     for active in engine.snapshot_active_runs().await {
@@ -516,7 +711,16 @@ async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String>
         .map_err(|_| "server cleanup timeout".to_owned())
         .and_then(|joined| joined.map_err(|_| "server task failed".to_owned()))
         .and_then(|served| served.map_err(|_| "server failed".to_owned()));
-    // Evaluate checkout evidence before propagating any run or cleanup failure.
+    diagnostic.settled = bridge_result.is_ok() && server_result.is_ok();
+    if !diagnostic.settled && diagnostic.failure.is_none() {
+        diagnostic.failure = Some(SmokeFailure::CleanupUnconfirmed);
+    }
+    // Observe final event kinds independently of primary failure and cleanup results.
+    if let Ok(reader) = storage.open_run_reader(run_id).await
+        && let Ok(events) = reader.read_run_events().await
+    {
+        diagnostic.counts = Some(diagnostic_counts(&events));
+    }
     finish_checked(result.and(bridge_result).and(server_result), &pins)?;
     let events = storage
         .open_run_reader(run_id)
@@ -525,8 +729,10 @@ async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String>
         .read_run_events()
         .await
         .map_err(|_| "capture events")?;
-    check_provider_capture(&capture_path(&home), &events, &launch.model)?;
-
+    check_provider_capture(&capture_path(&home), &events, &launch.model)
+        .inspect_err(|_| diagnostic.failure = Some(SmokeFailure::VerificationFailed))?;
+    diagnostic.binding_verified = true;
+    diagnostic.phase = SmokePhase::Completed;
     assert_eq!(admission.snapshot().await.active, 0);
     Ok(())
 }
@@ -536,10 +742,11 @@ async fn exercise(
     storage: &Arc<Storage>,
     worktree: &Path,
     nonce: &str,
-    live: bool,
     model: &str,
     id: RunId,
+    diagnostic: &mut SmokeDiagnostic,
 ) -> Result<(), String> {
+    diagnostic.phase = SmokePhase::Running;
     let client = connect(socket).await?;
     let config = EngineRunConfig {
         budget: surge_core::budget::BudgetGuard {
@@ -564,13 +771,12 @@ async fn exercise(
         let _ = client.stop_run(id, "smoke cleanup".into()).await;
     }
     let completion = tokio::time::timeout(Duration::from_secs(10), handle.await_completion()).await;
-    let complete = match completion {
+    let complete: Result<(), String> = match completion {
         Ok(Ok(RunOutcome::Completed { .. })) => Ok(()),
-        Ok(Ok(RunOutcome::Failed { error })) => Err(if live {
-            classify_failure(&error)
-        } else {
-            error
-        }),
+        Ok(Ok(RunOutcome::Failed { error })) => {
+            diagnostic.failure = Some(classify_failure(&error));
+            Err("provider failed; diagnostic is typed".into())
+        },
         _ => Err("provider completion unconfirmed".into()),
     };
     let events = storage
@@ -580,6 +786,8 @@ async fn exercise(
         .read_run_events()
         .await
         .map_err(|_| "events")?;
+    diagnostic.phase = SmokePhase::Completion;
+    diagnostic.counts = Some(diagnostic_counts(&events));
     // Structural progress only: never print provider text, prompts, auth, or tool values.
     for kind in [
         "SessionOpened",
@@ -608,7 +816,25 @@ async fn exercise(
     )
 }
 
-fn classify_failure(error: &str) -> String {
+fn diagnostic_counts(events: &[surge_core::RunEvent]) -> SmokeCounts {
+    let count = |kind| {
+        events
+            .iter()
+            .filter(|event| event.payload.discriminant_str() == kind)
+            .count() as u64
+    };
+    SmokeCounts {
+        session_opened: count("SessionOpened"),
+        human_input_requested: count("HumanInputRequested"),
+        human_input_resolved: count("HumanInputResolved"),
+        stage_tool_receipt: count("StageToolReceipt"),
+        outcome_reported: count("OutcomeReported"),
+        run_completed: count("RunCompleted"),
+        run_failed: count("RunFailed"),
+    }
+}
+
+fn classify_failure(error: &str) -> SmokeFailure {
     let error = error.to_ascii_lowercase();
     if [
         "unauthorized",
@@ -620,11 +846,13 @@ fn classify_failure(error: &str) -> String {
     .iter()
     .any(|word| error.contains(word))
     {
-        "provider authentication unavailable; run codex login outside the fixture".into()
+        SmokeFailure::ProviderAuthenticationUnavailable
     } else if error.contains("timeout") || error.contains("timed out") {
-        "provider stage timed out".into()
+        SmokeFailure::ProviderTimedOut
+    } else if error.contains("does not offer model") {
+        SmokeFailure::ProviderModelUnavailable
     } else {
-        "provider stage failed (raw provider output withheld)".into()
+        SmokeFailure::ProviderFailed
     }
 }
 
@@ -1104,4 +1332,252 @@ async fn proxy_transport_bounds_unterminated_provider_frames_during_read() {
     owner.wait(Duration::from_secs(3)).await.unwrap();
     stderr.await.unwrap().unwrap();
     home.close().unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn outer_failed_child_publishes_typed_diagnostic_before_propagation() {
+    let home = FixtureHome::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home_path = home.path().to_owned();
+    let root_path = root.path().to_owned();
+    let mut command = std::process::Command::new(proxy_binary());
+    command
+        .arg("--fixture-diagnostic-failure")
+        .arg(diagnostic_path(home.path()));
+    let observed = watch_owned(command).await;
+    let mut output = Vec::new();
+    let result = finish_parent(observed, home, root, "gpt-6.1-sol", &mut output);
+    assert!(result.is_err());
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("provider_failed"),
+        "settled child diagnostic was lost"
+    );
+    assert!(text.contains("run_failed"));
+    for sentinel in [
+        "AUTH_SENTINEL",
+        "PROMPT_SENTINEL",
+        "TOOL_SENTINEL",
+        "NONCE_SENTINEL",
+        "RAW_ERROR_SENTINEL",
+    ] {
+        assert!(!text.contains(sentinel));
+    }
+    assert!(!home_path.exists());
+    assert!(!root_path.exists());
+}
+
+fn remove_retained_fixture_paths(output: &[u8]) {
+    let projection: serde_json::Value = serde_json::from_slice(output).unwrap();
+    for path in projection["retained_paths"].as_array().unwrap() {
+        std::fs::remove_dir_all(path.as_str().unwrap()).unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn outer_child_cleanup_uncertainty_preserves_primary_failure_and_retains_fixtures() {
+    let home = FixtureHome::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home_path = home.path().to_owned();
+    let root_path = root.path().to_owned();
+    let mut command = std::process::Command::new(proxy_binary());
+    command
+        .arg("--fixture-diagnostic-unconfirmed")
+        .arg(diagnostic_path(home.path()));
+    let observed = watch_owned(command).await;
+    let mut output = Vec::new();
+    assert_eq!(
+        finish_parent(observed, home, root, "gpt-6.1-sol", &mut output),
+        Err(SmokeFailure::CleanupUnconfirmed)
+    );
+    let projection: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(projection["diagnostic"]["failure"], "provider_failed");
+    assert_eq!(projection["diagnostic"]["settled"], false);
+    assert_eq!(projection["capture_status"], "unconfirmed");
+    assert!(home_path.exists() && root_path.exists());
+    // This controlled child had no provider; its outer domain is already empty.
+    remove_retained_fixture_paths(&output);
+}
+
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn outer_unconfirmed_owner_never_inspects_artifacts_or_removes_live_writer_paths() {
+    let home = FixtureHome::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home_path = home.path().to_owned();
+    let root_path = root.path().to_owned();
+    let report = SmokeDiagnostic {
+        phase: SmokePhase::Completed,
+        failure: None,
+        settled: true,
+        binding_verified: true,
+        counts: Some(SmokeCounts {
+            run_failed: 999,
+            ..Default::default()
+        }),
+    };
+    let mut file =
+        live_provider_capture::EvidenceFile::create(&diagnostic_path(home.path())).unwrap();
+    file.write_diagnostic(&report).unwrap();
+    drop(file);
+    let mut command = std::process::Command::new(proxy_binary());
+    command
+        .arg("--fixture-writer")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut writer = live_provider_capture::OwnedProcess::spawn(command, true).unwrap();
+    let (input, mut output_pipe, mut error_pipe) = writer.pipes().unwrap();
+    let stdout =
+        tokio::spawn(
+            async move { tokio::io::copy(&mut output_pipe, &mut tokio::io::sink()).await },
+        );
+    let stderr =
+        tokio::spawn(async move { tokio::io::copy(&mut error_pipe, &mut tokio::io::sink()).await });
+    assert!(writer.try_wait().unwrap().is_none());
+    let mut output = Vec::new();
+    assert_eq!(
+        finish_parent(
+            Err(SmokeFailure::CleanupUnconfirmed),
+            home,
+            root,
+            "gpt-6.1-sol",
+            &mut output
+        ),
+        Err(SmokeFailure::CleanupUnconfirmed)
+    );
+    let projection: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(projection["report_status"], "unconfirmed");
+    assert!(projection["diagnostic"].is_null());
+    assert_eq!(projection["capture_status"], "unconfirmed");
+    assert!(!String::from_utf8(output.clone()).unwrap().contains("999"));
+    assert!(home_path.exists() && root_path.exists());
+    assert!(writer.try_wait().unwrap().is_none());
+    drop(input);
+    writer.terminate().unwrap();
+    writer.wait(Duration::from_secs(5)).await.unwrap();
+    stdout.await.unwrap().unwrap();
+    stderr.await.unwrap().unwrap();
+    remove_retained_fixture_paths(&output);
+}
+
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn outer_missing_invalid_and_oversized_diagnostics_are_typed_and_never_echo_bytes() {
+    for (bytes, expected) in [
+        (None, SmokeFailure::DiagnosticUnavailable),
+        (
+            Some(b"{\"raw_error\":\"AUTH_SENTINEL\"}".to_vec()),
+            SmokeFailure::DiagnosticInvalid,
+        ),
+        (Some(vec![b'x'; 65537]), SmokeFailure::DiagnosticOversized),
+    ] {
+        let home = FixtureHome::new().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        if let Some(bytes) = bytes {
+            let mut file =
+                live_provider_capture::EvidenceFile::create(&diagnostic_path(home.path())).unwrap();
+            file.write_diagnostic_fixture(&bytes).unwrap();
+        }
+        let mut command = std::process::Command::new(proxy_binary());
+        command.arg("--fixture-raw-failure");
+        let observed = watch_owned(command).await;
+        let mut output = Vec::new();
+        assert_eq!(
+            finish_parent(observed, home, root, "gpt-6.1-sol", &mut output),
+            Err(expected)
+        );
+        assert!(
+            !String::from_utf8(output.clone())
+                .unwrap()
+                .contains("AUTH_SENTINEL")
+        );
+        remove_retained_fixture_paths(&output);
+    }
+}
+
+fn completed_parent_fixture(
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> Result<(), SmokeFailure> {
+    use live_provider_capture::{EvidenceFile, ProtocolCapture, SelectionMode};
+    let home = FixtureHome::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut capture = ProtocolCapture::new("gpt-6.1-sol".into()).unwrap().snapshot;
+    capture.adapter_name = Some("fixture-adapter".into());
+    capture.adapter_version = Some("1.0.0".into());
+    capture.provider_session = Some("fixture-session".into());
+    capture.offered_models = vec!["gpt-6.1-sol".into()];
+    capture.selected_model = Some("gpt-6.1-sol".into());
+    capture.selection_source = Some(SelectionMode::ExplicitSetAck);
+    capture.prompts = 1;
+    let mut capture = serde_json::to_value(capture).unwrap();
+    mutate(&mut capture);
+    let mut file = EvidenceFile::create(&capture_path(home.path())).unwrap();
+    file.write_diagnostic_fixture(&serde_json::to_vec(&capture).unwrap())
+        .unwrap();
+    drop(file);
+    let report = SmokeDiagnostic {
+        phase: SmokePhase::Completed,
+        failure: None,
+        settled: true,
+        binding_verified: true,
+        counts: Some(SmokeCounts {
+            session_opened: 1,
+            human_input_requested: 1,
+            human_input_resolved: 1,
+            stage_tool_receipt: 2,
+            outcome_reported: 1,
+            run_completed: 1,
+            run_failed: 0,
+        }),
+    };
+    let mut file = EvidenceFile::create(&diagnostic_path(home.path())).unwrap();
+    file.write_diagnostic(&report).unwrap();
+    drop(file);
+    finish_parent(
+        Ok(WatchStatus::Succeeded),
+        home,
+        root,
+        "gpt-6.1-sol",
+        &mut Vec::new(),
+    )
+}
+
+#[test]
+fn parent_completed_capture_requires_provider_session() {
+    assert_eq!(
+        completed_parent_fixture(|capture| capture["provider_session"] = serde_json::Value::Null),
+        Err(SmokeFailure::VerificationFailed)
+    );
+}
+#[test]
+fn parent_completed_capture_requires_adapter_metadata() {
+    for field in ["adapter_name", "adapter_version"] {
+        assert_eq!(
+            completed_parent_fixture(|capture| capture[field] = serde_json::Value::Null),
+            Err(SmokeFailure::VerificationFailed)
+        );
+    }
+}
+#[test]
+fn parent_completed_capture_requires_strict_selection_mode() {
+    assert_eq!(
+        completed_parent_fixture(|capture| capture["selection_mode"] = "initial_provider".into()),
+        Err(SmokeFailure::VerificationFailed)
+    );
+}
+#[test]
+fn parent_completed_capture_rejects_missing_selection_mode() {
+    assert_eq!(
+        completed_parent_fixture(|capture| {
+            capture.as_object_mut().unwrap().remove("selection_mode");
+        }),
+        Err(SmokeFailure::VerificationFailed)
+    );
+}
+#[test]
+fn parent_complete_strict_capture_remains_accepted() {
+    assert_eq!(completed_parent_fixture(|_| {}), Ok(()));
 }

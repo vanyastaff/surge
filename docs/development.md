@@ -219,3 +219,10 @@ its legacy `base[effort]` field against the exact categorical base and an offere
 reasoning effort, preserving raw/base/effort separately. Contradictions, unknown
 composite versions and malformed representations fail before prompt. This parser
 is confined to the test harness.
+
+The daemon smoke publishes a separate private, bounded typed diagnostic after
+provider and MCP cleanup. Its parent prints only fixed failure categories, event
+type counts, requested-model comparisons, and selection provenance. Provider
+metadata stays in the private capture. Failed runs still publish diagnostics
+before returning failure. If writer settlement cannot be confirmed, the parent
+skips artifact reads and retains the temporary paths for reconciliation.
