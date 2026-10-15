@@ -42,6 +42,64 @@ existing independent contracts.
    desktop, fix failures found, inspect usable results and recovery. Home and a
    transport smoke test alone do not retire the full outcome requirements.
 
+### Actual journey fixtures
+
+Use disposable, isolated runtime homes and repositories; never launch test agents
+against the maintainer's working copy. Keep generated demonstration recordings and
+provider captures outside the repository.
+
+- **New idea:** a small local habit tracker, with at least two authored stages:
+  creating/checking habits, then persistence and filtering. Exercise planning,
+  approval, execution and inspect the runnable interface. Check behavior using a
+  fixed independent acceptance list, not the agent's own summary. Add a follow-up
+  idea after the first result and confirm earlier stages remain inspectable.
+- **Existing folder:** a small existing application with explicit conventions,
+  baseline tests and a reproducible missing behavior. Open and scan it, implement
+  the requested improvement through Surge, inspect the worktree diff and run its
+  acceptance tests. Check that the original checkout and conventions survive.
+- **Recovery and problems:** use controlled fixtures for a required decision,
+  failed attempt, offline state and cold restart. Check exact navigation and
+  retained stage/task history; a live paid provider need not be deliberately
+  crashed to reproduce every deterministic failure mode.
+
+Capture actual provider-reported Sol selection, task/run identities, accepted
+requirements, routing, settlement and result evidence for the real journeys.
+Successful transport negotiation alone does not satisfy these scenarios.
+
+### Discovered desktop startup gap
+
+`surge-daemon/src/main.rs` currently enables bootstrap only when startup cwd or
+an ancestor contains a valid `surge.toml`. Desktop `start_daemon` inherits cwd,
+while `BootstrapRuntime::for_project` can resolve the project's agent catalog only
+after a bootstrap runtime already exists. Consequently, opening a configured
+project after an ordinary application launch does not establish planning
+availability. Prove and repair this with a focused regression before claiming
+the ordinary desktop journeys work. A configured test-launch cwd may help
+diagnose transport separately, but does not retire this product requirement.
+
+The desktop currently exposes default-agent selection but no bootstrap node model
+selection. Bundled planning profiles name Claude explicitly; changing default
+agent does not retarget them. Disk profile overrides can select the Codex runtime,
+but `recommended_model` remains advisory. The installed modern adapter documents
+`CODEX_CONFIG` and derives its reported initial model from the provider's
+thread-start response. Real planning journeys can use this supported adapter
+configuration plus same-session observation, without changing production profile
+recommendation semantics. Keep the strict harness's mandatory node-override proof
+separate from initial provider selection, with explicit capture provenance.
+
+## Current checks
+
+- Behavioral RED: both actual desktop project-entry paths reach Tasks rather than
+  Home. Isolated child fixtures finish setup and fail at the screen assertion.
+- Behavioral RED: registry summaries with tied timestamps lack deterministic ID
+  ordering, which is required for safe keyset continuation.
+- New harness RED: no acknowledgement / wrong acknowledgement cannot authorize
+  prompt; exact selected model must be recorded. Additional RED reproduces stale
+  authorization after a later model-changing attempt.
+- Native baseline screenshots were captured from a fresh build and inspected.
+  Source implementation, GREEN checks, independent final reviews and real
+  provider/native journeys are still in progress.
+
 ## Verification contract
 
 Write externally observable failing tests before behavior changes. Home coverage
