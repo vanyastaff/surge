@@ -98,6 +98,20 @@ On macOS, native builds require the Xcode Metal toolchain. For a smaller local
 build cache, set `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and
 `CARGO_INCREMENTAL=0` in the command environment.
 
+On macOS, `just bundle-ui` builds `surge-ui`, `surge`, and `surge-daemon`
+with `--locked`, then packages all three as siblings in `Surge.app/Contents/MacOS`.
+Use `just bundle-ui --release` to build and package the release profile. Arguments
+such as `--out "path with spaces"` and `--surge-home "isolated state path"` are
+forwarded intact; the latter embeds only `SURGE_HOME` in the app's plist.
+Direct `bash scripts/bundle-macos-app.sh` packages existing binaries, while
+`--build` first builds the selected profile for the native Darwin Rust host,
+pinning Cargo output to `target/<host>/<profile>` regardless of ambient target
+or target-directory configuration. This uses a separate target-qualified Cargo
+cache. All three executables are checked
+before replacing an existing bundle. Packaging keeps the existing ad-hoc signing
+policy. Run the isolated packaging checks with
+`python3 -m unittest scripts/test_release_bundle_macos.py` (requires `just`).
+
 Custom clickable divs need an element identity, an accessibility role and a
 meaningful label. Use the item's domain identity when a list can reorder or
 filter. Planning uses `TextareaState` so Enter inserts a newline, while the
