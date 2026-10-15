@@ -19,12 +19,12 @@ existing independent contracts.
 |---|---|---|
 | New idea reaches a usable project | Actual desktop journey through planning, approval, execution and running the result; inspect generated project and tests | Unverified |
 | Existing repository can continue from its current stage | Actual desktop journey on an isolated existing repository; conventions retained, worktree changes and usable improvement inspected | Unverified |
-| Whole path is understandable | Native screenshots and interaction assertions showing authored stages, planned/conditional next steps, current work and past stages together | Baseline opens Tasks; Home missing |
+| Whole path is understandable | Native screenshots and interaction assertions showing authored stages, planned/conditional next steps, current work and past stages together | Home implemented; 286 scoped tests pass, final review/native QA pending |
 | Current agents and their work are visible | Actual live session bound to the exact task/run; expandable feed and accurate offline state | Per-run surfaces exist; project-wide integration unverified |
 | Results and completed stages remain inspectable | Multiple operations/revisions and cold recovery preserve historical tasks, artifacts, evidence and exact destinations | PR #149 supplies TaskExecutionView; full project history unverified |
-| Problems and required decisions are actionable | Failure, unavailable history, disconnection and decision scenarios open the exact owner and preserve uncertainty | Existing separate screens; Home integration missing |
+| Problems and required decisions are actionable | Failure, unavailable history, disconnection and decision scenarios open the exact owner and preserve uncertainty | Home exact-owner navigation implemented; independent final reviews pending |
 | Both audiences understand the interface | Plain-language native labels, technical details available, actual navigation exercised | Partial existing UI; full journey unverified |
-| Real Sol 6.1 provider test | Same ACP session advertises exact ID, acknowledges mandatory selection, executes bounded daemon/MCP scenario and settles; metadata binds durable session | Cached adapter and model metadata found; actual invocation pending |
+| Real Sol 6.1 provider test | Same ACP session advertises exact ID, acknowledges mandatory selection, executes bounded daemon/MCP scenario and settles; metadata binds durable session | Actual exact Sol selection and MCP exchange observed; terminal completion not proven |
 
 ## Next implementation slices
 
@@ -101,11 +101,10 @@ Review repair counts (shared across spec and quality stages, maximum three per
 slice): startup **2/3** (restart coverage; reject symlinks to special files),
 provider harness **3/3** (stale replies/flushed forwarding; typed failure diagnostics; parent proof validation),
 Project Home **1/3** (all owned legacy runs remain visible; on-demand modern details; exact recorded stage/session destination). Startup spec and quality reviews are complete after both
-repairs; provider failure-observability repair and Home implementation remain open.
+repairs. Provider failure-observability code/reviews are complete; actual terminal success remains unproven. Home final reviews remain open.
 Provider repair 2 passed independent spec and security review; owner review found
 that the new parent success gate did not require the observed session, adapter
-metadata or strict selection mode. Repair 3 must first reproduce that acceptance
-gap, require the complete capture proof and repeat affected checks/reviews.
+metadata or strict selection mode. Repair 3 addressed that acceptance gap and required the complete capture proof.
 Repair 3 reproduced three false successes, then passed 36/36 controlled tests,
 scoped strict Clippy and independent affected spec, owner and security reviews.
 Diagnostics closure is committed as `fa055b3`. No fourth automatic repair is
@@ -269,5 +268,74 @@ remaining. Runtime and project fixtures are retained for the next native build.
 Planning-provider slice pre-code review is complete after shared-selector and
 provenance reshaping. Its outward RED launched the original Claude controlled
 recipe despite the configured project default (`/tmp/surge-bootstrap-selection-red.log`).
-Implementation is in progress, with no real provider invocation. Home repair 1 is
-also in progress. Neither slice is yet committed as complete or published.
+Planning selection is committed in `71a2ffa`: final bootstrap 38/38, actual Unix daemon 8/8, shared engine/helper/handoff 33/33 and native default-click 1/1 tests passed. Default/all-feature scoped strict Clippy and independent spec, owner, API and security reviews passed. No real provider planning journey is claimed. Home repair 1 is source-frozen with 286/286 tests and scoped strict Clippy green; final reviews and publication remain pending.
+
+## Packaged desktop startup slice
+
+Separate bounded slice, repair budget 1/3 (bind fresh native build artifacts). Owner plan plus independent harsh and
+security pre-code reviews accepted: `just bundle-ui` must build UI, CLI and daemon
+in the selected debug/release profile; pass argv through positional parameters;
+preflight all three executable inputs before replacing a previous bundle; package
+them as siblings for the existing startup path. Preserve signing and runtime
+authority semantics. Correctly escape SURGE_HOME as plist XML and test its parsed
+round-trip. Tests exercise actual just-to-script argv/profile propagation, each
+missing helper, spaces and XML characters, alongside existing packaging tests.
+Mock Darwin/signing proves only the packaging contract. Final actual macOS Start
+without CLI/daemon on PATH, with exact sibling paths/hashes, remains required.
+
+Packaging builder reports genuine behavioral REDs (UI-only package, overwritten
+old output on missing helpers, malformed plist and unsafe recipe argument/profile
+handling) before edits. Targeted six tests are green; full Python packaging suite
+and independent final reviews remain pending. This is not a fourth repair to the
+provider harness; no provider harness code or verification gates are changed.
+
+A separate disposable existing-project fixture is being prepared for the real
+continuation journey: usable plain browser notes app, passing baseline tests,
+independent search acceptance oracle outside the agent checkout that is RED before
+the requested improvement. Fixture preparation is not Surge execution evidence.
+
+Existing-project fixture prepared at
+`/private/tmp/surge-existing-project-ncyfw3p5/project`, base commit
+`260b7bf9251616192a0bc52b32d780b5404fde8d`. Root independently reran baseline
+3/3 model tests and the external acceptance oracle: five search cases fail, two
+blank-query cases pass. Oracle is outside checkout; SHA256 is
+`29e81b7f0b271e2ae12b367c77b4165e6d4767e7af93cf3b20b9e3b1a1e9a758`.
+The in-app browser rejected `file://` access by URL policy. No alternate browser,
+server, protocol rewrite or other workaround was attempted. Browser visual/use
+verification of this fixture remains unproven; this does not prevent the separate
+native Surge continuation and independent result/model checks.
+
+Packaging 5a found an uncovered freshness defect after 47/47 exact CI-pattern
+tests passed: Cargo ambient/config target-directory or target settings can place
+new binaries elsewhere while a hardcoded copy step packages old root/target
+inputs. Repair 1 plan uses exactly one validated Darwin host from rustc metadata,
+explicit Cargo native target and explicit root target-dir, then preflights/copies
+only target/HOST/profile. Prebuilt mode remains unchanged. Root accepts the extra
+native-target build cache cost and will coordinate disk/build checks. No new
+Python runtime dependency or artifact-parser framework is introduced. Independent
+affected pre-code reviews are required before edits; fresh override-aware REDs
+will verify actual just recipe behavior and preserve old output on refusal.
+
+Packaging implementation committed as `dcf0a0f` after repair 1: nine focused and
+50 exact CI-pattern Python tests passed, with independent affected spec, owner,
+quality and security reviews complete. Host/build/preflight failures preserve the
+old bundle; copying/publication retains its pre-existing non-atomic behavior.
+Actual native bundle/Start and full workspace/Windows gates remain open.
+
+Planning-provider repair budget is now 1/3. Spec, owner and API reviews passed,
+but security review found same-runtime provenance freshness missing: installing
+a byte-identical disk override after capture could retain cached Bundled authority
+without a daemon restart. The accepted repair compares a freshly resolved private
+planning selection pin and effective graph against the cached result using the
+same adapter, preserving the broader content guard. Required REDs include graph-
+unchanged explicit runtime/model/effort and immutable captures/IDs/no worktrees.
+Owner, harsh and security pre-code reviews accepted this observational check; it
+does not claim atomic filesystem snapshots. Repair is complete in `71a2ffa`; actual native planning remains unverified.
+
+## Publication checkpoint
+
+The user explicitly authorized pushing the current branch, creating a PR and merging after green CI including Windows. The current branch is `codex/project-journey-home`; TaskExecutionView itself was already merged in PR #149. This PR publishes the bounded startup, provider-selection, harness diagnostics, packaging and Home implementation, while retaining the open full-journey requirements above. No scheduler or verification-receipts changes are included.
+
+Home repair 1 final scoped suite: 286/286 (265 UI, 21 persistence), `/tmp/project-home-repair1-final-green.log`; strict all-targets UI/persistence Clippy: `/tmp/project-home-repair1-final-clippy.log`. Full workspace gates, independent Home reviews and fresh platform CI remain required before merge.
+
+Home repair 1 passed independent 5a. Independent 5b found three bounded/evidence defects; repair budget is now **2/3**: partial or retained decisions presented as current; unbounded shared list/history RPCs retaining AppState under a silent connected daemon; unbounded accepted-roadmap reads allowing oversized or special files to block shutdown. Repair 2 must show behavioral REDs and rerun affected spec, owner, quality and security reviews. Full workspace all-feature all-target strict Clippy passed before repair 2 (2m24s); recheck affected source afterward.
