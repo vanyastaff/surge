@@ -68,17 +68,19 @@ Successful transport negotiation alone does not satisfy these scenarios.
 
 ### Discovered desktop startup gap
 
-`surge-daemon/src/main.rs` currently enables bootstrap only when startup cwd or
+At baseline `6265b59`, `surge-daemon/src/main.rs` enabled bootstrap only when startup cwd or
 an ancestor contains a valid `surge.toml`. Desktop `start_daemon` inherits cwd,
 while `BootstrapRuntime::for_project` can resolve the project's agent catalog only
 after a bootstrap runtime already exists. Consequently, opening a configured
 project after an ordinary application launch does not establish planning
-availability. Prove and repair this with a focused regression before claiming
-the ordinary desktop journeys work. A configured test-launch cwd may help
+availability. Local commit `39ecc76` repairs this with configured-project
+startup and cold-recovery regressions; native end-to-end journeys remain pending.
+A configured test-launch cwd may help
 diagnose transport separately, but does not retire this product requirement.
 
-The desktop currently exposes default-agent selection but no bootstrap node model
-selection. Bundled planning profiles name Claude explicitly; changing default
+The desktop exposes default-agent selection. The generated implementation Flow
+inspector also exposes provider and model choices; the initial planning graph has
+no equivalent native model selection. Bundled planning profiles name Claude explicitly; changing default
 agent does not retarget them. Disk profile overrides can select the Codex runtime,
 but `recommended_model` remains advisory. The installed modern adapter documents
 `CODEX_CONFIG` and derives its reported initial model from the provider's
@@ -87,7 +89,32 @@ configuration plus same-session observation, without changing production profile
 recommendation semantics. Keep the strict harness's mandatory node-override proof
 separate from initial provider selection, with explicit capture provenance.
 
+A preconfigured profile fixture proves a configured operator journey, not
+first-run usability. Independently exercise ordinary installed-agent onboarding:
+choosing a ready provider must lead to usable planning assignments or an explicit,
+actionable explanation. Do not treat manual profile edits outside the desktop as
+evidence that a non-developer can complete the ordinary start path.
+
 ## Current checks
+
+Review repair counts (shared across spec and quality stages, maximum three per
+slice): startup **2/3** (restart coverage; reject symlinks to special files),
+provider harness **3/3** (stale replies/flushed forwarding; typed failure diagnostics; parent proof validation),
+Project Home **1/3** (all owned legacy runs remain visible; on-demand modern details; exact recorded stage/session destination). Startup spec and quality reviews are complete after both
+repairs; provider failure-observability repair and Home implementation remain open.
+Provider repair 2 passed independent spec and security review; owner review found
+that the new parent success gate did not require the observed session, adapter
+metadata or strict selection mode. Repair 3 must first reproduce that acceptance
+gap, require the complete capture proof and repeat affected checks/reviews.
+Repair 3 reproduced three false successes, then passed 36/36 controlled tests,
+scoped strict Clippy and independent affected spec, owner and security reviews.
+Diagnostics closure is committed as `fa055b3`. No fourth automatic repair is
+authorized by the skill budget.
+
+Local completed stages: harness infrastructure `514716c`; daemon startup
+`39ecc76` (12 binary and 6 actual Unix daemon tests; scoped default/all-feature
+strict Clippy). New native Windows daemon-child scenarios remain unverified.
+These local stages do not retire full workspace or product-journey requirements.
 
 - Behavioral RED: both actual desktop project-entry paths reach Tasks rather than
   Home. Isolated child fixtures finish setup and fail at the screen assertion.
@@ -99,6 +126,11 @@ separate from initial provider selection, with explicit capture provenance.
 - Native baseline screenshots were captured from a fresh build and inspected.
   Source implementation, GREEN checks, independent final reviews and real
   provider/native journeys are still in progress.
+- First actual live Sol smoke failed before proving the complete scenario.
+  The outer watchdog hid safe failure context along with raw provider output;
+  typed private diagnostics are being added before another live invocation.
+  Model availability/selection and successful real-provider completion are not
+  inferred from this failure.
 
 ## Verification contract
 
@@ -128,3 +160,114 @@ membership.
 No new executor, scheduler change, verification sandbox or receipt authority is
 part of these slices. Local commits are authorized; publishing a new PR or merging
 new work requires the user's authorization for that work.
+
+## Next slice: ordinary planning provider selection (pre-code draft)
+
+Owner review proposes retaining an immutable bootstrap base graph and rebuilding
+each project's effective planning graph from it. Adapt only untouched bundled
+description/roadmap/flow authoring profiles to the persisted project default.
+Preserve disk latest/versioned profiles, inheritance and all explicit node runtime,
+model and effort choices. This connects the existing desktop Make default action
+to planning; generated implementation Flow selectors already exist.
+
+Use the engine graph validator and `effective_runtime_selector` through the
+existing `profile_loader` facade (private implementation), shared by daemon
+credential checks, handoff and execution. It returns the raw node/profile selector;
+canonical registry recipe resolution remains separate. Eligibility requires exact
+versioned allowlisted authoring profiles, Bundled provenance, exact singleton
+chain, no extends, and no `custom_fields.runtime` entry of any kind. Immutable
+base/effective graphs preserve repeated project scoping. Owner, harsh and domain
+pre-code reviews are ACCEPTABLE after reshaping the public seam and eligibility. Freeze a versioned
+selection-policy reference including configured default and canonical recipe ID
+alongside the effective graph and per-node provenance/adaptation decisions. Restart reconstructs and compares original pins;
+changes fail closed with retained IDs/capture and no provider dispatch. Existing
+captures without the new policy reference require explicit configuration attention.
+
+Principal outward RED: launch an actual daemon from unrelated empty cwd with
+unmodified bundled profiles and a configured controlled default provider; prove
+that the selected provider is dispatched and Claude is not. Additional criteria:
+two projects and A→B→A isolation; operator/explicit override preservation; queued
+cold recovery after default-only or profile-provenance change; selected credential
+validation; native Make default persists config while unsaved Settings stays draft.
+Focused bootstrap/restart/handoff and native tests precede full workspace gates.
+This is an owner-reviewed draft, not authorization to bypass independent pre-code
+plan review or evidence that actual Sol journeys have succeeded.
+
+## Actual provider retry 2 evidence
+
+Executed the final built smoke test binary directly (no new Cargo build), using
+installed codex-acp 2.2.2 and mandatory `gpt-6.1-sol`.
+`/tmp/surge-live-sol61-retry2.log`: exit 101 after 20.99 seconds.
+The private bounded projection confirms offered and selected exact model, explicit
+set acknowledgement, adapter/session metadata and one admitted prompt. Durable
+counts: SessionOpened 1, HumanInputRequested/Resolved 1 each, StageToolReceipt 2,
+OutcomeReported 1, RunCompleted 0, RunFailed 0. Outer and child cleanup confirmed.
+
+Completion remains unproven. `binding_verified=false` means the final check was
+not reached after the primary failure, not that a mismatch was detected. The
+current diagnostic collapses unhandled non-success completion variants into
+HostFailed and omits RunAborted/BudgetExceeded. Source inspection identifies a
+compatible intentional budget-abort path (8192-token smoke budget, default Abort,
+checked after routing), but does not establish that it occurred. Tracking failure
+or another non-success variant remains possible. No further paid retry occurred.
+The existing engine_budget_test independently covers high-usage abort behavior;
+its result cannot identify the lost live terminal variant. Provider repair budget
+is exhausted; do not silently launch a fourth harness repair or lower its gates.
+Continue independent Home and ordinary planning-provider work while preserving
+this verification gap. Real native journeys need their own complete event and
+result evidence.
+
+## Home review 1 findings
+
+Fresh 275/275 targeted tests (254 UI + 21 persistence) and scoped strict Clippy
+passed before independent 5a review. That review found two uncovered completeness
+defects: only the first two owned legacy runs per batch received a visible/loadable
+entry, and the shared task coordinator repeatedly loaded only the first eight
+modern task details. Both require behavioral REDs and bounded continuation or
+on-demand loading. The reviewed stage/session destination currently opens only
+the exact run; it must preserve exact recorded occurrence identity or explicitly
+report unavailability. Repair 1 is dispatched; source edits wait for the frozen
+native build to finish. Full product journeys remain open.
+
+## Native Home observation before repair 1
+
+Built UI/CLI/daemon successfully and copied exact binaries to an isolated bundle;
+manifest and hashes: `/tmp/surge-project-journey-audit/home-native-fixture.json`.
+Canonical isolated SURGE_HOME was independently observed in the running process.
+New app through the native folder picker initialized the empty project and opened
+Home. Initial Start failed because the test bundle held UI only; adding fresh CLI
+and daemon sibling binaries allowed the existing native Start action to reach
+Engine Live. This does not prove the UI-only packaging helper distributes a usable
+self-contained app; packaging completeness remains open.
+
+Native Home Add an idea created a real accepted Requirements task named Local
+habit tracker with four acceptance criteria. Home preserved and expanded its exact
+request and criteria. Screenshots 06 (empty Home), 07 (manual workflow barrier),
+08 (accepted task) were saved and inspected. The next ordinary task step required
+manually pasted workflow TOML, so this is not a completed idea-to-app journey.
+
+Reviewed correction: Home primary Plan application opens existing SpecWizard with
+zero dispatch; explicit Create uses the existing bootstrap operation owner. A
+separate Create task retains modern creation. Stale source-wizard/project Create
+must be rejected before any submission (the previous handler lacked this guard).
+Owner/domain/harsh pre-code reviews accepted this bounded correction with that
+guard. It is included in Home repair 1 with behavioral REDs. Existing accepted
+tasks remain untouched; a safe same-item planning bridge is a separate open design
+gap, not implemented by changing this primary navigation.
+
+Native copy observations: omit known-absent planning-file sections, preserve
+unavailable sources, and move technical provenance/count definitions out of the
+primary non-developer path into an explicit details disclosure.
+
+UI-only cold reopen was exercised: quit the native process, confirm it absent,
+launch again, choose the retained recent project and expand the same exact task
+ID. Accepted revision 1 and all four criteria remained visible; screenshot 09 was
+saved and inspected. This is not a daemon-crash recovery claim. The isolated UI
+and daemon were then stopped; process inspection found no copied-bundle processes
+remaining. Runtime and project fixtures are retained for the next native build.
+
+Planning-provider slice pre-code review is complete after shared-selector and
+provenance reshaping. Its outward RED launched the original Claude controlled
+recipe despite the configured project default (`/tmp/surge-bootstrap-selection-red.log`).
+Implementation is in progress, with no real provider invocation. Home repair 1 is
+also in progress. Neither slice is yet committed as complete or published.
