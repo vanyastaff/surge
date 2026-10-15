@@ -100,7 +100,7 @@ evidence that a non-developer can complete the ordinary start path.
 Review repair counts (shared across spec and quality stages, maximum three per
 slice): startup **2/3** (restart coverage; reject symlinks to special files),
 provider harness **3/3** (stale replies/flushed forwarding; typed failure diagnostics; parent proof validation),
-Project Home **1/3** (all owned legacy runs remain visible; on-demand modern details; exact recorded stage/session destination). Startup spec and quality reviews are complete after both
+Project Home **3/3** (all owned legacy runs remain visible; on-demand modern details; exact recorded stage/session destination). Startup spec and quality reviews are complete after both
 repairs. Provider failure-observability code/reviews are complete; actual terminal success remains unproven. Home final reviews remain open.
 Provider repair 2 passed independent spec and security review; owner review found
 that the new parent success gate did not require the observed session, adapter
@@ -339,3 +339,11 @@ The user explicitly authorized pushing the current branch, creating a PR and mer
 Home repair 1 final scoped suite: 286/286 (265 UI, 21 persistence), `/tmp/project-home-repair1-final-green.log`; strict all-targets UI/persistence Clippy: `/tmp/project-home-repair1-final-clippy.log`. Full workspace gates, independent Home reviews and fresh platform CI remain required before merge.
 
 Home repair 1 passed independent 5a. Independent 5b found three bounded/evidence defects; repair budget is now **2/3**: partial or retained decisions presented as current; unbounded shared list/history RPCs retaining AppState under a silent connected daemon; unbounded accepted-roadmap reads allowing oversized or special files to block shutdown. Repair 2 must show behavioral REDs and rerun affected spec, owner, quality and security reviews. Full workspace all-feature all-target strict Clippy passed before repair 2 (2m24s); recheck affected source afterward.
+
+Home repair 2 final scoped verification is green: **294/294**, `/tmp/project-home-repair2-final-green.log`; scoped strict all-target Clippy `/tmp/project-home-repair2-final-clippy.log`, formatting and diffcheck passed. RED evidence: two actual journal decision cases and four reader/held-IPC owner cases. Both eight-second timeouts preserve cursors and permit retry; weak state ownership releases the disconnected project before peer response. Existing daemon transport pending-map senders may remain until late response/disconnect: bounded UI waiting is not RPC cancellation. Unix reader uses no-follow/nonblocking descriptor opening; Windows regular-file checks do not imply those Unix guarantees. Independent affected reviews and full workspace/native/platform gates remain pending.
+
+Home repair budget is now **3/3**. Affected rereviews found and repair 3 addressed stale history-timeout error publication (shared exact history-request fence) and zero-decision claims when an expected run is missing, corrupt or has ambiguous ownership. Unrelated foreign unknown rows do not poison project decision coverage. Actual RED: three failures and one foreign-negative pass; focused four tests are green. Final full receipt and independent rereviews remain required before publication. The first broad workspace run was intentionally interrupted for this repair and is not counted as final verification.
+
+Repair 3 final scoped suite: **298/298**, `/tmp/project-home-repair3-final-green.log` (38.820s), strict all-target UI/persistence Clippy `/tmp/project-home-repair3-final-clippy.log`, formatting and diffcheck green. Independent affected 5a passed. Source is frozen; affected 5b and fresh full workspace gates are running.
+
+Home implementation committed in `7913f98` after independent 5a and affected owner/security/quality 5b reviews all passed. Final scoped 298/298 and strict Clippy remain green. Full workspace and fresh native packaging checks are running/pending; publication may begin as a draft PR so hosted Windows validation can run concurrently, with merge gated on completed fresh CI and local checks.
