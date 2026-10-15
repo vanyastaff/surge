@@ -1,5 +1,6 @@
 //! `surge-daemon` binary entry point.
 
+mod host_configuration;
 mod runtime_shutdown;
 
 use clap::Parser;
@@ -177,16 +178,19 @@ fn main() -> std::process::ExitCode {
         // `EngineConfig::capacity` below (Task 12 M3, acceptance
         // criterion B) — moved up from where it previously loaded (after
         // engine construction, only for the TaskRouter) for that reason.
-        let config_path = std::env::current_dir().ok().and_then(|cwd| {
-            cwd.ancestors().map(|directory| directory.join("surge.toml")).find(|path| path.is_file())
-        });
-        let (config, bootstrap_configured) = match config_path.as_deref().map(surge_core::SurgeConfig::load) {
-            Some(Ok(config)) => (config, true),
-            Some(Err(error)) => {
-                tracing::warn!(%error, "failed to load surge.toml; bootstrap admission is disabled");
-                (surge_core::SurgeConfig::default(), false)
+        let config = match host_configuration::load() {
+            host_configuration::HostConfiguration::Missing(config) => {
+                tracing::info!("no host surge.toml; using validated daemon defaults; project admission remains strict");
+                *config
             },
-            None => (surge_core::SurgeConfig::default(), false),
+            host_configuration::HostConfiguration::Loaded { path, config } => {
+                tracing::info!(path = %path.display(), "loaded daemon host configuration");
+                *config
+            },
+            host_configuration::HostConfiguration::Invalid { path, reason } => {
+                tracing::error!(?path, ?reason, "daemon host configuration unavailable; startup refused");
+                return 2u8;
+            },
         };
         let agent_registry = Arc::new(surge_acp::Registry::for_run(&config));
         // Triage resolves its agent through the same registries as runs (#99).
@@ -334,14 +338,23 @@ fn main() -> std::process::ExitCode {
         // flow through the shared admission + broadcast registry so
         // recovered runs publish RunFinished globally.
         let worktrees_root = storage.home().join("worktrees");
-        let bootstrap_runtime = if bootstrap_configured {
-            surge_orchestrator::profile_loader::profiles_dir().ok().and_then(|profiles_root| {
-                surge_daemon::bootstrap_runtime::BootstrapRuntime::new(
-                    Arc::new(config.clone()), profile_registry.clone(), agent_registry,
-                    worktrees_root.clone(), profiles_root,
-                ).map_err(|error| tracing::error!(%error, "bootstrap runtime unavailable")).ok()
-            })
-        } else { None };
+        let profiles_root = match surge_orchestrator::profile_loader::profiles_dir() {
+            Ok(root) => root,
+            Err(error) => {
+                tracing::error!(%error, "bootstrap profile root unavailable; startup refused");
+                return 2u8;
+            },
+        };
+        let bootstrap_runtime = match surge_daemon::bootstrap_runtime::BootstrapRuntime::new(
+            Arc::new(config.clone()), profile_registry.clone(), agent_registry,
+            worktrees_root.clone(), profiles_root,
+        ) {
+            Ok(runtime) => Some(runtime),
+            Err(error) => {
+                tracing::error!(%error, "bootstrap runtime unavailable; startup refused");
+                return 2u8;
+            },
+        };
         let bootstrap = surge_daemon::bootstrap_supervisor::BootstrapSupervisor::new(
             surge_daemon::bootstrap_supervisor::BootstrapServices {
                 engine: cockpit_engine.clone(), facade: facade.clone(), storage: storage.clone(),
