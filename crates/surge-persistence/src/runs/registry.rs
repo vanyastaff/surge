@@ -16,6 +16,9 @@ use crate::runs::error::{OpenError, StorageError};
 use crate::runs::migrations::{REGISTRY_MIGRATIONS, apply as apply_migrations};
 use crate::runs::pragmas::{REGISTRY_PRAGMAS, apply as apply_pragmas};
 
+pub(super) mod pages;
+pub use pages::{RunSummaryCursor, RunSummaryPage};
+
 /// Filter applied to `Storage::list_runs`.
 #[derive(Debug, Default, Clone)]
 pub struct RunFilter {
@@ -182,7 +185,7 @@ pub(crate) fn list_runs_connection(
         sql.push_str(" AND project_path = ?");
         binds.push(Box::new(p.to_string_lossy().into_owned()));
     }
-    sql.push_str(" ORDER BY started_at DESC");
+    sql.push_str(" ORDER BY started_at DESC, id DESC");
     if let Some(lim) = filter.limit {
         sql.push_str(" LIMIT ?");
         binds.push(Box::new(lim as i64));
@@ -488,6 +491,25 @@ mod tests {
             daemon_pid: pid,
             wake_at_ms: None,
         }
+    }
+
+    #[test]
+    fn summary_order_is_stable_when_many_runs_share_a_timestamp() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(home.path(), &clock).unwrap();
+            let first: RunId = "run-00000000000000000000000001".parse().unwrap();
+            let second: RunId = "run-00000000000000000000000002".parse().unwrap();
+            insert_run(&pool, &fixture_summary(first, None)).unwrap();
+            insert_run(&pool, &fixture_summary(second, None)).unwrap();
+            let rows = list_runs(&pool, &RunFilter::default()).unwrap();
+            assert_eq!(
+                rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                [second, first]
+            );
+        }
+        home.close().unwrap();
     }
 
     #[test]

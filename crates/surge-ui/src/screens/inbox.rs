@@ -131,6 +131,7 @@ type ControlledResponses = std::rc::Rc<
 pub struct InboxScreen {
     state: Entity<AppState>,
     selected: usize,
+    requested_decision: Option<(RunId, u64)>,
     response_input: Option<Entity<InputState>>,
     response_owner: Option<String>,
     drafts: std::collections::HashMap<String, DecisionDraft>,
@@ -147,6 +148,12 @@ pub struct InboxScreen {
 }
 
 impl InboxScreen {
+    /// Navigate to one recorded request; never fall back to a different question.
+    pub(crate) fn select_decision(&mut self, run: RunId, seq: u64, cx: &mut Context<Self>) {
+        self.requested_decision = Some((run, seq));
+        cx.notify();
+    }
+
     fn load_review_documents(&mut self, cx: &mut Context<Self>) {
         let paths: Vec<_> = {
             let state = self.state.read(cx);
@@ -185,6 +192,7 @@ impl InboxScreen {
         Self {
             state,
             selected: 0,
+            requested_decision: None,
             response_input: None,
             response_owner: None,
             drafts: std::collections::HashMap::new(),
@@ -872,6 +880,7 @@ impl InboxScreen {
     /// Select queue item `i`, preserving each decision's draft separately.
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = i;
+        self.requested_decision = None;
         let (items, _) = self.items(cx);
         self.sync_response_owner(items.get(i).map(InboxItem::identity), window, cx);
         cx.notify();
@@ -1459,6 +1468,17 @@ impl Render for InboxScreen {
         self.load_review_documents(cx);
         self.reload_history_if_changed(cx);
         let (items, live) = self.items(cx);
+        if let Some((run, seq)) = self.requested_decision {
+            if let Some(index)=items.iter().position(|item|matches!(item.source,Source::Live{run_id,seq:observed,..} if run_id==run && observed==seq)) {
+                self.selected=index;
+            } else {
+                self.sync_response_owner(None,window,cx);
+                return div().size_full().v_flex().gap(px(12.0)).p(px(24.0))
+                    .child(ui::meta("The requested decision is unavailable in the current live queue. Inspect its exact run for saved evidence."))
+                    .child(gpui_kit::component::button::Button::new("inspect-requested-decision-run").label("Inspect this run").on_click(cx.listener(move |_,_,_,cx|cx.emit(InboxAction::OpenRun(run)))))
+                    .child(gpui_kit::component::button::Button::new("clear-requested-decision").label("Show decision queue").on_click(cx.listener(|this,_,_,cx|{this.requested_decision=None;cx.notify();})));
+            }
+        }
         self.sync_response_owner(
             items
                 .get(self.selected.min(items.len().saturating_sub(1)))
@@ -1622,6 +1642,44 @@ mod tests {
             screen
         });
         (state, inbox, run, responses)
+    }
+
+    #[gpui_kit::test]
+    fn home_requested_decision_keeps_exact_identity_and_unavailable_target_does_not_fall_back(
+        cx: &mut TestAppContext,
+    ) {
+        let (state, inbox, run, _) = controlled_fixture(cx, false);
+        state.update(cx, |state, _| {
+            state
+                .run_streams
+                .get_mut(&run)
+                .unwrap()
+                .pending
+                .push(decision(2, false))
+        });
+        inbox.update(cx, |screen, cx| screen.select_decision(run, 2, cx));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        window.update(|_,cx|inbox.update(cx,|screen,cx|{
+            let (items,_)=screen.items(cx);
+            assert!(matches!(items[screen.selected].source,super::Source::Live{run_id,seq:2,..} if run_id==run));
+        }));
+        window.update(|_, cx| inbox.update(cx, |screen, cx| screen.select_decision(run, 99, cx)));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            use gpui_kit::test::TestWindowExt;
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("inspect-requested-decision-run").label(),
+                Some("Inspect this run")
+            );
+        });
+        assert!(
+            window.debug_bounds("inbox-outcome-approve").is_none(),
+            "a different pending decision cannot become the requested owner"
+        );
+        window.update(|_, cx| assert!(inbox.read(cx).response_owner.is_none()));
     }
 
     fn write_comment(

@@ -2,6 +2,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+mod coordinator;
+pub(crate) use coordinator::{
+    refresh_project_tasks, refresh_tasks_if_changed, request_task_detail, request_task_history,
+};
 
 use surge_core::id::WorkItemId;
 use surge_core::work_item::{
@@ -16,7 +22,7 @@ pub(crate) struct TaskHistory {
     pub(crate) revisions: WorkItemPage<WorkItemRevision>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TaskHistoryKind {
     Attempts,
     Discussion,
@@ -45,6 +51,11 @@ pub(crate) fn task_status(
     }
     if record.active_run.is_some() && detail.is_some_and(|detail| !detail_matches(record, detail)) {
         return "Run state is unconfirmed";
+    }
+    if record.active_run.is_none()
+        && history.is_some_and(|history| history.attempts.next_cursor.is_some())
+    {
+        return "More attempt history is available; current result unconfirmed";
     }
     let attempt = history.and_then(|history| {
         if let Some(run) = record.active_run {
@@ -174,11 +185,11 @@ pub(crate) struct TaskRequestScope {
     pub(crate) repository: PathBuf,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct TaskCache {
     pub(crate) records: Vec<WorkItemRecord>,
-    pub(crate) details: HashMap<WorkItemId, WorkItemDetail>,
-    pub(crate) histories: HashMap<WorkItemId, TaskHistory>,
+    pub(crate) details: HashMap<WorkItemId, Arc<WorkItemDetail>>,
+    pub(crate) histories: HashMap<WorkItemId, Arc<TaskHistory>>,
     pub(crate) next_cursor: Option<String>,
     pub(crate) loading: bool,
     pub(crate) error: Option<String>,
@@ -187,10 +198,22 @@ pub(crate) struct TaskCache {
     generation: u64,
     detail_generation: u64,
     detail_requests: HashMap<WorkItemId, u64>,
+    history_requests: HashMap<(WorkItemId, TaskHistoryKind), u64>,
+    detail_queue: std::collections::VecDeque<(WorkItemRecord, u64)>,
+    detail_queued: std::collections::HashSet<WorkItemId>,
+    detail_worker: Option<TaskRequestScope>,
+    detail_slots: Option<Arc<tokio::sync::Semaphore>>,
+    pub(crate) refresh_identity: Option<(usize, Option<PathBuf>)>,
 }
 
 impl TaskCache {
+    pub(crate) fn reset_detail_queue(&mut self) {
+        self.detail_queue.clear();
+        self.detail_queued.clear();
+        self.detail_worker = None;
+    }
     pub(crate) fn disconnected(&mut self) {
+        self.reset_detail_queue();
         self.generation = self.generation.saturating_add(1);
         if let Some(scope) = &mut self.scope {
             scope.generation = self.generation;
@@ -200,18 +223,22 @@ impl TaskCache {
         self.error = Some("Daemon disconnected; showing last known task information.".into());
     }
     pub(crate) fn clear_project(&mut self) {
+        self.reset_detail_queue();
+        self.refresh_identity = None;
         self.generation = self.generation.saturating_add(1);
         self.scope = None;
         self.records.clear();
         self.details.clear();
         self.histories.clear();
         self.detail_requests.clear();
+        self.history_requests.clear();
         self.next_cursor = None;
         self.loading = false;
         self.fresh = false;
         self.error = None;
     }
     pub(crate) fn begin(&mut self, repository: PathBuf) -> TaskRequestScope {
+        self.reset_detail_queue();
         self.generation = self.generation.saturating_add(1);
         let scope = TaskRequestScope {
             generation: self.generation,
@@ -283,8 +310,12 @@ impl TaskCache {
         if let Some(record) = self.records.iter_mut().find(|record| record.id == item) {
             *record = detail.item.clone();
         }
-        self.details.insert(item, detail);
-        self.histories.insert(item, history);
+        self.details.insert(item, Arc::new(detail));
+        if let Some(retained) = self.histories.get_mut(&item) {
+            merge_history(Arc::make_mut(retained), history);
+        } else {
+            self.histories.insert(item, Arc::new(history));
+        }
     }
 
     pub(crate) fn apply_page(
@@ -343,6 +374,122 @@ impl TaskCache {
         self.fresh = false;
         self.error = Some(error);
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct HistoryRequest {
+    scope: TaskRequestScope,
+    item: WorkItemId,
+    project: surge_core::id::WorkItemProjectId,
+    version: u64,
+    revision: u64,
+    generation: u64,
+    kind: TaskHistoryKind,
+    cursor: String,
+    request: u64,
+}
+impl TaskCache {
+    pub(crate) fn begin_history(
+        &mut self,
+        item: WorkItemId,
+        kind: TaskHistoryKind,
+    ) -> Option<HistoryRequest> {
+        let record = self.records.iter().find(|record| record.id == item)?;
+        let scope = self.scope.clone()?;
+        let cursor = self.histories.get(&item)?.next(kind)?;
+        self.detail_generation = self.detail_generation.saturating_add(1);
+        self.history_requests
+            .insert((item, kind), self.detail_generation);
+        Some(HistoryRequest {
+            scope,
+            item,
+            project: record.project,
+            version: record.version,
+            revision: record.accepted_revision,
+            generation: record.generation,
+            kind,
+            cursor,
+            request: self.detail_generation,
+        })
+    }
+    pub(crate) fn accepts_history_request(&self, request: &HistoryRequest) -> bool {
+        self.accepts(&request.scope)
+            && self.history_requests.get(&(request.item, request.kind)) == Some(&request.request)
+            && self.records.iter().any(|record| {
+                record.id == request.item
+                    && record.project == request.project
+                    && record.version == request.version
+                    && record.accepted_revision == request.revision
+                    && record.generation == request.generation
+            })
+            && self.histories.get(&request.item).is_some_and(|history| {
+                history.next(request.kind).as_deref() == Some(request.cursor.as_str())
+            })
+    }
+    pub(crate) fn apply_history(
+        &mut self,
+        request: &HistoryRequest,
+        result: surge_core::work_item::WorkItemResult,
+    ) {
+        if !self.accepts_history_request(request) {
+            return;
+        }
+        let Some(history) = self.histories.get_mut(&request.item) else {
+            return;
+        };
+        let history = Arc::make_mut(history);
+        use surge_core::work_item::WorkItemResult as R;
+        let next = match &result {
+            R::Attempts(page) => page.next_cursor.as_deref(),
+            R::Discussion(page) => page.next_cursor.as_deref(),
+            R::Revisions(page) => page.next_cursor.as_deref(),
+            _ => None,
+        };
+        if next == Some(request.cursor.as_str()) {
+            self.error = Some("Task history cursor did not advance".into());
+            return;
+        }
+        match (request.kind, result) {
+            (TaskHistoryKind::Attempts, R::Attempts(page))
+                if page.entries.iter().all(|attempt| {
+                    attempt.item == request.item && attempt.binding.item == request.item
+                }) =>
+            {
+                merge_page(&mut history.attempts, page, |attempt| attempt.run)
+            },
+            (TaskHistoryKind::Discussion, R::Discussion(page)) => {
+                merge_page(&mut history.discussion, page, |entry| entry.sequence)
+            },
+            (TaskHistoryKind::Revisions, R::Revisions(page)) => {
+                merge_page(&mut history.revisions, page, |entry| entry.revision)
+            },
+            _ => self.error = Some("Unexpected task history response".into()),
+        }
+    }
+}
+fn merge_page<T, K: PartialEq>(
+    retained: &mut WorkItemPage<T>,
+    page: WorkItemPage<T>,
+    key: impl Fn(&T) -> K,
+) {
+    for entry in page.entries {
+        let id = key(&entry);
+        if let Some(old) = retained.entries.iter_mut().find(|old| key(old) == id) {
+            *old = entry;
+        } else {
+            retained.entries.push(entry);
+        }
+    }
+    retained.next_cursor = page.next_cursor;
+}
+fn merge_history(retained: &mut TaskHistory, new: TaskHistory) {
+    merge_page(&mut retained.attempts, new.attempts, |attempt| attempt.run);
+    merge_page(&mut retained.discussion, new.discussion, |entry| {
+        entry.sequence
+    });
+    merge_page(&mut retained.revisions, new.revisions, |entry| {
+        entry.revision
+    });
 }
 
 /// Freeze the complete mutation, including versions and operation ID, at submission.
@@ -620,7 +767,7 @@ mod tests {
         };
         let mut cache = TaskCache::default();
         cache.records.push(item.clone());
-        cache.histories.insert(item.id, history.clone());
+        cache.histories.insert(item.id, Arc::new(history.clone()));
         cache.fresh = true;
         cache.disconnected();
         assert!(!cache.fresh);
@@ -741,5 +888,181 @@ mod tests {
         assert!(!cache.fresh);
         assert!(!cache.loading);
         assert!(cache.error.is_some());
+    }
+    fn history_entry(
+        item: &WorkItemRecord,
+        index: u64,
+    ) -> (WorkItemAttempt, WorkItemDiscussion, WorkItemRevision) {
+        let requirements = surge_core::work_item::WorkItemRequirements::new(
+            format!("Accepted {index}"),
+            vec!["Preserve history".into()],
+        )
+        .unwrap();
+        let origin = surge_core::work_item::AcceptedWorkItemOrigin::Requirements(requirements);
+        let hash = origin.hash().unwrap();
+        let revision = WorkItemRevision {
+            revision: index,
+            origin,
+            hash,
+            actor: "fixture".into(),
+            accepted_proposal: None,
+            accepted_at_ms: 1,
+        };
+        let accepted = surge_core::work_item::WorkItemRequirements::new(
+            format!("Accepted {}", item.accepted_revision),
+            vec!["Preserve history".into()],
+        )
+        .unwrap()
+        .hash()
+        .unwrap();
+        let attempt = WorkItemAttempt {
+            item: item.id,
+            run: surge_core::RunId::new(),
+            ordinal: index,
+            binding: surge_core::work_item::WorkItemBinding {
+                item: item.id,
+                revision: item.accepted_revision,
+                requirements_hash: accepted,
+                generation: index,
+            },
+            accepted_revision_relation:
+                surge_core::work_item::AcceptedRevisionRelation::MatchesCurrent,
+            graph: Box::new(
+                toml::from_str(include_str!("../../../examples/flow_terminal_only.toml")).unwrap(),
+            ),
+            config: "{}".into(),
+            state: surge_core::work_item::WorkItemAttemptState::Completed,
+            diagnostic: None,
+            usage_seq: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            known_cost_usd: 0.0,
+            usage_unknown: true,
+        };
+        let discussion = WorkItemDiscussion {
+            sequence: index,
+            actor: "fixture".into(),
+            body: format!("Discussion {index}"),
+            proposal: None,
+            created_at_ms: 1,
+        };
+        (attempt, discussion, revision)
+    }
+    fn first_hundred(item: &WorkItemRecord) -> TaskHistory {
+        let entries = (1..=100)
+            .map(|index| history_entry(item, index))
+            .collect::<Vec<_>>();
+        TaskHistory {
+            attempts: WorkItemPage {
+                entries: entries.iter().map(|entry| entry.0.clone()).collect(),
+                next_cursor: Some("100".into()),
+            },
+            discussion: WorkItemPage {
+                entries: entries.iter().map(|entry| entry.1.clone()).collect(),
+                next_cursor: Some("100".into()),
+            },
+            revisions: WorkItemPage {
+                entries: entries.iter().map(|entry| entry.2.clone()).collect(),
+                next_cursor: Some("100".into()),
+            },
+        }
+    }
+    #[test]
+    fn all_three_task_histories_reach_beyond_one_hundred_without_losing_retained_rows() {
+        use surge_core::work_item::WorkItemResult as R;
+        let repository = PathBuf::from("/history/.git");
+        let mut item = record(repository.clone(), "Keep every accepted stage");
+        item.accepted_revision = 125;
+        item.version = 125;
+        let mut cache = TaskCache::default();
+        cache.begin(repository);
+        cache.records.push(item.clone());
+        cache
+            .histories
+            .insert(item.id, Arc::new(first_hundred(&item)));
+        let snapshot = cache.histories[&item.id].clone();
+        for kind in [
+            TaskHistoryKind::Attempts,
+            TaskHistoryKind::Discussion,
+            TaskHistoryKind::Revisions,
+        ] {
+            let request = cache.begin_history(item.id, kind).unwrap();
+            let extra = (101..=125)
+                .map(|index| history_entry(&item, index))
+                .collect::<Vec<_>>();
+            let result = match kind {
+                TaskHistoryKind::Attempts => R::Attempts(WorkItemPage {
+                    entries: extra.into_iter().map(|entry| entry.0).collect(),
+                    next_cursor: None,
+                }),
+                TaskHistoryKind::Discussion => R::Discussion(WorkItemPage {
+                    entries: extra.into_iter().map(|entry| entry.1).collect(),
+                    next_cursor: None,
+                }),
+                TaskHistoryKind::Revisions => R::Revisions(WorkItemPage {
+                    entries: extra.into_iter().map(|entry| entry.2).collect(),
+                    next_cursor: None,
+                }),
+            };
+            cache.apply_history(&request, result);
+        }
+        let history = &cache.histories[&item.id];
+        assert_eq!(
+            (
+                history.attempts.entries.len(),
+                history.discussion.entries.len(),
+                history.revisions.entries.len()
+            ),
+            (125, 125, 125)
+        );
+        assert_eq!(history.discussion.entries[124].body, "Discussion 125");
+        assert_eq!(history.revisions.entries[124].revision, 125);
+        assert_eq!(
+            snapshot.discussion.entries.len(),
+            100,
+            "in-flight snapshots remain immutable"
+        );
+    }
+    #[test]
+    fn history_response_for_an_old_accepted_revision_cannot_append_after_an_edit() {
+        let repository = PathBuf::from("/history/.git");
+        let mut item = record(repository.clone(), "Original");
+        item.accepted_revision = 125;
+        item.version = 125;
+        let mut cache = TaskCache::default();
+        cache.begin(repository);
+        cache.records.push(item.clone());
+        cache
+            .histories
+            .insert(item.id, Arc::new(first_hundred(&item)));
+        let request = cache
+            .begin_history(item.id, TaskHistoryKind::Discussion)
+            .unwrap();
+        item.version = 126;
+        item.accepted_revision = 126;
+        cache.records[0] = item.clone();
+        cache.apply_history(
+            &request,
+            surge_core::work_item::WorkItemResult::Discussion(WorkItemPage {
+                entries: vec![history_entry(&item, 101).1],
+                next_cursor: None,
+            }),
+        );
+        assert_eq!(cache.histories[&item.id].discussion.entries.len(), 100);
+        assert_eq!(
+            cache.histories[&item.id].discussion.next_cursor.as_deref(),
+            Some("100")
+        );
+    }
+    #[test]
+    fn partial_attempt_history_cannot_claim_its_latest_loaded_completion_is_current() {
+        let mut item = record(PathBuf::from("/history/.git"), "Many attempts");
+        item.accepted_revision = 125;
+        item.version = 125;
+        let history = first_hundred(&item);
+        assert_eq!(
+            task_status(None, Some(&history), &item),
+            "More attempt history is available; current result unconfirmed"
+        );
     }
 }

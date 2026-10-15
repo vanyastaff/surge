@@ -14,12 +14,15 @@
 //! folder action reads that run's registry path and opens it through the platform.
 //! When no runs exist, the cockpit stays empty and points to Fleet.
 
+#[path = "runs/recorded_target.rs"]
+mod recorded_target;
 #[path = "run_changes.rs"]
 mod run_changes;
 #[path = "run_checks.rs"]
 mod run_checks;
 #[path = "run_mission.rs"]
 mod run_mission;
+pub(crate) use recorded_target::RecordedTarget;
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
@@ -476,6 +479,7 @@ pub struct RunsScreen {
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
     tab: RunTab,
+    recorded_target: Option<(RunId, RecordedTarget)>,
     session_pages: HashMap<RunId, usize>,
     checks: Option<(RunId, Entity<run_checks::ChecksView>)>,
     changes: Option<(RunId, Entity<run_changes::ChangesView>)>,
@@ -524,7 +528,7 @@ fn attention_reason(
         ),
         R::ConfigurationChanged => (
             "Settings changed since this build started",
-            "Restore the agent settings it started with, then retry.",
+            "Restore the original agent settings, then retry, or start a new plan. The recorded build history is retained.",
         ),
         R::MissingCredential => (
             "A required credential is missing",
@@ -587,6 +591,7 @@ impl RunsScreen {
             controlled_guidance: None,
             action_note: None,
             tab: RunTab::Overview,
+            recorded_target: None,
             session_pages: HashMap::new(),
             checks: None,
             changes: None,
@@ -598,9 +603,18 @@ impl RunsScreen {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn visible_run_for_test(&self, cx: &Context<Self>) -> Option<RunId> {
+        let (rows, selected, _) = self.rows(cx);
+        selected
+            .and_then(|index| rows.get(index))
+            .and_then(|row| row.run_id)
+    }
+
     /// Focus a specific run (used by Fleet → "Open run" deep links).
     pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
         self.selected = Some(run_id);
+        self.recorded_target = None;
         self.tab = RunTab::Overview;
         self.task_focus = None;
         self.mission = None;
@@ -614,6 +628,7 @@ impl RunsScreen {
         task: surge_core::roadmap::RoadmapTaskId,
         cx: &mut Context<Self>,
     ) {
+        self.recorded_target = None;
         self.task_focus = Some((milestone, task));
         self.tab = RunTab::Overview;
         self.mission = None;
@@ -621,12 +636,13 @@ impl RunsScreen {
     }
 
     pub(crate) fn select_tab(&mut self, tab: RunTab, cx: &mut Context<Self>) {
+        self.recorded_target = None;
         self.tab = tab;
         cx.notify();
     }
 
     /// Actual daemon runs and the selected row index.
-    fn rows(&self, cx: &Context<Self>) -> (Vec<RunRow>, usize, bool) {
+    fn rows(&self, cx: &Context<Self>) -> (Vec<RunRow>, Option<usize>, bool) {
         let state = self.state.read(cx);
         let mut rows: Vec<RunRow> = state
             .project_runs()
@@ -657,17 +673,18 @@ impl RunsScreen {
             rows.iter().filter_map(|r| r.run_id).collect();
         rows.retain(|r| {
             let Some(id) = r.run_id else { return true };
-            !state.bootstrap_operations.values().any(|op| {
-                op.planning_run == id
-                    && op.implementation_run != id
-                    && listed.contains(&op.implementation_run)
-            })
+            Some(id) == self.selected
+                || !state.bootstrap_operations.values().any(|op| {
+                    op.planning_run == id
+                        && op.implementation_run != id
+                        && listed.contains(&op.implementation_run)
+                })
         });
         rows.sort_by_key(|r| r.rank);
-        let sel = self
-            .selected
-            .and_then(|id| rows.iter().position(|r| r.run_id == Some(id)))
-            .unwrap_or(0);
+        let sel = match self.selected {
+            Some(id) => rows.iter().position(|row| row.run_id == Some(id)),
+            None => (!rows.is_empty()).then_some(0),
+        };
         (rows, sel, state.daemon_state.facade().is_some())
     }
 
@@ -791,8 +808,8 @@ impl RunsScreen {
                 },
                 InputEvent::PressEnter { .. } => {
                     let (rows, selected, _) = this.rows(cx);
-                    if rows
-                        .get(selected)
+                    if selected
+                        .and_then(|index| rows.get(index))
                         .and_then(|row| row.run_id)
                         .is_some_and(|run| this.guidance_key(run, cx) == owner)
                     {
@@ -817,7 +834,7 @@ impl RunsScreen {
 
     fn submit_steer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (rows, sel, live) = self.rows(cx);
-        let Some(row) = rows.get(sel) else {
+        let Some(row) = sel.and_then(|index| rows.get(index)) else {
             return;
         };
         let Some(run) = row.run_id else {
@@ -902,7 +919,13 @@ impl RunsScreen {
 
     // ── panes ───────────────────────────────────────────────────────
 
-    fn render_rail(&self, rows: &[RunRow], sel: usize, live: bool, cx: &mut Context<Self>) -> Div {
+    fn render_rail(
+        &self,
+        rows: &[RunRow],
+        sel: Option<usize>,
+        live: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let needs = rows.iter().filter(|r| r.rank == 0).count();
 
         let mut list = div()
@@ -915,7 +938,7 @@ impl RunsScreen {
             .pb(px(8.0));
 
         for (i, row) in rows.iter().enumerate() {
-            let is_sel = i == sel;
+            let is_sel = Some(i) == sel;
             let run_id = row.run_id;
             let item = div()
                 .id(SharedString::from(format!(
@@ -1360,8 +1383,7 @@ impl RunsScreen {
                     .cursor_pointer()
                     .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
                     .on_click(cx.listener(move |screen, _, _, cx| {
-                        screen.tab = tab;
-                        cx.notify();
+                        screen.select_tab(tab, cx);
                     }))
                     .child(Icon::new(icon).size(px(13.0)))
                     .child(label),
@@ -1381,17 +1403,63 @@ impl RunsScreen {
             .overflow_y_scroll();
         let state = self.state.read(cx);
         let Some(stream) = state.run_streams.get(&run) else {
+            if let Some((
+                _,
+                RecordedTarget::Session {
+                    opened, connection, ..
+                },
+            )) = self.recorded_target
+            {
+                return panel.child(recorded_target::unavailable(format!("Requested session opening #{opened} ({connection}) has not been hydrated for {run}.")));
+            }
             return panel.child(ui::meta(
                 "Session history has not been hydrated for this run.",
             ));
         };
         let last_page = stream.sessions.len().saturating_sub(1) / ui::SESSIONS_PER_PAGE;
-        let page = self
-            .session_pages
-            .get(&run)
-            .copied()
-            .unwrap_or(0)
-            .min(last_page);
+        let focused = match self.recorded_target {
+            Some((
+                target_run,
+                RecordedTarget::Session {
+                    entered,
+                    opened,
+                    connection,
+                },
+            )) if target_run == run => {
+                if !self.recorded_session_known(run, entered, opened, connection, cx) {
+                    return panel.child(recorded_target::unavailable(format!("Requested session opening #{opened} is unavailable in its exact recorded stage.")));
+                }
+                Some((opened, connection))
+            },
+            _ => None,
+        };
+        let page = if let Some((opened, connection)) = focused {
+            match recorded_target::session_page(stream,opened,connection) {
+                Some(page)=>page,
+                None=>return panel.child(recorded_target::unavailable(format!("Requested session opening #{opened} ({connection}) is unavailable or its history has not been fully confirmed."))),
+            }
+        } else {
+            self.session_pages
+                .get(&run)
+                .copied()
+                .unwrap_or(0)
+                .min(last_page)
+        };
+        let panel = if let Some((opened, connection)) = focused {
+            panel.child(
+                div()
+                    .id("focused-recorded-session")
+                    .test_support()
+                    .debug_selector(|| "focused-recorded-session".into())
+                    .role(Role::Region)
+                    .aria_label(format!("Requested session opening #{opened}: {connection}"))
+                    .child(ui::meta(format!(
+                        "Requested session opening #{opened} · {connection}"
+                    ))),
+            )
+        } else {
+            panel
+        };
         panel.child(ui::recorded_session_page(stream, page)).child(
             div()
                 .h_flex()
@@ -1401,6 +1469,7 @@ impl RunsScreen {
                         .label("Newer sessions")
                         .disabled(page == 0)
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            this.recorded_target = None;
                             this.session_pages.insert(run, page.saturating_sub(1));
                             cx.notify();
                         })),
@@ -1410,6 +1479,7 @@ impl RunsScreen {
                         .label("Older sessions")
                         .disabled(page >= last_page)
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            this.recorded_target = None;
                             this.session_pages.insert(run, page + 1);
                             cx.notify();
                         })),
@@ -1717,7 +1787,7 @@ impl RunsScreen {
 impl Render for RunsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (rows, sel, live) = self.rows(cx);
-        let selected = rows.get(sel).cloned();
+        let selected = sel.and_then(|index| rows.get(index)).cloned();
 
         // Keep the newest step in view as a live run advances.
         if let Some(row) = &selected {
@@ -1776,7 +1846,10 @@ impl Render for RunsScreen {
                     }
                 },
                 RunTab::Overview => {
-                    if let Some(runs) = self.mission_runs(row, cx) {
+                    if matches!(self.recorded_target,Some((run,RecordedTarget::Stage{..})) if row.run_id==Some(run))
+                    {
+                        main = main.child(self.render_recorded_stage(cx));
+                    } else if let Some(runs) = self.mission_runs(row, cx) {
                         let stale = self
                             .mission
                             .as_ref()
@@ -1794,6 +1867,8 @@ impl Render for RunsScreen {
                     }
                 },
             }
+        } else if let Some(run) = self.selected {
+            main=main.child(recorded_target::unavailable(format!("Requested run {run} is unavailable in the current project history. Refresh or choose a different run explicitly.")));
         } else {
             main = main.child(
                 div().flex_1().flex().items_center().justify_center().child(
@@ -2051,7 +2126,7 @@ mod empty_state_tests {
         screen.update(cx, |screen, cx| {
             let (rows, selected, connected) = screen.rows(cx);
             assert!(rows.is_empty());
-            assert_eq!(selected, 0);
+            assert_eq!(selected, None);
             assert!(!connected);
         });
     }

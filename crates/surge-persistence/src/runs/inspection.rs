@@ -114,6 +114,76 @@ impl Storage {
         .map_err(|error| StorageError::Pool(error.to_string()))?
     }
 
+    /// Observe a bounded registry page without opening storage or applying migrations.
+    /// `None` means no registry. Corruption, unsupported schema and foreign cursors fail.
+    /// The first-page upper key is not a snapshot shared with journals or the daemon.
+    /// SQLite may coordinate readers through existing ephemeral SHM read marks.
+    pub async fn inspect_existing_run_summary_page(
+        home: std::path::PathBuf,
+        limit: std::num::NonZeroU32,
+        cursor: Option<super::registry::RunSummaryCursor>,
+    ) -> Result<Option<super::registry::RunSummaryPage>, StorageError> {
+        tokio::task::spawn_blocking(move || {
+            let path = home.join("db/registry.sqlite");
+            if !exists_as(&path, false)? {
+                return Ok(None);
+            }
+            super::registry::pages::read_page(&path, limit, cursor).map(Some)
+        })
+        .await
+        .map_err(|error| StorageError::Pool(error.to_string()))?
+    }
+
+    /// Read a complete integrity-checked operation for either exact reserved run.
+    /// Absence is `None`; invalid records fail and unsupported payloads stay explicitly typed.
+    pub async fn inspect_existing_bootstrap_operation_for_run(
+        home: std::path::PathBuf,
+        run_id: RunId,
+    ) -> Result<Option<super::bootstrap_operations::BootstrapOperationRecord>, StorageError> {
+        tokio::task::spawn_blocking(move || {
+            let path = home.join("db/registry.sqlite");
+            if !exists_as(&path, false)? {
+                return Ok(None);
+            }
+            let connection = crate::runs::connection::RetainedConnection::read_only(&path)?;
+            Ok(super::bootstrap_operations::read_record_for_run(
+                &connection,
+                run_id,
+            )?)
+        })
+        .await
+        .map_err(|error| StorageError::Pool(error.to_string()))?
+    }
+
+    /// Read at most 256 existing journal rows after a watermark, without storage opening.
+    /// `root` is the runs directory. `None` means absent, distinct from present-empty.
+    /// Pages are independent read transactions; sequence gaps stay visible to compilers.
+    /// Existing ephemeral SHM lock metadata may change; durable journal bytes are read-only.
+    pub async fn inspect_existing_events_after(
+        root: std::path::PathBuf,
+        run_id: RunId,
+        after: EventSeq,
+        limit: std::num::NonZeroU32,
+    ) -> Result<Option<Vec<ReadEvent>>, StorageError> {
+        tokio::task::spawn_blocking(move || {
+            if limit.get() > 256 {
+                return Err(StorageError::OperationRejected(
+                    "inspection event page exceeds 256".into(),
+                ));
+            }
+            let path = root.join(run_id.to_string()).join("events.sqlite");
+            if !exists_as(&path, false)? {
+                return Ok(None);
+            }
+            let after = i64::try_from(after.0).map_err(|_| {
+                StorageError::MigrationFailed("event watermark exceeds SQLite range".into())
+            })?;
+            read_event_range(&path, Some(after), i64::from(limit.get())).map(Some)
+        })
+        .await
+        .map_err(|error| StorageError::Pool(error.to_string()))?
+    }
+
     /// Read an existing run history without opening or migrating the registry.
     pub async fn inspect_existing_run_events(
         root: std::path::PathBuf,
@@ -1631,3 +1701,7 @@ mod paged_owned_history_tests {
         home.close().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "inspection/project_history_tests.rs"]
+mod project_history_tests;

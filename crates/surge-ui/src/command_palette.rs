@@ -64,7 +64,8 @@ impl Command {
 /// only from here, then app commands.
 fn all_commands() -> Vec<Command> {
     vec![
-        Command::nav("Fleet", Screen::Fleet, Some("Ctrl+1")),
+        Command::nav("Home", Screen::Home, None),
+        Command::nav("Tasks", Screen::Fleet, Some("Ctrl+1")),
         Command::nav("Roadmap", Screen::Roadmap, Some("Ctrl+2")),
         Command::nav("Missions", Screen::Runs, Some("Ctrl+3")),
         Command::nav("Flow", Screen::Flow, Some("Ctrl+4")),
@@ -349,6 +350,10 @@ mod accessibility_tests {
     #[gpui_kit::test]
     fn filtered_command_keeps_identity_and_dispatches_its_destination(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
+        let inbox = super::all_commands()
+            .iter()
+            .position(|command| command.command == PaletteCommand::Navigate(Screen::Inbox))
+            .unwrap();
         let selected = Rc::new(RefCell::new(None));
         let (handle, view) = cx.update(|cx| {
             gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
@@ -365,7 +370,7 @@ mod accessibility_tests {
         });
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find(("palette-cmd", 4_usize)).label(), Some("Inbox"));
+            assert_eq!(window.find(("palette-cmd", inbox)).label(), Some("Inbox"));
             let input = view.read(cx).input.clone().unwrap();
             input.update(cx, |input, cx| input.set_value("Inbox", window, cx));
         })
@@ -373,11 +378,11 @@ mod accessibility_tests {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(
-                window.find(("palette-cmd", 4_usize)).role(),
+                window.find(("palette-cmd", inbox)).role(),
                 Some(Role::Button)
             );
-            assert_eq!(window.find(("palette-cmd", 4_usize)).label(), Some("Inbox"));
-            window.click(("palette-cmd", 4_usize), cx);
+            assert_eq!(window.find(("palette-cmd", inbox)).label(), Some("Inbox"));
+            window.click(("palette-cmd", inbox), cx);
         })
         .unwrap();
         cx.update(|_| {

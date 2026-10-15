@@ -107,7 +107,26 @@ after terminal events, reuses the verification claim gate and invalidation rules
 and exposes missing or ambiguous attribution as caveats. It performs no scheduling
 or live process inspection.
 
+Project Home composes immutable accepted work-item revisions, retained bootstrap
+operation references and this execution projection. Authored project roadmap files
+remain proposed inputs with separate availability and coverage. Registry pages use
+an opaque home-bound cursor, a stable `(started_at, run_id)` order and an initial
+upper bound; they do not form an atomic snapshot across task, registry and journal
+sources. Bounded journal continuation retains the observed prefix. Read-only
+inspection opens existing SQLite files without migrations or creating a missing
+runtime home. SQLite readers may update coordination metadata in an existing SHM
+file; durable database/WAL contents and the directory path set stay unchanged.
+Unavailable, partial and unassigned history stays visible and cannot establish
+project completion. Desktop actions retain their existing task, run or exact human
+decision owner.
+
 Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Folding is **deterministic**: no wall-clock dependencies, no random IDs introduced during fold.
+
+Untouched bundled planning author roles use the project default provider. Operator
+profiles and explicit runtimes retain their selected providers; planning recommendations
+remain advisory. Frozen provider selection and profile provenance are checked during
+live continuation and restart. Older captures without that policy require attention
+or a new explicit planning operation; recovery never silently retargets a capture.
 
 ### Per-node execution
 

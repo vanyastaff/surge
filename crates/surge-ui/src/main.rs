@@ -22,6 +22,7 @@ mod mission;
 mod notifications;
 mod project;
 mod project_init;
+mod project_lifecycle;
 mod roadmap_source;
 mod router;
 mod run_stream;

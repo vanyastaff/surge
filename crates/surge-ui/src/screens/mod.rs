@@ -6,6 +6,7 @@ pub mod fleet;
 pub mod flow;
 pub mod inbox;
 pub mod memory;
+pub(crate) mod project_home;
 pub mod roadmap;
 pub mod runs;
 pub mod settings;
