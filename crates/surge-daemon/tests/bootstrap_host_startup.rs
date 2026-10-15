@@ -162,6 +162,96 @@ fn reservation_count(home: &Path) -> i64 {
         .unwrap()
 }
 
+#[test]
+fn bundled_planning_dispatches_the_projects_selected_default_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().join("unrelated");
+    std::fs::create_dir(&cwd).unwrap();
+    let home = root.path().join("home");
+    let selected = root.path().join("selected-provider");
+    let original = root.path().join("original-provider");
+    let project = configured_project(root.path(), &selected);
+    let path = project.join("surge.toml");
+    let mut config = surge_core::SurgeConfig::load(&path).unwrap();
+    let mut claude = config.agents["startup-fixture"].clone();
+    claude.args[1] = original.to_string_lossy().into_owned();
+    claude.env.insert(
+        "UNUSED_PROVIDER_SECRET".into(),
+        surge_core::config::AgentEnvValue::Inject {
+            from: format!("SURGE_UNUSED_{}", RunId::new()),
+            default: None,
+            required: true,
+        },
+    );
+    config.agents.insert("claude-acp".into(), claude);
+    std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    git(&project, &["add", "."]);
+    git(
+        &project,
+        &["commit", "-m", "two controlled provider recipes"],
+    );
+    // No disk profile overrides: exercise the actual bundled planning profiles.
+    let mut daemon = Daemon::spawn(&home, &cwd);
+    daemon.ready();
+    let id = RunId::new();
+    let accepted = daemon.submit(&project, id);
+    assert_eq!(accepted["method"], "bootstrap_operation", "{accepted}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !selected.exists() {
+        assert!(
+            !original.exists(),
+            "bundled profile launched the original provider instead of the project default"
+        );
+        assert!(Instant::now() < deadline, "{}", daemon.diagnostic(id));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!original.exists());
+    assert_eq!(reservation_count(&home), 1);
+}
+
+#[test]
+fn selected_provider_missing_credential_refuses_before_reservation_or_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let marker = root.path().join("selected-provider");
+    let project = configured_project(root.path(), &marker);
+    let path = project.join("surge.toml");
+    let mut config = surge_core::SurgeConfig::load(&path).unwrap();
+    config
+        .agents
+        .get_mut("startup-fixture")
+        .unwrap()
+        .env
+        .insert(
+            "REQUIRED_PROVIDER_SECRET".into(),
+            surge_core::config::AgentEnvValue::Inject {
+                from: format!("SURGE_REQUIRED_{}", RunId::new()),
+                default: None,
+                required: true,
+            },
+        );
+    std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    git(&project, &["add", "."]);
+    git(
+        &project,
+        &[
+            "commit",
+            "-m",
+            "selected provider requires absent credential",
+        ],
+    );
+    let mut daemon = Daemon::spawn(&home, root.path());
+    daemon.ready();
+    let rejected = daemon.submit(&project, RunId::new());
+    assert_eq!(rejected["method"], "error", "{rejected}");
+    assert!(
+        rejected["message"].as_str().unwrap().contains("credential"),
+        "{rejected}"
+    );
+    assert_eq!(reservation_count(&home), 0);
+    assert!(!marker.exists());
+}
+
 fn captured_pins(home: &Path, id: RunId) -> String {
     let connection = rusqlite::Connection::open_with_flags(
         home.join("db/registry.sqlite"),
@@ -179,14 +269,27 @@ fn captured_pins(home: &Path, id: RunId) -> String {
 
 #[test]
 fn cold_restart_refuses_changed_project_or_profile_without_recapture_or_dispatch() {
-    for changed in ["project", "profile"] {
+    for changed in ["project", "profile", "default", "provenance"] {
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().join("unrelated");
         std::fs::create_dir(&cwd).unwrap();
         let home = root.path().join("home");
         let marker = root.path().join("provider-started");
         let project = configured_project(root.path(), &marker);
-        fixture_profiles(&home);
+        if changed != "provenance" {
+            fixture_profiles(&home);
+        }
+        if changed == "default" {
+            let path = project.join("surge.toml");
+            let mut config = surge_core::SurgeConfig::load(&path).unwrap();
+            config.agents.insert(
+                "alternative-fixture".into(),
+                config.agents["startup-fixture"].clone(),
+            );
+            std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+            git(&project, &["add", "."]);
+            git(&project, &["commit", "-m", "two recipes before capture"]);
+        }
         // Zero active slots keeps the real accepted operation queued while
         // its original immutable capture is committed by the production owner.
         let mut first = Daemon::with_active_limit(&home, &cwd, 0);
@@ -270,11 +373,27 @@ fn assert_no_engine_dispatch(
 }
 
 fn change_captured_input(home: &Path, project: &Path, changed: &str) {
-    if changed == "project" {
+    if changed == "project" || changed == "default" {
         let path = project.join("surge.toml");
         let mut config = surge_core::SurgeConfig::load(&path).unwrap();
-        config.init.project_context_auto_seed = !config.init.project_context_auto_seed;
+        if changed == "default" {
+            config.default_agent = "alternative-fixture".into();
+        } else {
+            config.init.project_context_auto_seed = !config.init.project_context_auto_seed;
+        }
         std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    } else if changed == "provenance" {
+        let profiles = home.join("profiles");
+        std::fs::create_dir_all(&profiles).unwrap();
+        let profile = surge_core::profile::bundled::BundledRegistry::all()
+            .into_iter()
+            .find(|profile| profile.role.id.as_str() == "description-author")
+            .unwrap();
+        std::fs::write(
+            profiles.join("description-author.toml"),
+            toml::to_string(&profile).unwrap(),
+        )
+        .unwrap();
     } else {
         let path = home.join("profiles/description-author.toml");
         let mut profile: surge_core::profile::Profile =
@@ -350,16 +469,33 @@ fn one_default_host_dispatches_each_projects_distinct_recipe() {
     let home = root.path().join("home");
     let cwd = root.path().join("unrelated");
     std::fs::create_dir(&cwd).unwrap();
-    fixture_profiles(&home);
     let mut daemon = Daemon::spawn(&home, &cwd);
     daemon.ready();
     let mut markers = Vec::new();
+    let wrong_marker = root.path().join("wrong-provider");
     let mut planning_runs = Vec::new();
     for name in ["first", "second"] {
         let directory = root.path().join(name);
         std::fs::create_dir(&directory).unwrap();
         let marker = directory.join("dispatched");
         let project = configured_project(&directory, &marker);
+        if name == "second" {
+            let path = project.join("surge.toml");
+            let mut config = surge_core::SurgeConfig::load(&path).unwrap();
+            config.agents.insert(
+                "alternative-fixture".into(),
+                config.agents["startup-fixture"].clone(),
+            );
+            config.agents.get_mut("startup-fixture").unwrap().args[1] =
+                wrong_marker.to_string_lossy().into_owned();
+            config.default_agent = "alternative-fixture".into();
+            std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+            git(&project, &["add", "."]);
+            git(
+                &project,
+                &["commit", "-m", "distinct second project default"],
+            );
+        }
         let reply = daemon.submit(&project, RunId::new());
         assert_eq!(reply["method"], "bootstrap_operation", "{reply}");
         planning_runs.push(reply["status"]["planning_run"].clone());
@@ -378,6 +514,7 @@ fn one_default_host_dispatches_each_projects_distinct_recipe() {
     for marker in markers {
         assert_eq!(std::fs::read_to_string(marker).unwrap(), "started\n");
     }
+    assert!(!wrong_marker.exists());
 }
 
 #[test]

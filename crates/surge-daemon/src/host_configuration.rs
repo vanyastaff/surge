@@ -228,7 +228,7 @@ mod tests {
         let cwd = root.path().canonicalize().unwrap();
         let path = cwd.join("surge.toml");
         std::fs::write(&path, "schema_version = 1\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
         let unreadable = from_directory(Ok(cwd.clone()), SurgeConfig::load);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(matches!(
@@ -238,7 +238,7 @@ mod tests {
                 ..
             }
         ));
-        std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o0)).unwrap();
         let inaccessible = from_directory(Ok(cwd.clone()), SurgeConfig::load);
         std::fs::set_permissions(cwd, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(matches!(

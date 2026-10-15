@@ -1,4 +1,5 @@
 //! Reconstructable bootstrap inputs pinned to the daemon's actual engine runtime.
+mod planning;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -43,11 +44,12 @@ pub struct BootstrapRuntime {
     agents: Arc<surge_acp::Registry>,
     worktrees_root: PathBuf,
     profiles_root: PathBuf,
+    base_graph: Graph,
     graph: Graph,
 }
 
 impl BootstrapRuntime {
-    /// Construct only after successful daemon configuration loading.
+    /// Construct only from validated daemon configuration and actual registries.
     pub fn new(
         config: Arc<SurgeConfig>,
         profiles: Arc<ProfileRegistry>,
@@ -64,21 +66,28 @@ impl BootstrapRuntime {
             agents,
             worktrees_root,
             profiles_root,
+            base_graph: graph.clone(),
             graph,
         })
     }
 
-    /// This runtime scoped to one project: the daemon's profiles and bootstrap
-    /// graph, but the **project's** agent catalog (its `[agents.*]` over the
-    /// builtins). Every project used to need an agent list byte-identical to
-    /// the daemon's own `surge.toml`, so a freshly created app — or any
-    /// second project — was refused with an opaque configuration error.
+    /// Scope the actual catalog and eligible bundled planning nodes to one project.
+    /// Always adapt the immutable base; repeated scoping cannot inherit another
+    /// project's provider. Operator profiles and explicit node choices retain authority.
     pub fn for_project(&self, repository: &Path) -> Result<Self, BootstrapRuntimeError> {
         let project = SurgeConfig::load(&repository.join("surge.toml"))
             .map_err(|_| BootstrapRuntimeError::Configuration)?;
         supported(&project)?;
+        let agents = Arc::new(surge_acp::Registry::for_run(&project));
+        let planning = planning::adapt(
+            &self.base_graph,
+            &self.profiles,
+            &agents,
+            &project.default_agent,
+        )?;
         Ok(Self {
-            agents: Arc::new(surge_acp::Registry::for_run(&project)),
+            agents,
+            graph: planning.graph,
             ..self.clone()
         })
     }
@@ -187,7 +196,7 @@ impl BootstrapRuntime {
         })
     }
 
-    /// The graph captured from the bundled runtime.
+    /// Effective planning graph whose identity is captured before acceptance.
     #[must_use]
     pub fn graph(&self) -> Graph {
         self.graph.clone()
@@ -217,16 +226,55 @@ impl BootstrapRuntime {
         {
             return Err(BootstrapRuntimeError::Configuration);
         }
-        Ok(vec![content_ref(
-            "surge.toml:execution",
-            &(
-                registry_hash(&project_agents)?,
-                &project.capacity,
-                &project.init,
-                &project.tool_call_loop_guard,
-                &project.output_spill,
-            ),
-        )?])
+        let planning = planning::adapt(
+            &self.base_graph,
+            &self.profiles,
+            &project_agents,
+            &project.default_agent,
+        )?;
+        let current_profiles = ProfileRegistry::new(
+            surge_orchestrator::profile_loader::DiskProfileSet::scan(&self.profiles_root)
+                .map_err(|_| BootstrapRuntimeError::Configuration)?,
+        );
+        let current_planning = planning::adapt(
+            &self.base_graph,
+            &current_profiles,
+            &project_agents,
+            &project.default_agent,
+        )?;
+        let planning_identity = planning
+            .graph
+            .identity()
+            .map_err(|_| BootstrapRuntimeError::Configuration)?;
+        // Compare actual fresh lookups, including provenance. Content equality
+        // alone cannot detect a byte-identical operator override of bundled policy.
+        if planning.selection != current_planning.selection
+            || planning_identity
+                != current_planning
+                    .graph
+                    .identity()
+                    .map_err(|_| BootstrapRuntimeError::Configuration)?
+            || planning_identity
+                != self
+                    .graph
+                    .identity()
+                    .map_err(|_| BootstrapRuntimeError::Configuration)?
+        {
+            return Err(BootstrapRuntimeError::Configuration);
+        }
+        Ok(vec![
+            content_ref(
+                "surge.toml:execution",
+                &(
+                    registry_hash(&project_agents)?,
+                    &project.capacity,
+                    &project.init,
+                    &project.tool_call_loop_guard,
+                    &project.output_spill,
+                ),
+            )?,
+            planning.selection,
+        ])
     }
 
     fn runtime_identity(&self) -> Result<ContentHash, BootstrapRuntimeError> {
@@ -248,11 +296,8 @@ impl BootstrapRuntime {
 
     /// Resolve every graph agent through the same registries used by the engine.
     pub fn validate_graph(&self, graph: &Graph) -> Result<Vec<String>, BootstrapRuntimeError> {
-        if surge_core::validation::validate_with_resolver(graph, self.profiles.as_ref())
-            .has_errors()
-        {
-            return Err(BootstrapRuntimeError::Configuration);
-        }
+        surge_orchestrator::engine::validate::validate_graph_against(graph, Some(&self.profiles))
+            .map_err(|_| BootstrapRuntimeError::Configuration)?;
         let nodes = graph.nodes.values().chain(
             graph
                 .subgraphs
@@ -272,7 +317,11 @@ impl BootstrapRuntime {
                 .map_err(|_| BootstrapRuntimeError::Configuration)?;
             let entry = self
                 .agents
-                .find_normalized(&resolved.profile.runtime.agent_id)
+                .find_normalized(
+                    surge_orchestrator::profile_loader::effective_runtime_selector(
+                        agent, &resolved,
+                    ),
+                )
                 .ok_or(BootstrapRuntimeError::Configuration)?;
             surge_acp::agent_env::resolve(&entry.id, &entry.env)
                 .map_err(|_| BootstrapRuntimeError::Credential)?;
@@ -409,6 +458,43 @@ mod tests {
     use surge_orchestrator::profile_loader::DiskProfileSet;
 
     #[test]
+    fn project_scoping_never_inherits_another_projects_adapted_graph() {
+        let root = tempfile::tempdir().unwrap();
+        let profiles_root = root.path().join("profiles");
+        let profiles = Arc::new(ProfileRegistry::new(
+            DiskProfileSet::scan(&profiles_root).unwrap(),
+        ));
+        let host = BootstrapRuntime::new(
+            Arc::new(SurgeConfig::default()),
+            profiles,
+            Arc::new(surge_acp::Registry::builtin()),
+            root.path().join("worktrees"),
+            profiles_root,
+        )
+        .unwrap();
+        let mut projects = Vec::new();
+        for (name, default) in [("a", "codex-acp"), ("b", "claude-acp")] {
+            let project = root.path().join(name);
+            std::fs::create_dir(&project).unwrap();
+            let config = SurgeConfig {
+                default_agent: default.into(),
+                ..SurgeConfig::default()
+            };
+            std::fs::write(
+                project.join("surge.toml"),
+                toml::to_string(&config).unwrap(),
+            )
+            .unwrap();
+            projects.push(project);
+        }
+        let first = host.for_project(&projects[0]).unwrap();
+        let second = first.for_project(&projects[1]).unwrap();
+        let again = second.for_project(&projects[0]).unwrap();
+        assert_eq!(first.graph(), again.graph());
+        assert_ne!(first.graph(), second.graph());
+    }
+
+    #[test]
     fn implementation_run_never_shares_the_planning_runs_short_form() {
         let planning = RunId::new();
         // A colliding id: same 12-character prefix, different tail.
@@ -451,6 +537,94 @@ mod tests {
         git(&project, &["add", "."]);
         git(&project, &["commit", "-m", "configured repository"]);
         project.canonicalize().unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn same_cached_runtime_refuses_byte_identical_override_without_recapturing() {
+        check_live_override(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn same_cached_runtime_refuses_pin_only_override_with_explicit_unchanged_graph() {
+        check_live_override(true).await;
+    }
+
+    async fn check_live_override(explicit: bool) {
+        let root = tempfile::tempdir().unwrap();
+        let project = repository(root.path());
+        let profiles_root = root.path().join("profiles");
+        let profiles = Arc::new(ProfileRegistry::new(
+            DiskProfileSet::scan(&profiles_root).unwrap(),
+        ));
+        let config = Arc::new(SurgeConfig::default());
+        let agents = Arc::new(surge_acp::Registry::for_run(&config));
+        let worktrees = root.path().canonicalize().unwrap().join("worktrees");
+        let mut runtime = BootstrapRuntime::new(
+            config,
+            profiles,
+            agents,
+            worktrees.clone(),
+            profiles_root.clone(),
+        )
+        .unwrap();
+        if explicit {
+            for node in runtime.base_graph.nodes.values_mut() {
+                if let surge_core::node::NodeConfig::Agent(agent) = &mut node.config {
+                    *agent = agent.with_runtime_override("claude-acp", Some("operator-model"));
+                    agent
+                        .custom_fields
+                        .get_mut("runtime")
+                        .unwrap()
+                        .as_table_mut()
+                        .unwrap()
+                        .insert("effort".into(), toml::Value::String("high".into()));
+                }
+            }
+            runtime.graph = runtime.base_graph.clone();
+        }
+        let intent = BootstrapIntent::new(
+            project.clone(),
+            "plan this application".into(),
+            BudgetGuard::default(),
+        )
+        .unwrap();
+        let capture = runtime.capture(&intent).await.unwrap();
+        let original = serde_json::to_vec(&capture).unwrap();
+        std::fs::create_dir(&profiles_root).unwrap();
+        std::fs::write(
+            profiles_root.join("description-author.toml"),
+            include_str!("../../surge-core/bundled/profiles/description-author-1.0.toml"),
+        )
+        .unwrap();
+        let fresh = ProfileRegistry::new(DiskProfileSet::scan(&profiles_root).unwrap());
+        assert_eq!(
+            profile_hash(&runtime.profiles).unwrap(),
+            profile_hash(&fresh).unwrap(),
+            "byte-identical override leaves the pre-existing content guard unchanged"
+        );
+        if explicit {
+            let current =
+                planning::adapt(&runtime.base_graph, &fresh, &runtime.agents, "claude-acp")
+                    .unwrap();
+            assert_eq!(
+                current.graph, runtime.base_graph,
+                "explicit choices keep the effective graph byte-identical"
+            );
+        }
+        let refusal = runtime.verify(&capture).await;
+        assert!(
+            matches!(refusal, Err(BootstrapRuntimeError::Configuration)),
+            "explicit={explicit}: same cached runtime must reject changed lookup authority"
+        );
+        assert_eq!(serde_json::to_vec(&capture).unwrap(), original);
+        assert_ne!(
+            capture.fields().planning_run,
+            capture.fields().implementation_run
+        );
+        assert!(
+            !worktrees.exists(),
+            "verification must not prepare or dispatch either run"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

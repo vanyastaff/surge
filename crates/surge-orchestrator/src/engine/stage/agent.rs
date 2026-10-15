@@ -705,7 +705,7 @@ async fn execute_agent_attempt(
     let mut agent_launch = match resolved_profile.as_ref() {
         Some(rp) => derive_agent_kind_from_id(
             profile_str,
-            effective_agent_id(p.agent_config, rp),
+            crate::profile_loader::effective_runtime_selector(p.agent_config, rp),
             p.agent_registry.as_deref(),
         )?,
         None => AgentLaunch {
@@ -741,7 +741,7 @@ async fn execute_agent_attempt(
             .find_normalized(p.quota_opening.as_ref().map_or_else(
                 || {
                     resolved_profile.as_ref().map_or("mock", |profile| {
-                        effective_agent_id(p.agent_config, profile)
+                        crate::profile_loader::effective_runtime_selector(p.agent_config, profile)
                     })
                 },
                 |permit| permit.launch().candidate().candidate().runtime(),
@@ -2338,7 +2338,7 @@ fn canonical_runtime_id_for(
 ) -> crate::engine::capacity::CanonicalRuntimeId {
     crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
         agent_registry,
-        effective_agent_id(agent_config, rp),
+        crate::profile_loader::effective_runtime_selector(agent_config, rp),
     )
 }
 
@@ -2391,16 +2391,6 @@ fn node_config_selections(
         })
     })
     .collect()
-}
-
-/// The provider a node actually runs on: its own
-/// [`AgentConfig::runtime_override`] when set, else the profile's
-/// `runtime.agent_id`. Every runtime-identity fact (launch, `SessionOpened`,
-/// rate-limit attribution, capacity precheck) goes through this.
-fn effective_agent_id<'a>(agent_config: &'a AgentConfig, rp: &'a ResolvedProfile) -> &'a str {
-    agent_config
-        .runtime_override()
-        .unwrap_or(rp.profile.runtime.agent_id.as_str())
 }
 
 /// [`resolve_profile_runtime_id`] for a concrete node, honouring its

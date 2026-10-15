@@ -17,6 +17,8 @@
 //!   compact prompt-sized document, seeded as the `profile_catalog` run
 //!   artifact so `flow-generator@1.0` can pick profiles from what exists
 //!   instead of from its own prompt text.
+//! - [`effective_runtime_selector`] shares pure node/profile precedence across
+//!   launch, bootstrap preflight and handoff; actual run registries resolve recipes.
 //!
 //! Plumbed into the engine via `EngineConfig::profile_registry` and
 //! consumed by the agent stage to derive `AgentKind` from
@@ -27,8 +29,10 @@ pub mod disk;
 pub mod paths;
 pub mod registry;
 mod resolver;
+mod runtime_selection;
 
 pub use catalog::{catalog_runtimes, render_profile_catalog, render_profile_catalog_with};
 pub use disk::DiskProfileSet;
 pub use paths::{profiles_dir, surge_home};
 pub use registry::ProfileRegistry;
+pub use runtime_selection::effective_runtime_selector;
