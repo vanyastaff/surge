@@ -18,21 +18,27 @@ use surge_orchestrator::engine::{Engine, EngineConfig};
 use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
 use surge_persistence::runs::Storage;
 
-async fn wait_for_subscribe_count(mock: &fixtures::mock_bridge::MockBridge, expected: usize) {
-    for _ in 0..100 {
-        let count = mock
-            .recorded_calls
-            .lock()
-            .await
-            .iter()
-            .filter(|call| matches!(call, fixtures::mock_bridge::RecordedCall::Subscribe))
-            .count();
-        if count >= expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("timed out waiting for {expected} bridge subscribers");
+#[tokio::test]
+async fn bootstrap_readiness_uses_installed_receiver_while_audit_recording_is_blocked() {
+    let mock = fixtures::mock_bridge::MockBridge::new();
+    let audit = mock.recorded_calls.lock().await;
+    let mut receiver = mock.subscribe();
+    tokio::time::timeout(Duration::from_secs(1), mock.wait_for_subscribe_count(1))
+        .await
+        .expect("bootstrap readiness must not depend on asynchronous audit recording");
+    assert!(audit.is_empty(), "audit recording remains blocked");
+    let session = SessionId::new();
+    report_agent_outcome(&mock, session, "done", &[]).await;
+    let observed = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+        .await
+        .expect("installed receiver must receive the scripted outcome")
+        .unwrap();
+    assert!(matches!(
+        observed,
+        BridgeEvent::OutcomeReported { session: observed_session, outcome, .. }
+            if observed_session == session && outcome.as_str() == "done"
+    ));
+    drop(audit);
 }
 
 async fn approve_next_gate(
@@ -175,7 +181,7 @@ async fn run_bootstrap_materializes_followup_graph() {
         // (`validate_profile_artifact_contracts` in `engine/stage/agent.rs`) —
         // reuse the repo's own canonical valid fixtures rather than inventing
         // under-specified content that the contract would reject.
-        wait_for_subscribe_count(&mock, 1).await;
+        mock.wait_for_subscribe_count(1).await;
         tokio::fs::write(
             dir.path().join("description.md"),
             include_str!("fixtures/artifacts/valid/description.md"),
@@ -187,7 +193,7 @@ async fn run_bootstrap_materializes_followup_graph() {
 
         // `roadmap-planner@1.0` declares `required_artifacts = ["roadmap.toml",
         // "roadmap.md"]` — both must be written and reported.
-        wait_for_subscribe_count(&mock, 2).await;
+        mock.wait_for_subscribe_count(2).await;
         tokio::fs::write(
             dir.path().join("roadmap.toml"),
             include_str!("fixtures/artifacts/valid/roadmap.toml"),
@@ -209,7 +215,7 @@ async fn run_bootstrap_materializes_followup_graph() {
         .await;
         approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
 
-        wait_for_subscribe_count(&mock, 3).await;
+        mock.wait_for_subscribe_count(3).await;
         tokio::fs::write(
             dir.path().join("flow.toml"),
             include_str!("fixtures/golden_multi_milestone_flow.toml"),

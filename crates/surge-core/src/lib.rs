@@ -177,3 +177,6 @@ pub mod verification_evidence;
 pub mod execution_recovery;
 /// Persistent task identity and accepted history.
 pub mod work_item;
+
+/// Shared read-only task and stage execution history.
+pub mod task_execution;

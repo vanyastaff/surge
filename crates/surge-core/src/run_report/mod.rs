@@ -156,6 +156,9 @@ pub struct RunReport {
     /// Markdown or HTML form does. This keeps journals without receipts distinguishable from
     /// a run that did not bind project memory.
     pub caveats: Vec<String>,
+    /// Shared scoped task/stage/session history; unavailable for malformed envelopes.
+    #[serde(default)]
+    pub task_execution: Option<crate::task_execution::TaskExecutionView>,
 }
 
 /// Legacy journals may predate per-node memory selection receipts.
@@ -181,6 +184,7 @@ impl RunReport {
             steers: Vec::new(),
             approvals: Vec::new(),
             caveats: vec![MEMORY_RECEIPTS_CAVEAT.to_string()],
+            task_execution: None,
         }
     }
 
@@ -198,6 +202,12 @@ impl RunReport {
     #[must_use]
     pub fn compile(run_id: RunId, events: &[RunEvent]) -> Self {
         let mut report = Self::empty(run_id);
+        match crate::task_execution::TaskExecutionView::compile(run_id, events) {
+            Ok(view) => report.task_execution = Some(view),
+            Err(error) => report
+                .caveats
+                .push(format!("Task execution history unavailable: {error}")),
+        }
         // The graph in force at the time of a `TaskVerified` event, needed
         // to check verification authority (see `VerdictResult::Unauthorized`
         // doc). Replaced wholesale on `PipelineMaterialized` /

@@ -98,6 +98,15 @@ NotStarted → Bootstrapping → Pipeline → Terminal
 
 The task-ledger events (`TaskStatusChanged` / `TaskDiscovered` / `TaskVerified`, schema v5) fold into a `LedgerState` inside `RunMemory`. `TaskVerified` is the **sole** path to a verified `Completed` ledger status, and fold honors it only when the reporting node declares a `LedgerEffect::Verified` outcome in the active graph — an unauthorized event is counted as a rejected verification and the task stays unverified (defense in depth against a tampered log; the engine enforces authority at emit time). The engine emits these events from agent stages running inside a task loop: an outcome's declared `LedgerEffect` drives `TaskStatusChanged` / `TaskVerified`, a produced `discovered-tasks.toml` artifact drives `TaskDiscovered`, and a `Verified` outcome is rejected unless the node runs a sealed read-only sandbox. See [`product-strategy.md`](product-strategy.md) Pillar A and the Phase 1 plan.
 
+`surge-core::task_execution::TaskExecutionView` projects recorded task, stage and
+provider history for reports and the desktop. Discovery, a recorded split,
+iteration start, accepted outcome, exact route consumption and current verification
+remain separate facts. Occurrence identities use the run and first evidence
+sequence; stages use their `StageEntered` sequence. The projection retains history
+after terminal events, reuses the verification claim gate and invalidation rules,
+and exposes missing or ambiguous attribution as caveats. It performs no scheduling
+or live process inspection.
+
 Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Folding is **deterministic**: no wall-clock dependencies, no random IDs introduced during fold.
 
 ### Per-node execution
