@@ -175,3 +175,47 @@ A few crates document their own internals beyond the workspace-level docs:
 - [Getting Started](getting-started.md) — initial build and smoke-test commands
 - [CLI](cli.md) — what each `surge` subcommand does
 - [Architecture](ARCHITECTURE.md) — crate boundaries, dependency rules, conventions
+
+
+### Exact-model ACP transport journey
+
+The ignored daemon/MCP smoke uses a temporary repository and runtime home. It
+checks a human-response nonce through authenticated stage tools, unchanged Git
+checkouts, one durable provider session, an exact offered model ID and a successful
+same-session model selection before one prompt. A profile recommendation alone
+is insufficient. Ordinary tests use the controlled mock and never call a provider.
+
+Build `mock_acp_agent`, `surge`, and the daemon example `acp_smoke_proxy`, then run
+`controlled_daemon_mcp_smoke` and
+`proxy_cancellation_settles_observed_descendant_and_owned_container` with
+`cargo test -p surge-daemon --test live_provider_smoke -- --ignored --exact TEST`.
+The proxy is test support, not a production runtime or sandbox.
+
+To opt into one real invocation, set `SURGE_LIVE_CODEX=1`,
+`SURGE_LIVE_ACP_COMMAND` to the adapter executable (or `node`),
+`SURGE_LIVE_ACP_ARGS_JSON` to a JSON array of arguments (for Node, the adapter's
+entry script), and `SURGE_LIVE_ACP_MODEL` to the exact advertised ID such as
+`gpt-6.1-sol`. Run the ignored exact test `live_codex_daemon_mcp_smoke`.
+No cache path or fallback model is embedded in the test. Existing provider login
+is used; the fixture never logs in, installs an adapter or changes credentials.
+
+The watchdog bounds the journey to 150 seconds. The bridge retains Unix group /
+Windows Job ownership of proxy and provider descendants; the outer fixture owns
+its own process group / native Windows Job. Capture contains only bounded adapter,
+model and session metadata. Raw ACP frames, prompts, auth, tool values and provider
+stderr are withheld. This proves the adapter acknowledged the selected model; it
+does not independently attest the provider's model implementation.
+
+For test-only desktop journey observation, the proxy additionally accepts
+`--capture-dir PRIVATE_DIRECTORY --initial-provider EXACT_MODEL COMMAND ARGS...`.
+Each launch publishes a fresh, exclusively created capture file. The directory
+must already be private; on Windows it must be the `daemon` directory of a retained
+Surge runtime home. Initial observation is an explicit separate mode: it requires
+an exact categorical offered/current model on the correlated new session, without
+adding a model-selection RPC. Strict smoke mode never falls back to it.
+
+For `@agentclientprotocol/codex-acp` version `2.2.2` only, the observer cross-checks
+its legacy `base[effort]` field against the exact categorical base and an offered
+reasoning effort, preserving raw/base/effort separately. Contradictions, unknown
+composite versions and malformed representations fail before prompt. This parser
+is confined to the test harness.
