@@ -84,14 +84,32 @@ impl Helper {
     }
 }
 
-async fn send_frame(writer: &mut (impl AsyncWrite + Unpin), message: Value) {
-    writer
-        .write_all(format!("{message}\n").as_bytes())
-        .await
-        .unwrap();
+async fn send_bytes(writer: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> std::io::Result<()> {
+    writer.write_all(bytes).await?;
     // Windows ChildStdin queues its blocking OS write before reporting bytes
     // accepted. Start protocol deadlines only after that write has completed.
-    writer.flush().await.unwrap();
+    writer.flush().await
+}
+
+async fn send_frame(writer: &mut (impl AsyncWrite + Unpin), message: Value) {
+    send_bytes(writer, format!("{message}\n").as_bytes())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn sending_unterminated_bytes_flushes_them_to_the_peer_before_returning() {
+    let (write, mut read) = tokio::io::duplex(1024);
+    let mut buffered = tokio::io::BufWriter::with_capacity(1024, write);
+    let payload = vec![b'x'; 512];
+    send_bytes(&mut buffered, &payload).await.unwrap();
+    let mut observed = vec![0; payload.len()];
+    tokio::time::timeout(Duration::from_millis(100), read.read_exact(&mut observed))
+        .await
+        .expect("unterminated bytes must reach the peer before send returns")
+        .unwrap();
+    assert_eq!(observed, payload);
+    drop(buffered);
 }
 
 #[tokio::test]
@@ -173,11 +191,18 @@ async fn oversized_unterminated_stdio_frame_ends_helper() {
         let mut helper = Helper::spawn(&endpoint);
         helper.initialize().await;
         let oversized = vec![b'x'; 256 * 1024 + 1];
-        let _ = helper.input.write_all(&oversized).await;
+        let sent = send_bytes(&mut helper.input, &oversized).await;
         let terminated =
             tokio::time::timeout(Duration::from_millis(800), helper.child.wait()).await;
         endpoint.close().await.unwrap();
         helper.reap().await;
+        if let Err(error) = sent {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "unexpected oversized input error: {error}"
+            );
+        }
         assert!(
             terminated.is_ok(),
             "oversized input must fail before waiting for newline"
