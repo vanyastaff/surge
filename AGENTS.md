@@ -86,6 +86,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
 | `crates/surge-daemon/src/socket_security.rs` | Unix daemon socket publication, private directory/ACL checks and identity-preserving cleanup. |
+| `crates/surge-core/src/task_execution.rs` | Shared read-only task, stage and session history for reports and desktop views. |
 | `crates/surge-core/src/verification_evidence.rs` | Shared revision/criteria claim gate and invalidation projection. |
 | `crates/surge-git/src/fingerprint.rs` | Read-only identity of current working files, including dirty and untracked code. |
 | `crates/surge-orchestrator/src/engine/stage/verification.rs` | Host-owned verification input and inline report sealing. |

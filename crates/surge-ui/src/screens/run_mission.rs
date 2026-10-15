@@ -15,7 +15,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::roadmap::{MilestoneId, RoadmapTaskId};
 use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
-use surge_core::{BootstrapStage, EventPayload, RunId};
+use surge_core::{BootstrapStage, RunId};
 
 use crate::flow_diagram::Lane;
 use crate::mission::{self, MilestoneView, Mission, PlanState, RunEnd, Step, StepState, TaskView};
@@ -29,11 +29,16 @@ pub(super) struct MissionRuns {
     pub implementation: RunId,
 }
 
-async fn events_of(root: std::path::PathBuf, run: RunId) -> Vec<EventPayload> {
+async fn events_of(
+    root: std::path::PathBuf,
+    run: RunId,
+) -> Result<Vec<surge_core::RunEvent>, String> {
     surge_persistence::runs::Storage::inspect_existing_run_events(root, run)
         .await
-        .map(|events| events.into_iter().map(|e| e.payload.payload).collect())
-        .unwrap_or_default()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .map(|event| event.to_run_event(run).map_err(|error| error.to_string()))
+        .collect()
 }
 
 async fn load(runs: MissionRuns) -> Result<Mission, String> {
@@ -44,20 +49,26 @@ async fn load(runs: MissionRuns) -> Result<Mission, String> {
     let home = surge_core::home::surge_home_dir().ok_or("Surge home unavailable")?;
     let root = home.join("runs");
     let planning = match runs.planning {
-        Some(run) => events_of(root.clone(), run).await,
+        Some(run) => events_of(root.clone(), run).await?,
         None => Vec::new(),
     };
     let implementation = if Some(runs.implementation) == runs.planning {
         Vec::new()
     } else {
-        events_of(root, runs.implementation).await
+        events_of(root, runs.implementation).await?
     };
     let roadmap: Option<RoadmapArtifact> = runs
         .planning
         .and_then(|p| crate::roadmap_source::read_run_roadmap(&home, p))
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| toml::from_str(&text).ok());
-    Ok(mission::fold(&planning, &implementation, roadmap.as_ref()))
+    mission::fold(
+        &planning,
+        runs.implementation,
+        &implementation,
+        roadmap.as_ref(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -160,7 +171,7 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
         StepState::Failed(_) => (Some(IconName::Close), theme::error()),
         StepState::WaitingOnYou => (None, theme::warning()),
         StepState::Working => (None, theme::accent()),
-        StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
+        StepState::Unknown | StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
     };
     let tip = match &step.state {
         StepState::Done(outcome) => step
@@ -170,6 +181,7 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
         StepState::Failed(reason) => format!("failed · {reason}"),
         StepState::WaitingOnYou => "waiting for your answer".into(),
         StepState::Working => "working now".into(),
+        StepState::Unknown => "continuation unknown after a journal gap".into(),
         StepState::Unfinished => "the run ended before this step reported".into(),
     };
     let tip = if step.attempts > 1 {
@@ -300,9 +312,19 @@ impl MissionPanel {
     fn render_subtask(task: &TaskView, path: &str) -> AnyElement {
         let (state, color) = match &task.iteration {
             mission::IterationState::Planned => ("Planned".to_string(), theme::text_muted()),
+            mission::IterationState::Discovered => {
+                ("Discovered · not dispatched".into(), theme::text_muted())
+            },
+            mission::IterationState::Queued => ("Queued after split".into(), theme::text_muted()),
+            mission::IterationState::Replaced => {
+                ("Split into smaller tasks".into(), theme::text_muted())
+            },
             mission::IterationState::Running => ("Running".to_string(), theme::accent()),
             mission::IterationState::Finished(outcome) => {
                 (format!("Process finished · {outcome}"), theme::text_muted())
+            },
+            mission::IterationState::Unknown => {
+                ("Continuation unknown".to_string(), theme::warning())
             },
             mission::IterationState::Unfinished => {
                 ("No completion recorded".to_string(), theme::warning())
@@ -353,7 +375,7 @@ impl MissionPanel {
             .into_any_element()
     }
 
-    fn render_task(&self, m: usize, t: usize, task: &TaskView) -> Div {
+    fn render_task(&self, m: usize, t: usize, task: &TaskView) -> AnyElement {
         let (label, role) = match task.status {
             RoadmapStatus::Completed if task.verified => ("verified", Semantic::Verified),
             RoadmapStatus::Completed => ("done · unverified", Semantic::External),
@@ -367,12 +389,34 @@ impl MissionPanel {
             RoadmapStatus::Skipped => ("skipped", Semantic::External),
             RoadmapStatus::Pending => ("planned", Semantic::External),
         };
+        let (label, role) = match task.iteration {
+            mission::IterationState::Unknown => ("continuation unknown", Semantic::External),
+            mission::IterationState::Discovered => {
+                ("discovered · not dispatched", Semantic::External)
+            },
+            mission::IterationState::Queued => ("queued after split", Semantic::External),
+            mission::IterationState::Replaced => ("split into smaller tasks", Semantic::External),
+            mission::IterationState::Running if task.status == RoadmapStatus::Pending => {
+                ("in progress", Semantic::Agent)
+            },
+            mission::IterationState::Finished(_) if task.status == RoadmapStatus::Pending => {
+                ("process finished · unverified", Semantic::External)
+            },
+            mission::IterationState::Unfinished if task.status == RoadmapStatus::Pending => {
+                ("no completion recorded", Semantic::External)
+            },
+            _ => (label, role),
+        };
         let color = role.color();
         let live = task
             .steps
             .iter()
             .any(|s| matches!(s.state, StepState::Working | StepState::WaitingOnYou));
         div()
+            .id(SharedString::from(format!("task-state-{m}-{t}")))
+            .test_support()
+            .role(Role::Group)
+            .aria_label(format!("{}: {label}", task.title))
             .v_flex()
             .gap(px(6.0))
             .px(px(12.0))
@@ -436,6 +480,7 @@ impl MissionPanel {
                         Self::render_subtask(child, &format!("t{m}-{t}-s{index}"))
                     }))
             })
+            .into_any_element()
     }
 
     fn render_milestone(&self, index: usize, m: &MilestoneView) -> Div {
@@ -550,6 +595,14 @@ impl MissionPanel {
 
     fn render_mission(&self, mission: &Mission) -> Div {
         let mut body = div().v_flex().gap(px(16.0));
+        for caveat in &mission.caveats {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(theme::warning())
+                    .child(caveat.clone()),
+            );
+        }
         if mission
             .plan
             .iter()
@@ -768,6 +821,7 @@ impl MissionPanel {
                 StepState::Failed(_) => ("Failed", theme::error()),
                 StepState::WaitingOnYou => ("Needs your decision", theme::warning()),
                 StepState::Working => ("Working", theme::accent()),
+                StepState::Unknown => ("Continuation unknown", theme::text_muted()),
                 StepState::Unfinished => ("No completion recorded", theme::text_muted()),
             };
             let detail = match &step.state {
@@ -930,8 +984,8 @@ impl MissionPanel {
 impl Render for MissionPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match (&self.mission, &self.error) {
-            (Some(mission), _) => self.render_explorer(mission, cx).into_any_element(),
-            (None, Some(error)) => {
+            (Some(mission), None) => self.render_explorer(mission, cx).into_any_element(),
+            (_, Some(error)) => {
                 ui::empty_state("◌", "Could not read this run", error.clone()).into_any_element()
             },
             (None, None) => div()
@@ -959,6 +1013,50 @@ mod hierarchy_tests {
     use surge_core::keys::{NodeKey, SubgraphKey};
     use surge_core::loop_config::IterableSource;
     use surge_core::{ContentHash, EventPayload, RunId};
+
+    #[gpui_kit::test]
+    fn started_pending_task_displays_progress_without_a_ledger_promotion(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let events = [
+            EventPayload::LoopIterationStarted {
+                loop_id: "task_loop".parse().unwrap(),
+                item: toml::from_str("id='login'\ntitle='Login'").unwrap(),
+                index: 0,
+            },
+            EventPayload::StageEntered {
+                node: "implement".parse().unwrap(),
+                attempt: 1,
+            },
+        ];
+        let mission = crate::mission::fixture_fold(&[], &events, None);
+        assert_eq!(
+            mission.milestones[0].tasks[0].status,
+            surge_core::roadmap::RoadmapStatus::Pending
+        );
+        assert!(!mission.milestones[0].tasks[0].verified);
+        let panel = cx.new(|_| MissionPanel {
+            runs: MissionRuns {
+                planning: None,
+                implementation: RunId::new(),
+            },
+            mission: Some(mission),
+            error: None,
+            generation: 0,
+            loaded_seq: None,
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("task-state-0-0").label(),
+                Some("Login: in progress")
+            );
+        });
+    }
 
     #[gpui_kit::test]
     fn selected_mission_renders_full_subtask_title_and_recorded_state(cx: &mut TestAppContext) {
@@ -1015,7 +1113,7 @@ mod hierarchy_tests {
                 attempt: 1,
             },
         ];
-        let mut mission = crate::mission::fold(&[], &events, None);
+        let mut mission = crate::mission::fixture_fold(&[], &events, None);
         let mut second = mission.milestones[0].clone();
         second.id = "m2".into();
         second.tasks[0].subtasks[0].title = "A different occurrence".into();
@@ -1140,7 +1238,7 @@ mod hierarchy_tests {
                 planning: None,
                 implementation: RunId::new(),
             },
-            mission: Some(crate::mission::fold(&[], &events, None)),
+            mission: Some(crate::mission::fixture_fold(&[], &events, None)),
             error: None,
             generation: 0,
             loaded_seq: None,
@@ -1212,7 +1310,7 @@ mod hierarchy_tests {
     #[test]
     fn old_steps_and_human_gates_do_not_invent_agent_evidence() {
         let key = |text: &str| text.parse::<NodeKey>().unwrap();
-        let old = crate::mission::fold(
+        let old = crate::mission::fixture_fold(
             &[],
             &[EventPayload::StageEntered {
                 node: key("legacy_task"),
@@ -1240,7 +1338,7 @@ mod hierarchy_tests {
             toml::from_str(include_str!("../../testdata/nested_loops_flow.toml")).unwrap();
         graph.nodes.get_mut(&key("final_spec")).unwrap().config = surge_core::node::NodeConfig::HumanGate(
             toml::from_str("delivery_channels = []\noptions = []\nsummary = { title = 'Approve', body = 'Plan' }").unwrap());
-        let human = crate::mission::fold(
+        let human = crate::mission::fixture_fold(
             &[],
             &[
                 EventPayload::PipelineMaterialized {

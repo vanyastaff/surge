@@ -118,6 +118,8 @@ pub fn render_markdown(report: &RunReport) -> String {
         out.push('\n');
     }
 
+    out.push_str(&render_task_execution_markdown(report));
+
     out.push_str("## Escalations\n\n");
     if report.escalations.is_empty() {
         out.push_str("_No escalations were raised._\n\n");
@@ -658,6 +660,7 @@ pub fn render_html(report: &RunReport) -> String {
     }
 
     body.push_str(&render_caveats_section(report));
+    body.push_str(&render_task_execution_html(report));
     body.push_str(&render_escalations_section(report));
     body.push_str(&render_cost_section(&report.cost));
     body.push_str(&render_nodes_section(report));
@@ -989,6 +992,209 @@ fn render_approvals_section(report: &RunReport) -> String {
         ));
     }
     format!("<h2>Approvals</h2>\n<ul>{items}</ul>\n")
+}
+
+fn task_fact(task: &crate::task_execution::TaskExecution) -> String {
+    let execution = if task.replaced {
+        "split/replaced"
+    } else if task.finished.is_some() {
+        "iteration finished"
+    } else if task.continuity_unknown.is_some() {
+        "continuation unknown after a journal gap"
+    } else if task.started.is_some() {
+        "started"
+    } else if task.split.is_some() {
+        "split ordered; not started"
+    } else {
+        "discovered; not dispatched"
+    };
+    format!(
+        "{execution}; verification {}",
+        if task.verified {
+            "current"
+        } else {
+            "unconfirmed"
+        }
+    )
+}
+fn stage_fact(stage: &crate::task_execution::StageExecution) -> String {
+    let routed = stage
+        .accepted
+        .iter()
+        .filter(|accepted| accepted.routed.is_some())
+        .count();
+    let closed = stage
+        .sessions
+        .iter()
+        .filter(|session| session.writer_closed.is_some())
+        .count();
+    let group_only = stage
+        .sessions
+        .iter()
+        .filter(|session| session.group_stopped.is_some() && session.writer_closed.is_none())
+        .count();
+    format!(
+        "entry {}; attempt {}; {} connection(s); {} accepted; {routed} exact route(s); {closed} writer closure(s); {group_only} best-effort group stop(s)",
+        stage.entered,
+        stage.attempt,
+        stage.sessions.len(),
+        stage.accepted.len()
+    )
+}
+fn stage_description(stage: &crate::task_execution::StageExecution) -> String {
+    let participants = stage
+        .sessions
+        .iter()
+        .map(|session| {
+            format!(
+                "{} via {} (connection {}; invocation {})",
+                session.profile,
+                session.runtime.as_deref().unwrap_or("unknown runtime"),
+                session.connection,
+                session
+                    .invocation
+                    .map_or_else(|| "unknown".into(), |id| id.to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let accepted = stage
+        .accepted
+        .iter()
+        .map(|accepted| {
+            if accepted.conflicting { return format!("{} accepted at {}; conflicting invocation, route certainty withdrawn ({} route records)", accepted.commit.outcome(), accepted.seq, accepted.route_records.len()); }
+            format!(
+                "{} accepted at {}; route {}",
+                accepted.commit.outcome(),
+                accepted.seq,
+                accepted
+                    .routed
+                    .map_or_else(|| "not observed".into(), |seq| seq.to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let result = stage.result.as_ref().map_or(
+        if stage.continuity_unknown.is_some() {
+            "continuation unknown after a journal gap"
+        } else {
+            "no completion recorded"
+        },
+        |(_, outcome)| outcome.as_str(),
+    );
+    format!(
+        "result: {result}; failure: {}; participants: {}; outcomes: {}",
+        stage.failure.as_deref().unwrap_or("none recorded"),
+        if participants.is_empty() {
+            "unknown"
+        } else {
+            &participants
+        },
+        if accepted.is_empty() {
+            "none accepted"
+        } else {
+            &accepted
+        }
+    )
+}
+fn render_task_execution_markdown(report: &RunReport) -> String {
+    let Some(view) = &report.task_execution else {
+        return "## Task execution\n\nUnavailable; see caveats.\n\n".into();
+    };
+    let mut out = "## Task execution\n\n".to_string();
+    for task in &view.tasks {
+        out.push_str(&format!(
+            "- **{} — {}**: {} (first evidence {}; ordinal {})\n",
+            escape_markdown(task.task_id.as_str()),
+            escape_markdown(&task.title),
+            task_fact(task),
+            task.id.seq,
+            task.id.ordinal
+        ));
+        if let Some(origin) = &task.discovered_from {
+            out.push_str(&format!(
+                "  - Discovered from: {}\n",
+                escape_markdown(origin.as_str())
+            ));
+        }
+        if let Some(description) = &task.description {
+            out.push_str(&format!("  - {}\n", escape_markdown(description)));
+        }
+        for criterion in &task.acceptance_criteria {
+            out.push_str(&format!("  - Criterion: {}\n", escape_markdown(criterion)));
+        }
+        for stage in view
+            .stages
+            .iter()
+            .filter(|stage| stage.task == Some(task.id))
+        {
+            out.push_str(&format!(
+                "  - {}: {}; {}\n",
+                escape_markdown(stage.node.as_str()),
+                stage_fact(stage),
+                escape_markdown(&stage_description(stage))
+            ));
+        }
+    }
+    for caveat in &view.caveats {
+        out.push_str(&format!(
+            "- Coverage: {}\n",
+            escape_markdown(&caveat.to_string())
+        ));
+    }
+    out.push('\n');
+    out
+}
+fn render_task_execution_html(report: &RunReport) -> String {
+    let Some(view) = &report.task_execution else {
+        return "<section><h2>Task execution</h2><p>Unavailable; see caveats.</p></section>".into();
+    };
+    let mut out = "<section><h2>Task execution</h2><ol>".to_string();
+    for task in &view.tasks {
+        out.push_str(&format!(
+            "<li><strong>{} — {}</strong>: {}<ul>",
+            escape_html(task.task_id.as_str()),
+            escape_html(&task.title),
+            escape_html(&task_fact(task))
+        ));
+        if let Some(origin) = &task.discovered_from {
+            out.push_str(&format!(
+                "<li>Discovered from: {}</li>",
+                escape_html(origin.as_str())
+            ));
+        }
+        if let Some(description) = &task.description {
+            out.push_str(&format!("<li>{}</li>", escape_html(description)));
+        }
+        for criterion in &task.acceptance_criteria {
+            out.push_str(&format!("<li>Criterion: {}</li>", escape_html(criterion)));
+        }
+        for stage in view
+            .stages
+            .iter()
+            .filter(|stage| stage.task == Some(task.id))
+        {
+            out.push_str(&format!(
+                "<li>{}: {}</li>",
+                escape_html(stage.node.as_str()),
+                escape_html(&format!(
+                    "{}; {}",
+                    stage_fact(stage),
+                    stage_description(stage)
+                ))
+            ));
+        }
+        out.push_str("</ul></li>");
+    }
+    out.push_str("</ol>");
+    for caveat in &view.caveats {
+        out.push_str(&format!(
+            "<p>Coverage: {}</p>",
+            escape_html(&caveat.to_string())
+        ));
+    }
+    out.push_str("</section>");
+    out
 }
 
 #[cfg(test)]

@@ -466,6 +466,37 @@ async fn run_in_home(home: &FixtureHome, cut: Cut, damage: Damage) {
             home.path().display()
         )
     });
+    let accepted_envelopes = accepted
+        .iter()
+        .map(|event| event.to_run_event(attempt.run).unwrap())
+        .collect::<Vec<_>>();
+    let before_view =
+        surge_core::task_execution::TaskExecutionView::compile(attempt.run, &accepted_envelopes)
+            .unwrap();
+    assert_eq!(
+        before_view
+            .tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        ["login", "login-a", "login-b"]
+    );
+    assert!(
+        before_view.tasks[1..]
+            .iter()
+            .all(|task| task.started.is_none() && task.split.is_none())
+    );
+    let child_anchor = before_view.tasks[1].id;
+    let before_planner = before_view
+        .stages
+        .iter()
+        .find(|stage| stage.node.as_str() == "verify_split")
+        .unwrap();
+    assert_eq!(before_planner.sessions.len(), 1);
+    assert_eq!(before_planner.accepted.len(), 1);
+    assert!(before_planner.accepted[0].routed.is_none());
+    let planner_acceptance = before_planner.accepted[0].seq;
+
     let commit = accepted
         .iter()
         .find_map(|event| match event.payload.payload() {
@@ -601,8 +632,105 @@ async fn run_in_home(home: &FixtureHome, cut: Cut, damage: Damage) {
         std::panic::resume_unwind(panic);
     }
     let events = journal(&storage, attempt.run).await;
+    let recovered_envelopes = events
+        .iter()
+        .map(|event| event.to_run_event(attempt.run).unwrap())
+        .collect::<Vec<_>>();
+    let execution =
+        surge_core::task_execution::TaskExecutionView::compile(attempt.run, &recovered_envelopes)
+            .unwrap();
+    assert_eq!(execution.tasks[1].id, child_anchor);
+    assert_eq!(
+        execution.tasks[1]
+            .discovered_from
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("login")
+    );
+    for stage in execution
+        .stages
+        .iter()
+        .filter(|stage| matches!(stage.node.as_str(), "implement" | "verify" | "verify_split"))
+    {
+        assert_eq!(
+            stage.sessions.len(),
+            1,
+            "actual agent occurrence has one recorded provider connection"
+        );
+        assert!(stage.sessions.iter().all(|session| {
+            session
+                .authority
+                .as_ref()
+                .is_some_and(|authority| authority.node == stage.node)
+                && session.provider.as_ref().is_some_and(|opened| {
+                    Some(opened.descriptor.invocation()) == session.invocation
+                })
+        }));
+    }
     let fail_closed =
         matches!(cut, Cut::Accepted) && matches!(damage, Damage::MissingBlob | Damage::CorruptBlob);
+    assert_eq!(
+        execution
+            .tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        if fail_closed {
+            vec!["login", "login-a", "login-b"]
+        } else {
+            vec!["login", "login-a", "login-b", "logout"]
+        }
+    );
+    assert_eq!(execution.tasks[1].started.is_none(), fail_closed);
+    assert_eq!(execution.tasks[1].split.is_none(), fail_closed);
+    if !fail_closed {
+        assert_eq!(
+            execution.tasks[1].acceptance_criteria,
+            ["Valid users sign in"]
+        );
+        let first_child_stages = execution
+            .stages
+            .iter()
+            .filter(|stage| stage.task == Some(child_anchor) && stage.node.as_str() == "implement")
+            .collect::<Vec<_>>();
+        assert_eq!(first_child_stages.len(), 2);
+        assert_ne!(first_child_stages[0].entered, first_child_stages[1].entered);
+    }
+    let planner = execution
+        .stages
+        .iter()
+        .find(|stage| stage.node.as_str() == "verify_split")
+        .unwrap();
+    assert_eq!(planner.accepted.len(), 1);
+    assert_eq!(planner.accepted[0].seq, planner_acceptance);
+    assert_eq!(planner.accepted[0].commit.invocation(), commit.invocation());
+    assert_eq!(planner.accepted[0].routed.is_none(), fail_closed);
+    assert_eq!(
+        execution.tasks[2]
+            .discovered_from
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("login")
+    );
+    if !fail_closed {
+        assert_eq!(
+            execution.tasks[2].acceptance_criteria,
+            ["Empty passwords are rejected"]
+        );
+        assert_eq!(
+            execution.tasks[2].description.as_deref(),
+            Some("The part the verifier rejected.")
+        );
+        let second_child_stages = execution
+            .stages
+            .iter()
+            .filter(|stage| {
+                stage.task == Some(execution.tasks[2].id) && stage.node.as_str() == "implement"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(second_child_stages.len(), 1);
+        assert_eq!(second_child_stages[0].sessions.len(), 1);
+    }
     let splits: Vec<_> = events
         .iter()
         .filter_map(|event| match event.payload.payload() {
