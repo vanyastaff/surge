@@ -351,3 +351,20 @@ Root maintainer and independent results_repair3_plan_critic plus results_repair3
 - RPC-05 / RPH-R3-BOUNDARY-1: selected run status and operation phase separately attributed. N7 app.rs/Inbox remains open; no Home5/5 reset or Windows claim. No execution, scheduler or verification authority changes.
 
 The full goal remains open; this is a reviewed, queued correction of visible native defects rather than a substitute for the actual app journeys.
+
+## Repair 3 dispatch
+
+Repair dispatch count: **3/3**, recorded before author dispatch. Source/destination:
+`codex/results-planning-history` at merge commit `5bf1104e`; same worktree above.
+Current main `6722b495` has been integrated and full local integration gates passed.
+Approved proposal and independent RPC/RPH conditions above remain binding.
+Findings N3/N6 plus Results header misattribution are blocking. N7 remains the
+separate Home/Inbox sixth-round mandate, not part of this repair. Witness4/4 stays
+closed. No fourth Results repair is automatic.
+
+Outer RED must exercise real RunsScreen rendered controls before behavior edits.
+Required complete closure includes compile-once/fallible composition, authenticated
+parent graph lineage, independent observations and actual child-to-parent Log and
+Sessions navigation. Shared projection adapter in project_lifecycle/loading.rs is
+mechanical only. No scheduler, receipts, provider, runtime or Home owner edits.
+Full affected gates and independent 5a then full 5b precede local commit.
