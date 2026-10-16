@@ -136,6 +136,23 @@ impl TaskLedgerIndexRecord {
     }
 }
 
+pub(crate) const UPSERT_SQL: &str = "INSERT INTO task_ledger_index
+                (run_id, task_id, project_path, status, verified, discovered_from,
+                 last_authority_node, updated_seq, updated_at, accepted_by_human,
+                 requirement_revised, projection_semantics)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             ON CONFLICT(run_id, task_id) DO UPDATE SET
+                project_path = excluded.project_path,
+                status = excluded.status,
+                verified = excluded.verified,
+                projection_semantics = excluded.projection_semantics,
+                accepted_by_human = excluded.accepted_by_human,
+                requirement_revised = excluded.requirement_revised,
+                discovered_from = COALESCE(excluded.discovered_from, discovered_from),
+                last_authority_node = excluded.last_authority_node,
+                updated_seq = excluded.updated_seq,
+                updated_at = excluded.updated_at";
+
 /// Registry-backed store for cross-run task-ledger lookups.
 #[derive(Clone)]
 pub struct TaskLedgerStore {
@@ -162,21 +179,7 @@ impl TaskLedgerStore {
             .get()
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         conn.execute(
-            "INSERT INTO task_ledger_index
-                (run_id, task_id, project_path, status, verified, discovered_from,
-                 last_authority_node, updated_seq, updated_at, accepted_by_human,
-                 requirement_revised)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(run_id, task_id) DO UPDATE SET
-                project_path = excluded.project_path,
-                status = excluded.status,
-                verified = excluded.verified,
-                accepted_by_human = excluded.accepted_by_human,
-                requirement_revised = excluded.requirement_revised,
-                discovered_from = COALESCE(excluded.discovered_from, discovered_from),
-                last_authority_node = excluded.last_authority_node,
-                updated_seq = excluded.updated_seq,
-                updated_at = excluded.updated_at",
+            UPSERT_SQL,
             params![
                 input.run_id.to_string(),
                 input.task_id,
@@ -210,7 +213,7 @@ impl TaskLedgerStore {
         let mut sql = String::from(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
                     last_authority_node, updated_seq, updated_at, accepted_by_human,
-                    requirement_revised
+                    requirement_revised, projection_semantics
              FROM task_ledger_index WHERE 1=1",
         );
         let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -258,7 +261,7 @@ impl TaskLedgerStore {
         conn.query_row(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
                     last_authority_node, updated_seq, updated_at, accepted_by_human,
-                    requirement_revised
+                    requirement_revised, projection_semantics
              FROM task_ledger_index WHERE run_id = ? AND task_id = ?",
             params![run_id.to_string(), task_id],
             row_to_record,
@@ -269,6 +272,13 @@ impl TaskLedgerStore {
 }
 
 fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
+    if row.get::<_, i64>(11)? != 1 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            11,
+            rusqlite::types::Type::Integer,
+            "unsupported task ledger projection semantics".into(),
+        ));
+    }
     let run_id_str: String = row.get(0)?;
     let status_str: String = row.get(3)?;
     let verified_int: i64 = row.get(4)?;
@@ -363,6 +373,30 @@ mod tests {
             accepted_by_human: false,
             requirement_revised: false,
         }
+    }
+
+    #[test]
+    fn current_readers_refuse_unsupported_projection_semantics() {
+        let (home, store) = store();
+        let run = RunId::new();
+        store
+            .upsert(&upsert(
+                run,
+                "unsupported",
+                RoadmapStatus::Completed,
+                true,
+                None,
+            ))
+            .unwrap();
+        {
+            let conn = store.pool.get().unwrap();
+            // Model a future writer's row without weakening the installed schema.
+            conn.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE task_ledger_index SET projection_semantics=99 WHERE task_id='unsupported'; PRAGMA ignore_check_constraints=OFF;").unwrap();
+        }
+        assert!(store.get(run, "unsupported").is_err());
+        assert!(store.list(&TaskLedgerIndexFilter::default()).is_err());
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]

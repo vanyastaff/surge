@@ -1751,8 +1751,16 @@ impl RunMemory {
             VerificationInvalidation::None => {},
         }
         match &event.payload {
+            // Subsequent materializations are generated future-child artifacts.
+            // Only the first graph and explicit accepted revisions own this run.
             EventPayload::PipelineMaterialized { graph, .. }
-            | EventPayload::GraphRevisionAccepted { graph, .. } => {
+                if self.verification_graph.is_none() =>
+            {
+                self.verification_graph = Some(Box::new(
+                    crate::escalation::with_default_escalation_gates(graph),
+                ));
+            },
+            EventPayload::GraphRevisionAccepted { graph, .. } => {
                 self.verification_graph = Some(Box::new(
                     crate::escalation::with_default_escalation_gates(graph),
                 ));
@@ -3226,6 +3234,129 @@ mod tests {
                 },
             ),
         ]
+    }
+
+    #[test]
+    fn generated_child_cannot_grant_or_restore_parent_verification_authority() {
+        let verifier = NodeKey::try_from("verify_1").unwrap();
+        for revoke_by_revision in [false, true] {
+            let mut events = ledger_run_prefix();
+            let mut denied = ledger_graph();
+            denied.nodes.remove(&verifier);
+            if revoke_by_revision {
+                events.push(make_event(
+                    3,
+                    EventPayload::GraphRevisionAccepted {
+                        patch_id: RoadmapPatchId::new("rpatch-revoke").unwrap(),
+                        target: RoadmapPatchTarget::ProjectRoadmap {
+                            roadmap_path: "roadmap.toml".into(),
+                        },
+                        previous_graph_hash: ContentHash::compute(b"parent"),
+                        graph: Box::new(denied),
+                        graph_hash: ContentHash::compute(b"revoked"),
+                        active_pickup: ActivePickupPolicy::Allowed,
+                    },
+                ));
+            } else if let EventPayload::PipelineMaterialized { graph, .. } = &mut events[1].payload
+            {
+                **graph = denied;
+            }
+            events.push(make_event(
+                4,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(ledger_graph()),
+                    graph_hash: ContentHash::compute(b"future-child"),
+                },
+            ));
+            events.push(make_event(
+                5,
+                EventPayload::TaskVerified {
+                    task_id: "m1-t1".into(),
+                    node: verifier.clone(),
+                    evidence: ContentHash::compute(b"report"),
+                    report: None,
+                },
+            ));
+            let events = crate::verification_evidence::bind_fixture(&events);
+            let mut incremental = RunMemory::default();
+            for event in &events {
+                incremental.apply_event(event);
+            }
+            let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+                panic!("expected pipeline");
+            };
+            for memory in [&incremental, &memory] {
+                assert!(
+                    !memory
+                        .verification_graph
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .contains_key(&verifier)
+                );
+                assert_eq!(memory.ledger.rejected_verifications, 1);
+                assert!(
+                    !memory
+                        .ledger
+                        .tasks
+                        .get(&RoadmapTaskId::from("m1-t1"))
+                        .is_some_and(|task| task.verified)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepted_revision_restores_authority_across_later_child_generation() {
+        let mut events = ledger_run_prefix();
+        let mut denied = ledger_graph();
+        denied.nodes.remove(&NodeKey::try_from("verify_1").unwrap());
+        if let EventPayload::PipelineMaterialized { graph, .. } = &mut events[1].payload {
+            **graph = denied.clone();
+        }
+        events.extend([
+            make_event(
+                3,
+                EventPayload::GraphRevisionAccepted {
+                    patch_id: RoadmapPatchId::new("rpatch-restored").unwrap(),
+                    target: RoadmapPatchTarget::ProjectRoadmap {
+                        roadmap_path: "roadmap.toml".into(),
+                    },
+                    previous_graph_hash: ContentHash::compute(b"denied"),
+                    graph: Box::new(ledger_graph()),
+                    graph_hash: ContentHash::compute(b"accepted-restore"),
+                    active_pickup: ActivePickupPolicy::Allowed,
+                },
+            ),
+            make_event(
+                4,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(denied),
+                    graph_hash: ContentHash::compute(b"child"),
+                },
+            ),
+            make_event(
+                5,
+                EventPayload::TaskVerified {
+                    task_id: "m1-t1".into(),
+                    node: NodeKey::try_from("verify_1").unwrap(),
+                    evidence: ContentHash::compute(b"sealed"),
+                    report: None,
+                },
+            ),
+        ]);
+        let events = crate::verification_evidence::bind_fixture(&events);
+        let mut incremental = RunMemory::default();
+        for event in &events {
+            incremental.apply_event(event);
+        }
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected pipeline");
+        };
+        for memory in [&incremental, &memory] {
+            assert!(memory.ledger.tasks["m1-t1"].verified);
+            assert_eq!(memory.ledger.rejected_verifications, 0);
+        }
     }
 
     #[test]
