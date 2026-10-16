@@ -8,7 +8,49 @@ pub enum SelectionMode {
     ExplicitSetAck,
     InitialProvider,
 }
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptPolicy {
+    #[default]
+    StrictOne,
+    NativeSix,
+}
+fn strict_limit() -> usize {
+    1
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Rejection {
+    PromptLimitExhausted,
+    OverlappingPrompt,
+    RepeatedRequest,
+    RequestLimit,
+    WrongSession,
+    ModelProofUnavailable,
+    StaleAcknowledgement,
+    MalformedResponse,
+    RepeatedOpening,
+    InitializationOrder,
+    UnsupportedClientMethod,
+    MalformedFrame,
+    IncompletePrompt,
+    ModelProofInvalidated,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    Client,
+    Provider,
+    Eof,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Rejected {
+    pub code: Rejection,
+    pub direction: Direction,
+    pub turn: usize,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "RawCapture")]
 pub struct Capture {
     pub required_model: String,
     pub selection_mode: SelectionMode,
@@ -19,12 +61,98 @@ pub struct Capture {
     pub offered_models: Vec<String>,
     pub selected_model: Option<String>,
     pub prompts: usize,
+    #[serde(default)]
+    pub prompt_policy: PromptPolicy,
+    #[serde(default = "strict_limit")]
+    pub prompt_limit: usize,
+    #[serde(default)]
+    pub successful_responses: usize,
+    #[serde(default)]
+    pub error_responses: usize,
+    #[serde(default)]
+    pub prompt_pending: bool,
+    #[serde(default)]
+    pub rejection: Option<Rejected>,
     pub legacy_model_raw: Option<String>,
     pub legacy_model_base: Option<String>,
     pub legacy_model_effort: Option<String>,
 }
+#[derive(Deserialize)]
+struct RawCapture {
+    pub required_model: String,
+    pub selection_mode: SelectionMode,
+    pub selection_source: Option<SelectionMode>,
+    pub adapter_name: Option<String>,
+    pub adapter_version: Option<String>,
+    pub provider_session: Option<String>,
+    pub offered_models: Vec<String>,
+    pub selected_model: Option<String>,
+    pub prompts: usize,
+    #[serde(default)]
+    pub prompt_policy: PromptPolicy,
+    #[serde(default = "strict_limit")]
+    pub prompt_limit: usize,
+    #[serde(default)]
+    pub successful_responses: usize,
+    #[serde(default)]
+    pub error_responses: usize,
+    #[serde(default)]
+    pub prompt_pending: bool,
+    #[serde(default)]
+    pub rejection: Option<Rejected>,
+    pub legacy_model_raw: Option<String>,
+    pub legacy_model_base: Option<String>,
+    pub legacy_model_effort: Option<String>,
+}
+impl TryFrom<RawCapture> for Capture {
+    type Error = &'static str;
+    fn try_from(raw: RawCapture) -> Result<Self, Self::Error> {
+        let expected = match raw.prompt_policy {
+            PromptPolicy::StrictOne => 1,
+            PromptPolicy::NativeSix => 6,
+        };
+        if raw.prompt_limit != expected
+            || raw.prompts > expected
+            || raw.successful_responses.saturating_add(raw.error_responses) > raw.prompts
+        {
+            return Err("inconsistent capture policy");
+        }
+        Ok(Self {
+            required_model: raw.required_model,
+            selection_mode: raw.selection_mode,
+            selection_source: raw.selection_source,
+            adapter_name: raw.adapter_name,
+            adapter_version: raw.adapter_version,
+            provider_session: raw.provider_session,
+            offered_models: raw.offered_models,
+            selected_model: raw.selected_model,
+            prompts: raw.prompts,
+            prompt_policy: raw.prompt_policy,
+            prompt_limit: raw.prompt_limit,
+            successful_responses: raw.successful_responses,
+            error_responses: raw.error_responses,
+            prompt_pending: raw.prompt_pending,
+            rejection: raw.rejection,
+            legacy_model_raw: raw.legacy_model_raw,
+            legacy_model_base: raw.legacy_model_base,
+            legacy_model_effort: raw.legacy_model_effort,
+        })
+    }
+}
+impl Capture {
+    pub fn strict_policy(&self) -> bool {
+        self.prompt_policy == PromptPolicy::StrictOne && self.prompt_limit == 1
+    }
+}
 #[derive(Clone)]
 enum Pending {
+    Prompt {
+        opening_epoch: u64,
+        session: String,
+        turn: usize,
+    },
+    Mode,
+    UnrelatedConfig,
     Initialize,
     New {
         opening_epoch: u64,
@@ -37,12 +165,39 @@ enum Pending {
         value: String,
     },
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestKind {
+    Initialize,
+    New,
+    Mode,
+    Config,
+    Prompt,
+}
+impl Pending {
+    fn kind(&self) -> RequestKind {
+        match self {
+            Self::Initialize => RequestKind::Initialize,
+            Self::New { .. } => RequestKind::New,
+            Self::Mode => RequestKind::Mode,
+            Self::Selection { .. } | Self::UnrelatedConfig => RequestKind::Config,
+            Self::Prompt { .. } => RequestKind::Prompt,
+        }
+    }
+}
+struct Reservation {
+    kind: RequestKind,
+    completed: bool,
+}
 pub struct ProtocolCapture {
     pub snapshot: Capture,
     pending: std::collections::HashMap<String, Pending>,
     model_option: Option<String>,
     opening_epoch: u64,
     selection_epoch: u64,
+    reservations: std::collections::HashMap<String, Reservation>,
+    initialized: bool,
+    initialize_sent: bool,
+    opening_sent: bool,
 }
 fn identifier(value: &Value) -> Result<String, &'static str> {
     let value = value.as_str().ok_or("missing metadata identifier")?;
@@ -81,6 +236,12 @@ impl ProtocolCapture {
                 offered_models: vec![],
                 selected_model: None,
                 prompts: 0,
+                prompt_policy: PromptPolicy::StrictOne,
+                prompt_limit: 1,
+                successful_responses: 0,
+                error_responses: 0,
+                prompt_pending: false,
+                rejection: None,
                 legacy_model_raw: None,
                 legacy_model_base: None,
                 legacy_model_effort: None,
@@ -89,6 +250,10 @@ impl ProtocolCapture {
             model_option: None,
             opening_epoch: 0,
             selection_epoch: 0,
+            reservations: Default::default(),
+            initialized: false,
+            initialize_sent: false,
+            opening_sent: false,
         })
     }
     pub fn with_mode(model: String, mode: SelectionMode) -> Result<Self, &'static str> {
@@ -96,7 +261,153 @@ impl ProtocolCapture {
         capture.snapshot.selection_mode = mode;
         Ok(capture)
     }
+    pub fn native(model: String, mode: SelectionMode) -> Result<Self, &'static str> {
+        let mut capture = Self::with_mode(model, mode)?;
+        capture.snapshot.prompt_policy = PromptPolicy::NativeSix;
+        capture.snapshot.prompt_limit = 6;
+        Ok(capture)
+    }
+    fn is_native(&self) -> bool {
+        self.snapshot.prompt_policy == PromptPolicy::NativeSix
+    }
+    fn reject(&mut self, code: Rejection, direction: Direction) {
+        if self.snapshot.rejection.is_none() {
+            self.snapshot.rejection = Some(Rejected {
+                code,
+                direction,
+                turn: match direction {
+                    Direction::Client => self.snapshot.prompts + 1,
+                    Direction::Provider | Direction::Eof => self.snapshot.prompts.max(1),
+                },
+            });
+        }
+    }
+    pub fn framing_failure(&mut self, direction: Direction) {
+        self.reject(Rejection::MalformedFrame, direction);
+    }
+    pub fn eof(&mut self) -> Result<(), &'static str> {
+        if self.is_native() && self.snapshot.prompt_pending {
+            self.reject(Rejection::IncompletePrompt, Direction::Eof);
+            return Err("incomplete prompt");
+        }
+        Ok(())
+    }
     pub fn client(&mut self, frame: &Value) -> Result<(), &'static str> {
+        if self.is_native() {
+            if self.snapshot.rejection.is_some() {
+                return Err("observation rejected");
+            }
+            if let Err(code) = self.native_client(frame) {
+                self.reject(code, Direction::Client);
+                return Err("native client rejected");
+            }
+        }
+        let result = self.client_frame(frame);
+        if result.is_err() {
+            self.reject(Rejection::ModelProofUnavailable, Direction::Client);
+        }
+        result
+    }
+    fn native_client(&mut self, frame: &Value) -> Result<(), Rejection> {
+        if !frame.is_object() {
+            return Err(Rejection::MalformedFrame);
+        }
+        let Some(method) = frame.get("method") else {
+            // Replies to provider requests use their independent namespace.
+            if request_id(frame).is_err()
+                || (frame.get("result").is_some() == frame.get("error").is_some())
+            {
+                return Err(Rejection::MalformedFrame);
+            }
+            return Ok(());
+        };
+        if frame.get("result").is_some()
+            || frame.get("error").is_some()
+            || !frame["params"].is_object()
+        {
+            return Err(Rejection::MalformedFrame);
+        }
+        let method = method.as_str().ok_or(Rejection::MalformedFrame)?;
+        if !matches!(
+            method,
+            "initialize"
+                | "session/new"
+                | "session/set_mode"
+                | "session/set_config_option"
+                | "session/prompt"
+                | "session/cancel"
+        ) {
+            return Err(Rejection::UnsupportedClientMethod);
+        }
+        if method == "session/cancel" {
+            if frame.get("id").is_some() {
+                return Err(Rejection::MalformedFrame);
+            }
+            return self.same_session(&frame["params"]);
+        }
+        let id = request_id(frame).map_err(|_| Rejection::MalformedFrame)?;
+        if self.reservations.contains_key(&id) {
+            return Err(Rejection::RepeatedRequest);
+        }
+        if self.reservations.len() >= 64 || self.pending.len() >= 16 {
+            return Err(Rejection::RequestLimit);
+        }
+        let kind = match method {
+            "initialize" => RequestKind::Initialize,
+            "session/new" => RequestKind::New,
+            "session/set_mode" => RequestKind::Mode,
+            "session/set_config_option" => RequestKind::Config,
+            "session/prompt" => RequestKind::Prompt,
+            _ => return Err(Rejection::UnsupportedClientMethod),
+        };
+        self.reservations.insert(
+            id,
+            Reservation {
+                kind,
+                completed: false,
+            },
+        );
+        match method {
+            "initialize" => {
+                if self.initialize_sent {
+                    return Err(Rejection::InitializationOrder);
+                }
+                self.initialize_sent = true;
+            },
+            "session/new" => {
+                if !self.initialized {
+                    return Err(Rejection::InitializationOrder);
+                }
+                if self.opening_sent {
+                    return Err(Rejection::RepeatedOpening);
+                }
+                self.opening_sent = true;
+            },
+            _ => {
+                self.same_session(&frame["params"])?;
+                if method == "session/prompt" {
+                    if self.snapshot.prompt_pending {
+                        return Err(Rejection::OverlappingPrompt);
+                    }
+                    if self.snapshot.prompts >= 6 {
+                        return Err(Rejection::PromptLimitExhausted);
+                    }
+                } else if method != "session/cancel" && self.snapshot.prompt_pending {
+                    return Err(Rejection::OverlappingPrompt);
+                }
+            },
+        }
+        Ok(())
+    }
+    fn same_session(&self, params: &Value) -> Result<(), Rejection> {
+        if self.snapshot.provider_session.is_none()
+            || params["sessionId"].as_str() != self.snapshot.provider_session.as_deref()
+        {
+            return Err(Rejection::WrongSession);
+        }
+        Ok(())
+    }
+    fn client_frame(&mut self, frame: &Value) -> Result<(), &'static str> {
         let Some(method) = frame.get("method").and_then(Value::as_str) else {
             return Ok(());
         };
@@ -124,13 +435,23 @@ impl ProtocolCapture {
                 if self.model_option.as_deref() == params["configId"].as_str() {
                     self.invalidate_selection()?;
                 }
-                Pending::Selection {
-                    opening_epoch: self.opening_epoch,
-                    selection_epoch: self.selection_epoch,
-                    session: identifier(&params["sessionId"])?,
-                    option: identifier(&params["configId"])?,
-                    value: identifier(&params["value"])?,
+                if self.is_native() && self.model_option.as_deref() != params["configId"].as_str() {
+                    identifier(&params["configId"])?;
+                    identifier(&params["value"])?;
+                    Pending::UnrelatedConfig
+                } else {
+                    Pending::Selection {
+                        opening_epoch: self.opening_epoch,
+                        selection_epoch: self.selection_epoch,
+                        session: identifier(&params["sessionId"])?,
+                        option: identifier(&params["configId"])?,
+                        value: identifier(&params["value"])?,
+                    }
                 }
+            },
+            "session/set_mode" if self.is_native() => {
+                self.invalidate_selection()?;
+                Pending::Mode
             },
             "session/set_model" | "session/setModel" | "_session/set_model" => {
                 self.invalidate_selection()?;
@@ -146,12 +467,21 @@ impl ProtocolCapture {
                         .snapshot
                         .offered_models
                         .contains(&self.snapshot.required_model)
-                    || self.snapshot.prompts != 0
+                    || (!self.is_native() && self.snapshot.prompts != 0)
                 {
                     return Err("exact-model prompt admission rejected");
                 }
                 self.snapshot.prompts += 1;
-                return Ok(());
+                if self.is_native() {
+                    self.snapshot.prompt_pending = true;
+                    Pending::Prompt {
+                        opening_epoch: self.opening_epoch,
+                        session: identifier(&params["sessionId"])?,
+                        turn: self.snapshot.prompts,
+                    }
+                } else {
+                    return Ok(());
+                }
             },
             _ => return Ok(()),
         };
@@ -199,8 +529,173 @@ impl ProtocolCapture {
         self.snapshot.selection_source = None;
     }
     pub fn provider(&mut self, frame: &Value) -> Result<(), &'static str> {
+        if self.is_native() {
+            if self.snapshot.rejection.is_some() {
+                return Err("observation rejected");
+            }
+            if let Err(code) = self.native_provider(frame) {
+                self.reject(code, Direction::Provider);
+                return Err("native provider rejected");
+            }
+        }
+        let result = self.provider_frame(frame);
+        if let Err(error) = result {
+            let code = if error == "stale selection acknowledgement" {
+                Rejection::StaleAcknowledgement
+            } else {
+                Rejection::ModelProofUnavailable
+            };
+            self.reject(code, Direction::Provider);
+        }
+        result
+    }
+    fn native_provider(&mut self, frame: &Value) -> Result<(), Rejection> {
+        if !frame.is_object() {
+            return Err(Rejection::MalformedFrame);
+        }
+        if frame.get("method").is_some() {
+            if frame.get("result").is_some()
+                || frame.get("error").is_some()
+                || !frame["method"].is_string()
+            {
+                return Err(Rejection::MalformedFrame);
+            }
+            return Ok(());
+        }
+        let id = request_id(frame).map_err(|_| Rejection::MalformedResponse)?;
+        if self
+            .reservations
+            .get(&id)
+            .is_some_and(|reservation| reservation.completed)
+        {
+            return Err(Rejection::RepeatedRequest);
+        }
+        if let Some(pending) = self.pending.get(&id) {
+            if self
+                .reservations
+                .get(&id)
+                .is_none_or(|reservation| reservation.kind != pending.kind())
+            {
+                return Err(Rejection::MalformedResponse);
+            }
+            if frame.get("result").is_some() == frame.get("error").is_some() {
+                return Err(Rejection::MalformedResponse);
+            }
+            self.reservations
+                .get_mut(&id)
+                .ok_or(Rejection::MalformedResponse)?
+                .completed = true;
+        }
+        Ok(())
+    }
+    fn native_model_option<'a>(&self, result: &'a Value) -> Result<&'a Value, &'static str> {
+        let options = result["configOptions"]
+            .as_array()
+            .ok_or("model options missing")?;
+        let related: Vec<_> = options
+            .iter()
+            .filter(|option| {
+                option["category"] == "model"
+                    || (self.model_option.is_some()
+                        && option["id"].as_str() == self.model_option.as_deref())
+            })
+            .collect();
+        let [option] = related.as_slice() else {
+            return Err("model option ambiguous");
+        };
+        if option["category"] != "model" || option["type"] != "select" {
+            return Err("model option malformed");
+        }
+        Ok(option)
+    }
+    fn refresh_model(
+        &mut self,
+        result: &Value,
+        allow_initial_identity: bool,
+    ) -> Result<String, &'static str> {
+        self.snapshot.offered_models.clear();
+        let option = self.native_model_option(result)?;
+        let id = identifier(&option["id"])?;
+        if !allow_initial_identity && self.model_option.as_ref() != Some(&id) {
+            return Err("model option identity changed");
+        }
+        let offers = select_values(option)?;
+        let current = identifier(&option["currentValue"])?;
+        self.snapshot.offered_models = offers;
+        if current != self.snapshot.required_model
+            || !self.snapshot.offered_models.contains(&current)
+        {
+            return Err("current exact model unavailable");
+        }
+        if let Some(raw) = result
+            .get("models")
+            .and_then(|models| models.get("currentModelId"))
+        {
+            let raw = raw.as_str().ok_or("legacy model invalid")?;
+            let (base, effort) = legacy_selection(raw, &self.snapshot, result)?;
+            if base != current {
+                return Err("conflicting model metadata");
+            }
+            self.snapshot.legacy_model_raw = Some(raw.into());
+            self.snapshot.legacy_model_base = Some(base);
+            self.snapshot.legacy_model_effort = effort;
+        }
+        Ok(current)
+    }
+    fn native_update(&mut self, frame: &Value) -> Result<(), &'static str> {
+        if frame["params"]["sessionId"].as_str() != self.snapshot.provider_session.as_deref() {
+            return Err("update session mismatch");
+        }
+        let update = &frame["params"]["update"];
+        let options = update["configOptions"]
+            .as_array()
+            .ok_or("update options missing")?;
+        let model_related = options.iter().any(|option| {
+            option["category"] == "model" || option["id"].as_str() == self.model_option.as_deref()
+        });
+        if model_related {
+            if self.refresh_model(update, false).is_err() {
+                self.invalidate_selection()?;
+                self.reject(Rejection::ModelProofInvalidated, Direction::Provider);
+                return Err("model proof invalidated");
+            }
+        } else if options.iter().any(|option| {
+            option["category"] != "thought_level"
+                || option["type"] != "select"
+                || identifier(&option["id"]).is_err()
+                || identifier(&option["currentValue"]).is_err()
+                || select_values(option).is_err()
+        }) {
+            self.invalidate_selection()?;
+            return Err("ambiguous option update");
+        }
+        Ok(())
+    }
+    fn provider_frame(&mut self, frame: &Value) -> Result<(), &'static str> {
         // Provider-to-client requests have a separate identity namespace.
         if frame.get("method").is_some() {
+            if self.is_native()
+                && frame["method"] == "session/update"
+                && frame["params"]["update"]["sessionUpdate"] == "current_mode_update"
+            {
+                // A mode update does not prove a model change. Conservatively
+                // require renewed exact-model proof for this unproven transition.
+                self.same_session(&frame["params"])
+                    .map_err(|_| "mode update session mismatch")?;
+                identifier(&frame["params"]["update"]["currentModeId"])?;
+                self.invalidate_selection()?;
+                if self.snapshot.prompt_pending {
+                    self.reject(Rejection::ModelProofInvalidated, Direction::Provider);
+                    return Err("model proof invalidated");
+                }
+                return Ok(());
+            }
+            if self.is_native()
+                && frame["method"] == "session/update"
+                && frame["params"]["update"]["sessionUpdate"] == "config_option_update"
+            {
+                return self.native_update(frame);
+            }
             if frame["method"] == "session/update"
                 && frame["params"]["sessionId"].as_str()
                     == self.snapshot.provider_session.as_deref()
@@ -221,14 +716,51 @@ impl ProtocolCapture {
         let Some(pending) = self.pending.remove(&id) else {
             return Ok(());
         };
+        if let Pending::Prompt {
+            opening_epoch,
+            session,
+            turn,
+        } = &pending
+        {
+            if *opening_epoch != self.opening_epoch
+                || self.snapshot.provider_session.as_ref() != Some(session)
+                || *turn != self.snapshot.prompts
+            {
+                return Err("prompt opening mismatch");
+            }
+            self.snapshot.prompt_pending = false;
+            if frame.get("error").is_some() {
+                self.snapshot.error_responses += 1;
+            } else {
+                self.snapshot.successful_responses += 1;
+            }
+            return Ok(());
+        }
         if frame.get("error").is_some() {
+            if self.is_native() && matches!(pending, Pending::Initialize | Pending::New { .. }) {
+                return Err("handshake failed");
+            }
             return Ok(());
         }
         let result = frame.get("result").ok_or("missing correlated result")?;
         match pending {
+            Pending::Prompt { .. } | Pending::Mode => {},
+            Pending::UnrelatedConfig => {
+                if result["configOptions"].as_array().is_some_and(|options| {
+                    options.iter().any(|option| {
+                        option["category"] == "model"
+                            || option["id"].as_str() == self.model_option.as_deref()
+                    })
+                }) && self.refresh_model(result, false).is_err()
+                {
+                    self.invalidate_selection()?;
+                    return Err("model proof invalidated");
+                }
+            },
             Pending::Initialize => {
                 self.snapshot.adapter_name = Some(identifier(&result["agentInfo"]["name"])?);
                 self.snapshot.adapter_version = Some(identifier(&result["agentInfo"]["version"])?);
+                self.initialized = true;
             },
             Pending::New { opening_epoch } => {
                 if opening_epoch != self.opening_epoch {
@@ -236,11 +768,27 @@ impl ProtocolCapture {
                 }
                 self.invalidate_selection()?;
                 self.snapshot.provider_session = Some(identifier(&result["sessionId"])?);
-                let Some(option) = model_option(result) else {
-                    return Ok(());
+                let option = if self.is_native() {
+                    self.native_model_option(result)?
+                } else {
+                    let Some(option) = model_option(result) else {
+                        return Ok(());
+                    };
+                    option
                 };
                 self.model_option = Some(identifier(&option["id"])?);
                 self.snapshot.offered_models = select_values(option)?;
+                if self.is_native() {
+                    // Even explicit selection needs one structurally valid offered-model identity.
+                    identifier(&option["currentValue"])?;
+                    if !self
+                        .snapshot
+                        .offered_models
+                        .contains(&self.snapshot.required_model)
+                    {
+                        return Err("required model not offered");
+                    }
+                }
                 if self.snapshot.selection_mode == SelectionMode::InitialProvider {
                     self.observe_initial(result, option)?;
                 }
@@ -258,9 +806,18 @@ impl ProtocolCapture {
                     || self.model_option.as_ref() != Some(&option)
                     || value != self.snapshot.required_model
                 {
+                    if self.is_native() {
+                        return Err("stale selection acknowledgement");
+                    }
                     return Ok(());
                 }
                 self.clear_selection();
+                if self.is_native() {
+                    let current = self.refresh_model(result, false)?;
+                    self.snapshot.selected_model = Some(current);
+                    self.snapshot.selection_source = Some(SelectionMode::ExplicitSetAck);
+                    return Ok(());
+                }
                 if let Some(returned) = model_option(result)
                     && returned["id"].as_str() == Some(option.as_str())
                     && returned["currentValue"].as_str() == Some(value.as_str())
@@ -372,7 +929,9 @@ pub type ProcessPipes = (
     tokio::process::ChildStderr,
 );
 impl OwnedProcess {
-    pub fn spawn(mut command: std::process::Command, own_group: bool) -> std::io::Result<Self> {
+    pub fn spawn(command: std::process::Command, own_group: bool) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let mut command = command;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -505,9 +1064,13 @@ impl Drop for OwnedProcess {
 #[cfg(any(not(windows), test))]
 pub fn write_capture(file: &mut std::fs::File, capture: &Capture) -> Result<(), &'static str> {
     use std::io::{Seek, Write};
+    let bytes = serde_json::to_vec(capture).map_err(|_| "capture encode")?;
+    if bytes.len() > 65536 {
+        return Err("capture size limit");
+    }
     file.rewind().map_err(|_| "capture seek")?;
     file.set_len(0).map_err(|_| "capture truncate")?;
-    serde_json::to_writer(&mut *file, capture).map_err(|_| "capture encode")?;
+    file.write_all(&bytes).map_err(|_| "capture write")?;
     file.flush().map_err(|_| "capture flush")
 }
 
@@ -571,6 +1134,11 @@ impl EvidenceFile {
         }
     }
     pub fn write(&mut self, capture: &Capture) -> Result<(), &'static str> {
+        if !capture.strict_policy()
+            && !(capture.prompt_policy == PromptPolicy::NativeSix && capture.prompt_limit == 6)
+        {
+            return Err("inconsistent capture policy");
+        }
         #[cfg(not(windows))]
         {
             write_capture(&mut self.file, capture)
@@ -751,6 +1319,8 @@ mod tests {
         );
         assert_ne!(ReadStatus::Valid, ReadStatus::Unconfirmed);
         drop(file);
+        #[cfg(windows)]
+        drop(owner);
         root.close().unwrap();
     }
 
@@ -770,6 +1340,422 @@ mod tests {
     }
     fn prompt(session: &str) -> Value {
         json!({"id":4,"method":"session/prompt","params":{"sessionId":session,"prompt":[{"text":"SECRET_PROMPT"}]}})
+    }
+    #[test]
+    fn native_serial_second_prompt_is_observable_after_correlated_response() {
+        let mut c = ProtocolCapture::native(MODEL.into(), SelectionMode::ExplicitSetAck).unwrap();
+        session(&mut c);
+        select(&mut c, MODEL);
+        c.client(&prompt("session-a")).unwrap();
+        c.provider(&json!({"id":4,"result":{"stopReason":"end_turn"}}))
+            .unwrap();
+        let mut second = prompt("session-a");
+        second["id"] = json!(5);
+        c.client(&second)
+            .expect("second serial exact-model prompt must be observable");
+        assert_eq!(c.snapshot.prompts, 2);
+    }
+    fn native_ready() -> ProtocolCapture {
+        let mut c = ProtocolCapture::native(MODEL.into(), SelectionMode::ExplicitSetAck).unwrap();
+        session(&mut c);
+        select(&mut c, MODEL);
+        c
+    }
+    fn numbered_prompt(id: u64) -> Value {
+        let mut frame = prompt("session-a");
+        frame["id"] = json!(id);
+        frame
+    }
+    fn prompt_ack(id: u64) -> Value {
+        json!({"id":id,"result":{"stopReason":"end_turn"}})
+    }
+    fn model_update(options: Value) -> Value {
+        json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"config_option_update","configOptions":options}}})
+    }
+    fn model_options() -> Value {
+        json!([{"id":"model","category":"model","type":"select","currentValue":MODEL,"options":[{"value":MODEL}]}])
+    }
+    #[test]
+    fn native_six_serial_turns_are_bounded_in_both_selection_modes() {
+        for mode in [
+            SelectionMode::ExplicitSetAck,
+            SelectionMode::InitialProvider,
+        ] {
+            let mut c = ProtocolCapture::native(MODEL.into(), mode).unwrap();
+            if mode == SelectionMode::InitialProvider {
+                initial(&mut c, Some(MODEL), None, true, Some("session-a"));
+            } else {
+                session(&mut c);
+                select(&mut c, MODEL);
+            }
+            for id in 10..16 {
+                c.client(&numbered_prompt(id)).unwrap();
+                assert!(c.snapshot.prompt_pending);
+                if id == 11 {
+                    c.provider(&json!({"id":id,"error":{"message":"ERROR_SENTINEL"}}))
+                        .unwrap();
+                } else {
+                    c.provider(&prompt_ack(id)).unwrap();
+                }
+                assert!(!c.snapshot.prompt_pending);
+            }
+            assert_eq!(
+                (
+                    c.snapshot.prompts,
+                    c.snapshot.successful_responses,
+                    c.snapshot.error_responses
+                ),
+                (6, 5, 1)
+            );
+            assert!(c.client(&numbered_prompt(16)).is_err());
+            assert_eq!(
+                c.snapshot.rejection.unwrap().code,
+                Rejection::PromptLimitExhausted
+            );
+        }
+    }
+    #[test]
+    fn native_overlap_replays_cross_namespace_and_response_shapes() {
+        for case in [
+            "overlap",
+            "replay-init",
+            "replay-new",
+            "replay-config",
+            "replay-prompt",
+            "duplicate-init-response",
+            "duplicate-prompt-response",
+            "both",
+            "neither",
+            "wrong-session",
+            "mode-during",
+            "config-during",
+        ] {
+            let mut c = native_ready();
+            c.client(&numbered_prompt(10)).unwrap();
+            c.provider(&json!({"id":10,"method":"session/request_permission","params":{"tool":"TOOL_SENTINEL"}})).unwrap();
+            assert!(
+                c.snapshot.prompt_pending,
+                "provider request completed client prompt"
+            );
+            c.client(&json!({"id":10,"result":{"outcome":"cancelled"}}))
+                .unwrap();
+            assert!(c.snapshot.prompt_pending);
+            let rejected = match case {
+                "overlap" => c.client(&numbered_prompt(11)),
+                "replay-init" => { c.provider(&prompt_ack(10)).unwrap(); c.client(&numbered_prompt(1)) },
+                "replay-new" => { c.provider(&prompt_ack(10)).unwrap(); c.client(&numbered_prompt(2)) },
+                "replay-config" => { c.provider(&prompt_ack(10)).unwrap(); c.client(&numbered_prompt(3)) },
+                "replay-prompt" => { c.provider(&prompt_ack(10)).unwrap(); c.client(&json!({"id":10,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"model","value":MODEL}})) },
+                "duplicate-init-response" => c.provider(&json!({"id":1,"result":{"agentInfo":{"name":"replacement","version":"9"}}})),
+                "duplicate-prompt-response" => { c.provider(&prompt_ack(10)).unwrap(); c.provider(&prompt_ack(10)) },
+                "both" => c.provider(&json!({"id":10,"result":{},"error":{}})),
+                "neither" => c.provider(&json!({"id":10})),
+                "wrong-session" => { c.provider(&prompt_ack(10)).unwrap(); c.client(&prompt("session-b")) },
+                "mode-during" => c.client(&json!({"id":20,"method":"session/set_mode","params":{"sessionId":"session-a","modeId":"code"}})),
+                "config-during" => c.client(&json!({"id":20,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"model","value":MODEL}})),
+                _ => unreachable!(),
+            };
+            assert!(rejected.is_err(), "accepted {case}");
+            assert_eq!(c.snapshot.prompts, 1);
+        }
+    }
+    #[test]
+    fn native_fresh_handshake_and_closed_method_inventory() {
+        for phase in 0..4 {
+            for method in [
+                "session/load",
+                "session/resume",
+                "session/fork",
+                "session/set_model",
+                "session/setModel",
+                "_session/set_model",
+                "_extension",
+                "session/unknown",
+            ] {
+                let mut c =
+                    ProtocolCapture::native(MODEL.into(), SelectionMode::ExplicitSetAck).unwrap();
+                if phase > 0 {
+                    c.client(&json!({"id":1,"method":"initialize","params":{}}))
+                        .unwrap();
+                }
+                if phase > 1 {
+                    c.provider(
+                        &json!({"id":1,"result":{"agentInfo":{"name":"adapter","version":"1"}}}),
+                    )
+                    .unwrap();
+                }
+                if phase > 2 {
+                    c.client(&json!({"id":2,"method":"session/new","params":{}}))
+                        .unwrap();
+                }
+                assert!(
+                    c.client(&json!({"id":30,"method":method,"params":{}}))
+                        .is_err(),
+                    "accepted {method} in phase {phase}"
+                );
+            }
+        }
+        for phase in 0..4 {
+            let mut c =
+                ProtocolCapture::native(MODEL.into(), SelectionMode::ExplicitSetAck).unwrap();
+            if phase == 0 {
+                assert!(
+                    c.client(&json!({"id":2,"method":"session/new","params":{}}))
+                        .is_err()
+                );
+            } else {
+                c.client(&json!({"id":1,"method":"initialize","params":{}}))
+                    .unwrap();
+                if phase > 1 {
+                    c.provider(
+                        &json!({"id":1,"result":{"agentInfo":{"name":"adapter","version":"1"}}}),
+                    )
+                    .unwrap();
+                }
+                if phase > 2 {
+                    c.client(&json!({"id":2,"method":"session/new","params":{}}))
+                        .unwrap();
+                }
+                assert!(
+                    c.client(&json!({"id":30,"method":"initialize","params":{}}))
+                        .is_err()
+                );
+            }
+        }
+        let mut c = native_ready();
+        assert!(
+            c.client(&json!({"id":30,"method":"session/new","params":{}}))
+                .is_err()
+        );
+    }
+    #[test]
+    fn native_request_budget_retains_completed_ids_and_pending_bound() {
+        let mut c = native_ready();
+        for id in 4..65 {
+            c.client(&json!({"id":id,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"thought","value":"high"}})).unwrap();
+            c.provider(&json!({"id":id,"result":{}})).unwrap();
+        }
+        assert_eq!(c.reservations.len(), 64);
+        assert!(c.client(&numbered_prompt(65)).is_err());
+        assert_eq!(c.snapshot.rejection.unwrap().code, Rejection::RequestLimit);
+        let mut c = native_ready();
+        for id in 4..20 {
+            c.client(&json!({"id":id,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"thought","value":"high"}})).unwrap();
+        }
+        assert!(c.client(&numbered_prompt(20)).is_err());
+        assert_eq!(c.pending.len(), 16);
+    }
+    #[test]
+    fn native_model_metadata_is_current_for_updates_and_selection_acknowledgements() {
+        for during in [false, true] {
+            for kind in [
+                "removed",
+                "missing",
+                "malformed",
+                "ambiguous",
+                "identity",
+                "category",
+                "type",
+                "wrong-current",
+                "conflicting-legacy",
+            ] {
+                let mut c = native_ready();
+                if during {
+                    c.client(&numbered_prompt(10)).unwrap();
+                }
+                let mut options = model_options();
+                match kind {
+                    "removed" => options[0]["options"] = json!([{"value":"other"}]),
+                    "missing" => {
+                        options[0].as_object_mut().unwrap().remove("options");
+                    },
+                    "malformed" => options[0]["options"] = json!("invalid"),
+                    "ambiguous" => {
+                        let duplicate = options[0].clone();
+                        options.as_array_mut().unwrap().push(duplicate);
+                    },
+                    "identity" => options[0]["id"] = json!("other-model"),
+                    "category" => options[0]["category"] = json!("thought_level"),
+                    "type" => options[0]["type"] = json!("text"),
+                    "wrong-current" => options[0]["currentValue"] = json!("other"),
+                    _ => {},
+                }
+                let mut update = model_update(options.clone());
+                if kind == "conflicting-legacy" {
+                    update["params"]["update"]["models"] = json!({"currentModelId":"other"});
+                }
+                assert!(
+                    c.provider(&update).is_err(),
+                    "accepted update {kind} pending={during}"
+                );
+                assert!(c.snapshot.selected_model.is_none());
+                assert!(
+                    c.provider(&model_update(model_options())).is_err(),
+                    "resurrected failed observation"
+                );
+                let mut c = native_ready();
+                c.client(&json!({"id":20,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"model","value":MODEL}})).unwrap();
+                let mut result = json!({"configOptions":options});
+                if kind == "conflicting-legacy" {
+                    result["models"] = json!({"currentModelId":"other"});
+                }
+                assert!(
+                    c.provider(&json!({"id":20,"result":result})).is_err(),
+                    "accepted ACK {kind}"
+                );
+                assert!(c.snapshot.selected_model.is_none());
+            }
+        }
+    }
+    #[test]
+    fn native_mode_change_requires_new_ack_and_updates_never_resurrect_proof() {
+        let mut c = native_ready();
+        c.client(&json!({"id":20,"method":"session/set_mode","params":{"sessionId":"session-a","modeId":"code"}})).unwrap();
+        c.provider(&json!({"id":20,"result":{}})).unwrap();
+        c.provider(&model_update(model_options())).unwrap();
+        assert!(c.snapshot.selected_model.is_none());
+        c.client(&json!({"id":21,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"model","value":MODEL}})).unwrap();
+        c.provider(&json!({"id":21,"result":{"configOptions":model_options()}}))
+            .unwrap();
+        c.client(&numbered_prompt(22)).unwrap();
+        c.client(&json!({"method":"session/cancel","params":{"sessionId":"session-a"}}))
+            .unwrap();
+        assert!(c.snapshot.prompt_pending);
+        c.provider(&prompt_ack(22)).unwrap();
+        assert!(c.eof().is_ok());
+    }
+    #[test]
+    fn native_error_response_ids_remain_reserved_and_config_collisions_cannot_prompt() {
+        let mut c = native_ready();
+        c.client(&numbered_prompt(10)).unwrap();
+        c.provider(&json!({"id":10,"error":{"message":"ERROR_SENTINEL"}}))
+            .unwrap();
+        assert!(c.client(&numbered_prompt(10)).is_err());
+        assert_eq!(c.snapshot.error_responses, 1);
+        let mut c = native_ready();
+        c.client(&json!({"id":10,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"thought","value":"high"}})).unwrap();
+        assert!(c.client(&numbered_prompt(10)).is_err());
+        assert_eq!(c.snapshot.prompts, 0);
+    }
+    #[test]
+    fn native_unrelated_well_formed_thought_updates_preserve_only_existing_proof() {
+        let mut c = native_ready();
+        c.provider(&model_update(json!([{"id":"thought","category":"thought_level","type":"select","currentValue":"high","options":[{"value":"high"}]}]))).unwrap();
+        assert_eq!(c.snapshot.selected_model.as_deref(), Some(MODEL));
+        c.client(&numbered_prompt(10)).unwrap();
+    }
+    #[test]
+    fn native_full_same_model_option_update_during_prompt_preserves_current_proof() {
+        for mode in [
+            SelectionMode::ExplicitSetAck,
+            SelectionMode::InitialProvider,
+        ] {
+            let mut c = ProtocolCapture::native(MODEL.into(), mode).unwrap();
+            if mode == SelectionMode::InitialProvider {
+                initial(&mut c, Some(MODEL), None, true, Some("session-a"));
+            } else {
+                session(&mut c);
+                select(&mut c, MODEL);
+            }
+            c.client(&numbered_prompt(10)).unwrap();
+            let mut options = model_options();
+            options.as_array_mut().unwrap().extend([
+                json!({"id":"mode","category":"mode","type":"select","currentValue":"auto","options":[{"value":"auto"}]}),
+                json!({"id":"thought","category":"thought_level","type":"select","currentValue":"high","options":[{"value":"high"}]}),
+                json!({"id":"collaboration","type":"select","currentValue":"default","options":[{"value":"default"}]}),
+            ]);
+            c.provider(&model_update(options)).unwrap();
+            assert_eq!(c.snapshot.selected_model.as_deref(), Some(MODEL));
+            assert_eq!(c.snapshot.selection_source, Some(mode));
+            assert!(c.snapshot.prompt_pending);
+            c.provider(&prompt_ack(10)).unwrap();
+            c.client(&numbered_prompt(11)).unwrap();
+        }
+    }
+    #[test]
+    fn native_provider_mode_update_invalidates_selection_and_fails_an_outstanding_turn() {
+        for during in [false, true] {
+            let mut c = native_ready();
+            if during {
+                c.client(&numbered_prompt(10)).unwrap();
+            }
+            let result=c.provider(&json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"current_mode_update","currentModeId":"code"}}}));
+            assert_eq!(result.is_err(), during);
+            assert!(c.snapshot.selected_model.is_none());
+            if !during {
+                c.client(&json!({"id":20,"method":"session/set_config_option","params":{"sessionId":"session-a","configId":"model","value":MODEL}})).unwrap();
+                c.provider(&json!({"id":20,"result":{"configOptions":model_options()}}))
+                    .unwrap();
+                c.client(&numbered_prompt(21)).unwrap();
+            }
+        }
+    }
+    #[test]
+    fn native_unknown_response_does_not_close_prompt_and_eof_is_incomplete() {
+        let mut c = native_ready();
+        c.client(&numbered_prompt(10)).unwrap();
+        c.provider(&prompt_ack(999)).unwrap();
+        assert!(c.snapshot.prompt_pending);
+        assert!(c.eof().is_err());
+        assert_eq!(
+            c.snapshot.rejection.unwrap().code,
+            Rejection::IncompletePrompt
+        );
+        assert_eq!(c.snapshot.successful_responses, 0);
+    }
+    #[test]
+    fn framing_failure_has_only_safe_metadata_and_cannot_be_resurrected() {
+        let mut c = native_ready();
+        c.framing_failure(Direction::Provider);
+        assert_eq!(
+            c.snapshot.rejection.as_ref().unwrap().code,
+            Rejection::MalformedFrame
+        );
+        assert!(c.client(&numbered_prompt(10)).is_err());
+        assert_eq!(c.snapshot.prompts, 0);
+    }
+    #[test]
+    fn native_privacy_and_legacy_capture_defaults_and_policy_consistency() {
+        let mut c = native_ready();
+        let mut frame = numbered_prompt(10);
+        frame["id"] = json!("REQUEST_ID_SENTINEL");
+        frame["params"]["credentials"] = json!("AUTH_SENTINEL");
+        c.client(&frame).unwrap();
+        c.provider(&json!({"id":"REQUEST_ID_SENTINEL","error":{"message":"RAW_ERROR_SENTINEL","data":{"output":"OUTPUT_SENTINEL"}}})).unwrap();
+        let bytes = serde_json::to_string(&c.snapshot).unwrap();
+        for secret in [
+            "SECRET_PROMPT",
+            "REQUEST_ID_SENTINEL",
+            "AUTH_SENTINEL",
+            "RAW_ERROR_SENTINEL",
+            "OUTPUT_SENTINEL",
+        ] {
+            assert!(!bytes.contains(secret));
+        }
+        let mut raw =
+            serde_json::to_value(ProtocolCapture::new(MODEL.into()).unwrap().snapshot).unwrap();
+        for field in [
+            "prompt_policy",
+            "prompt_limit",
+            "successful_responses",
+            "error_responses",
+            "prompt_pending",
+            "rejection",
+        ] {
+            raw.as_object_mut().unwrap().remove(field);
+        }
+        let legacy: Capture = serde_json::from_value(raw.clone()).unwrap();
+        assert!(legacy.strict_policy());
+        raw["prompt_limit"] = json!(6);
+        assert!(serde_json::from_value::<Capture>(raw.clone()).is_err());
+        raw["prompt_policy"] = json!("native_six");
+        assert!(
+            !serde_json::from_value::<Capture>(raw.clone())
+                .unwrap()
+                .strict_policy()
+        );
+        raw["prompt_limit"] = json!(1);
+        assert!(serde_json::from_value::<Capture>(raw).is_err());
     }
     #[test]
     fn wrong_acknowledgement_cannot_forward_prompt() {
@@ -1055,6 +2041,15 @@ mod tests {
         let mut file = EvidenceFile::create(&path).unwrap();
         let c = ProtocolCapture::new(MODEL.into()).unwrap();
         file.write(&c.snapshot).unwrap();
+        let retained = std::fs::read(&path).unwrap();
+        let mut oversized = c.snapshot.clone();
+        oversized.required_model = "x".repeat(65537);
+        assert!(file.write(&oversized).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            retained,
+            "oversized snapshot replaced retained evidence"
+        );
         assert!(EvidenceFile::create(&path).is_err());
         drop(file);
         assert_eq!(

@@ -193,7 +193,12 @@ fn read_observation(
 fn project_capture(observed: &mut ParentObservation, home: &Path, model: &str) {
     match live_provider_capture::read_bounded::<live_provider_capture::Capture>(&capture_path(home))
     {
-        Ok(capture) if capture.required_model == model && capture.prompts <= 1 => {
+        Ok(capture)
+            if capture.rejection.is_none()
+                && capture.strict_policy()
+                && capture.required_model == model
+                && capture.prompts <= 1 =>
+        {
             observed.capture_status = ReadStatus::Valid;
             observed.offered_exact_observed = Some(
                 capture
@@ -481,11 +486,12 @@ fn provider_launch(live: bool) -> Result<ProviderLaunch, String> {
         })
     } else {
         Ok(ProviderLaunch {
-            command: Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!(
-                    "../../target/debug/mock_acp_agent{}",
-                    std::env::consts::EXE_SUFFIX
-                ))
+            command: proxy_binary()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(format!("mock_acp_agent{}", std::env::consts::EXE_SUFFIX))
                 .to_string_lossy()
                 .into_owned(),
             args: vec![
@@ -530,7 +536,7 @@ fn check_provider_capture(
     let Some((session, provider)) = sessions.next() else {
         return Err("provider session proof missing".into());
     };
-    if sessions.next().is_some() || capture.provider_session.as_deref() != Some(provider)
+    if capture.rejection.is_some() || !capture.strict_policy() || sessions.next().is_some() || capture.provider_session.as_deref() != Some(provider)
         || capture.required_model != model || capture.selected_model.as_deref() != Some(model)
         || !capture.offered_models.iter().any(|offered| offered == model) || capture.prompts != 1
         || capture.selection_mode != live_provider_capture::SelectionMode::ExplicitSetAck
@@ -1233,6 +1239,463 @@ async fn proxy_cancellation_settles_observed_descendant_and_owned_container() {
     .unwrap();
 }
 
+struct NativeWire {
+    home: FixtureHome,
+    root: tempfile::TempDir,
+    marker: PathBuf,
+    owner: live_provider_capture::OwnedProcess,
+    input: Option<tokio::process::ChildStdin>,
+    output: tokio::io::BufReader<tokio::process::ChildStdout>,
+    stderr: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+    received_expected: Vec<String>,
+    provider_identity: Option<surge_core::execution_recovery::process::ProcessIdentity>,
+}
+impl NativeWire {
+    fn start(case: &str, initial: bool) -> Self {
+        let home = FixtureHome::new().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("received-frames");
+        let binary = proxy_binary();
+        let mut command = std::process::Command::new(&binary);
+        if case == "native-publication-failure" {
+            command.arg("--fixture-rejection-publication-failure");
+        }
+        command
+            .arg("--native-multi-turn")
+            .arg(capture_path(home.path()));
+        if initial {
+            command.arg("--initial-provider");
+        }
+        command
+            .arg("gpt-6.1-sol")
+            .arg(&binary)
+            .arg("--fixture-wire")
+            .arg(case)
+            .arg(&marker)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut owner = live_provider_capture::OwnedProcess::spawn(command, true).unwrap();
+        let (input, output, error) = owner.pipes().unwrap();
+        let stderr = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut bytes = Vec::new();
+            error.take(65537).read_to_end(&mut bytes).await?;
+            assert!(bytes.len() <= 65536);
+            Ok(bytes)
+        });
+        Self {
+            home,
+            root,
+            marker,
+            owner,
+            input: Some(input),
+            output: tokio::io::BufReader::new(output),
+            stderr,
+            received_expected: vec![],
+            provider_identity: None,
+        }
+    }
+    async fn provider_ready(&mut self) {
+        if self.provider_identity.is_some() {
+            return;
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(self.marker.with_extension("pid"))
+                    && let Ok(pid) = pid.parse()
+                    && let Ok((identity, _)) = surge_acp::process_evidence::observe(pid)
+                {
+                    self.provider_identity = Some(identity);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    async fn send(&mut self, frame: &serde_json::Value, forwarded: bool) {
+        self.provider_ready().await;
+        let mut bytes = serde_json::to_vec(frame).unwrap();
+        if forwarded {
+            self.received_expected.push(format!(
+                "{} {}",
+                frame["method"].as_str().unwrap_or("reply"),
+                surge_core::ContentHash::compute(&bytes)
+            ));
+        }
+        bytes.push(b'\n');
+        live_provider_capture::forward(self.input.as_mut().unwrap(), &bytes)
+            .await
+            .unwrap();
+    }
+    async fn message(&mut self) -> serde_json::Value {
+        use tokio::io::AsyncBufReadExt;
+        let mut reply = String::new();
+        tokio::time::timeout(Duration::from_secs(3), self.output.read_line(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(&reply).expect("actual forwarded reply missing")
+    }
+    async fn reply(&mut self, id: u64) -> serde_json::Value {
+        let response = self.message().await;
+        assert_eq!(response["id"], id);
+        response
+    }
+    async fn wait_received(&self, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(&self.marker)
+                    .unwrap_or_default()
+                    .lines()
+                    .count()
+                    == expected
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    async fn handshake(&mut self, steps: usize) {
+        for frame in wire_handshake().into_iter().take(steps) {
+            self.send(&frame, true).await;
+            self.reply(frame["id"].as_u64().unwrap()).await;
+        }
+    }
+    async fn finish(self) -> live_provider_capture::Capture {
+        self.finish_publication(false).await
+    }
+    async fn finish_publication(mut self, unavailable: bool) -> live_provider_capture::Capture {
+        use tokio::io::AsyncReadExt;
+        let mut tail = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), self.output.read_to_end(&mut tail))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(tail.is_empty(), "rejected provider frame reached client");
+        drop(self.input);
+        assert!(
+            !self
+                .owner
+                .wait(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .success()
+        );
+        self.owner.terminate().unwrap();
+        self.owner.wait(Duration::from_secs(5)).await.unwrap();
+        let stderr = tokio::time::timeout(Duration::from_secs(2), self.stderr)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stderr,
+            if unavailable {
+                b"capture_unavailable\n".to_vec()
+            } else {
+                vec![]
+            }
+        );
+        if let Some(identity) = &self.provider_identity {
+            assert!(
+                !surge_acp::process_evidence::observe(identity.pid())
+                    .is_ok_and(|(current, _)| &current == identity),
+                "observed provider writer survived proxy settlement"
+            );
+        }
+        let actual = std::fs::read_to_string(&self.marker).unwrap_or_default();
+        assert_eq!(
+            actual.lines().collect::<Vec<_>>(),
+            self.received_expected,
+            "independent provider received a rejected or changed frame"
+        );
+        let capture = live_provider_capture::read_bounded::<live_provider_capture::Capture>(
+            &capture_path(self.home.path()),
+        )
+        .unwrap();
+        assert_eq!(capture.rejection.is_none(), unavailable);
+        self.home.close().unwrap();
+        self.root.close().unwrap();
+        capture
+    }
+}
+fn wire_handshake() -> [serde_json::Value; 3] {
+    [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"session/new","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/set_config_option","params":{"sessionId":"fixture-session","configId":"model","value":"gpt-6.1-sol"}}),
+    ]
+}
+fn wire_prompt(id: u64) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":id,"method":"session/prompt","params":{"sessionId":"fixture-session","prompt":[{"type":"text","text":"PROMPT_SENTINEL"}]}})
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_incomplete_eof_and_failed_rejection_publication_settle_children() {
+    let mut wire = NativeWire::start("native-hold", false);
+    wire.handshake(3).await;
+    wire.send(&wire_prompt(10), true).await;
+    wire.wait_received(4).await;
+    wire.input.take();
+    let capture = wire.finish().await;
+    assert_eq!(
+        capture.rejection.unwrap().code,
+        live_provider_capture::Rejection::IncompletePrompt
+    );
+    assert!(capture.prompt_pending);
+    let mut wire = NativeWire::start("native-publication-failure", false);
+    wire.handshake(3).await;
+    wire.send(&wire_prompt(1), false).await;
+    let capture = wire.finish_publication(true).await;
+    assert_eq!(capture.prompts, 0); // Last successfully published snapshot, not a claimed durable rejection.
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_pending_config_collision_and_provider_namespace_do_not_complete_prompts() {
+    let mut wire = NativeWire::start("native-hold-config", false);
+    wire.handshake(2).await;
+    wire.send(&wire_handshake()[2], true).await;
+    wire.wait_received(3).await;
+    wire.send(&wire_prompt(3), false).await;
+    let capture = wire.finish().await;
+    assert_eq!(capture.prompts, 0);
+    let mut wire = NativeWire::start("native-provider-request", false);
+    wire.handshake(3).await;
+    wire.send(&wire_prompt(10), true).await;
+    let request = wire.reply(10).await;
+    assert_eq!(request["method"], "session/request_permission");
+    wire.send(
+        &serde_json::json!({"jsonrpc":"2.0","id":10,"result":{"outcome":"cancelled"}}),
+        true,
+    )
+    .await;
+    wire.wait_received(5).await;
+    wire.input.take();
+    let capture = wire.finish().await;
+    assert!(capture.prompt_pending);
+    assert_eq!(capture.successful_responses, 0);
+    assert_eq!(
+        capture.rejection.unwrap().code,
+        live_provider_capture::Rejection::IncompletePrompt
+    );
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_full_same_model_updates_during_prompt_remain_transparent() {
+    let mut wire = NativeWire::start("native-full-update", false);
+    wire.handshake(3).await;
+    for id in 10..12 {
+        wire.send(&wire_prompt(id), true).await;
+        let update = wire.message().await;
+        assert_eq!(update["method"], "session/update");
+        assert_eq!(
+            update["params"]["update"]["configOptions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            update["params"]["update"]["configOptions"][0]["currentValue"],
+            "gpt-6.1-sol"
+        );
+        let result = wire.reply(id).await;
+        assert_eq!(result["result"]["stopReason"], "end_turn");
+    }
+    wire.send(&wire_prompt(1), false).await;
+    let capture = wire.finish().await;
+    assert_eq!(capture.prompts, 2);
+    assert_eq!(capture.successful_responses, 2);
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_pending_handshake_and_lifetime_request_budgets_fail_before_forwarding() {
+    for (case, steps, held, bad) in [
+        (
+            "native-hold-init",
+            0,
+            wire_handshake()[0].clone(),
+            wire_handshake()[1].clone(),
+        ),
+        (
+            "native-hold-init",
+            0,
+            wire_handshake()[0].clone(),
+            serde_json::json!({"id":30,"method":"initialize","params":{}}),
+        ),
+        (
+            "native-hold-new",
+            1,
+            wire_handshake()[1].clone(),
+            serde_json::json!({"id":30,"method":"session/new","params":{}}),
+        ),
+    ] {
+        let mut wire = NativeWire::start(case, false);
+        wire.handshake(steps).await;
+        wire.send(&held, true).await;
+        wire.wait_received(steps + 1).await;
+        wire.send(&bad, false).await;
+        let capture = wire.finish().await;
+        assert_eq!(capture.prompts, 0);
+    }
+    let mut wire = NativeWire::start("native", false);
+    wire.handshake(3).await;
+    for id in 4..65 {
+        wire.send(&serde_json::json!({"id":id,"method":"session/set_config_option","params":{"sessionId":"fixture-session","configId":"thought","value":"high"}}),true).await;
+        wire.reply(id).await;
+    }
+    wire.send(&wire_prompt(65), false).await;
+    let capture = wire.finish().await;
+    assert_eq!(
+        capture.rejection.unwrap().code,
+        live_provider_capture::Rejection::RequestLimit
+    );
+    let mut wire = NativeWire::start("native-hold-config", false);
+    wire.handshake(2).await;
+    for id in 3..19 {
+        wire.send(&serde_json::json!({"id":id,"method":"session/set_config_option","params":{"sessionId":"fixture-session","configId":"thought","value":"high"}}),true).await;
+    }
+    wire.wait_received(18).await;
+    wire.send(&wire_prompt(19), false).await;
+    let capture = wire.finish().await;
+    assert_eq!(
+        capture.rejection.unwrap().code,
+        live_provider_capture::Rejection::RequestLimit
+    );
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_six_turns_forward_unchanged_and_seventh_is_not_forwarded() {
+    for (case, initial, steps) in [
+        ("native", false, 3),
+        ("native-initial", true, 2),
+        ("native-error-response", false, 3),
+    ] {
+        let mut wire = NativeWire::start(case, initial);
+        wire.handshake(steps).await;
+        for id in 10..16 {
+            wire.send(&wire_prompt(id), true).await;
+            let actual = wire.reply(id).await;
+            if case == "native-error-response" {
+                assert_eq!(actual["error"]["message"], "ERROR_SENTINEL");
+            } else {
+                assert_eq!(
+                    actual,
+                    serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"stopReason":"end_turn"}})
+                );
+            }
+        }
+        wire.send(&wire_prompt(16), false).await;
+        let capture = wire.finish().await;
+        assert_eq!(capture.prompts, 6);
+        assert!(!capture.prompt_pending);
+        assert_eq!(capture.successful_responses + capture.error_responses, 6);
+        assert_eq!(
+            capture.rejection.unwrap().code,
+            live_provider_capture::Rejection::PromptLimitExhausted
+        );
+    }
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_client_replays_openings_and_unknown_methods_never_reach_provider() {
+    for case in [
+        "replay-init",
+        "replay-new",
+        "replay-config",
+        "replay-prompt-as-config",
+        "repeat-init",
+        "repeat-new",
+        "load",
+        "resume",
+        "fork",
+        "unknown",
+        "wrong-session",
+        "overlap",
+        "mode-during",
+    ] {
+        let mut wire = NativeWire::start(
+            if matches!(case, "overlap" | "mode-during") {
+                "native-hold"
+            } else {
+                "native"
+            },
+            false,
+        );
+        wire.handshake(3).await;
+        let mut bad = wire_prompt(30);
+        match case {
+            "replay-init" => bad["id"] = serde_json::json!(1),
+            "replay-new" => bad["id"] = serde_json::json!(2),
+            "replay-config" => bad["id"] = serde_json::json!(3),
+            "replay-prompt-as-config" => {
+                wire.send(&wire_prompt(10), true).await;
+                wire.reply(10).await;
+                bad = wire_handshake()[2].clone();
+                bad["id"] = serde_json::json!(10);
+            },
+            "repeat-init" => bad = serde_json::json!({"id":30,"method":"initialize","params":{}}),
+            "repeat-new" => bad = serde_json::json!({"id":30,"method":"session/new","params":{}}),
+            "load" | "resume" | "fork" | "unknown" => {
+                bad["method"] = serde_json::json!(format!("session/{case}"))
+            },
+            "wrong-session" => bad["params"]["sessionId"] = serde_json::json!("foreign-session"),
+            "overlap" | "mode-during" => {
+                wire.send(&wire_prompt(10), true).await;
+                // The fixture confirms actual receipt independently of oracle counts.
+                wire.wait_received(4).await;
+                if case == "mode-during" {
+                    bad = serde_json::json!({"id":30,"method":"session/set_mode","params":{"sessionId":"fixture-session","modeId":"code"}});
+                }
+            },
+            _ => unreachable!(),
+        }
+        wire.send(&bad, false).await;
+        wire.finish().await;
+    }
+    let mut wire = NativeWire::start("native", false);
+    wire.send(&wire_handshake()[1], false).await;
+    wire.finish().await;
+}
+#[tokio::test]
+#[ignore = "requires built acp_smoke_proxy example"]
+async fn proxy_native_bad_model_ack_updates_duplicate_replies_and_malformed_response_are_not_forwarded()
+ {
+    for kind in ["removed", "malformed", "ambiguous", "identity"] {
+        let mut wire = NativeWire::start(&format!("native-ack-{kind}"), false);
+        wire.handshake(2).await;
+        wire.send(&wire_handshake()[2], true).await;
+        let capture = wire.finish().await;
+        assert_eq!(capture.prompts, 0);
+        let mut wire = NativeWire::start(&format!("native-update-{kind}"), false);
+        wire.handshake(3).await;
+        wire.send(&wire_prompt(10), true).await;
+        let capture = wire.finish().await;
+        assert!(capture.prompt_pending);
+        assert_eq!(capture.successful_responses, 0);
+    }
+    for (method, steps) in [
+        ("initialize", 1),
+        ("session/new", 2),
+        ("session/set_config_option", 3),
+    ] {
+        let mut wire = NativeWire::start(&format!("native-duplicate-{method}"), false);
+        wire.handshake(steps).await;
+        wire.finish().await;
+    }
+    let mut wire = NativeWire::start("native-malformed-response", false);
+    wire.handshake(3).await;
+    wire.send(&wire_prompt(10), true).await;
+    let capture = wire.finish().await;
+    assert_eq!(capture.successful_responses, 0);
+}
+
 #[tokio::test]
 #[ignore = "requires built acp_smoke_proxy example"]
 async fn proxy_transport_rejects_wrong_ack_and_missing_model_before_actual_prompt() {
@@ -1580,4 +2043,83 @@ fn parent_completed_capture_rejects_missing_selection_mode() {
 #[test]
 fn parent_complete_strict_capture_remains_accepted() {
     assert_eq!(completed_parent_fixture(|_| {}), Ok(()));
+}
+
+#[test]
+fn strict_parent_rejects_native_policy_even_with_one_admission() {
+    assert!(
+        completed_parent_fixture(|capture| {
+            capture["prompt_policy"] = "native_six".into();
+            capture["prompt_limit"] = 6.into();
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn strict_child_consumer_rejects_native_policy_with_one_prompt() {
+    use surge_core::{
+        ContentHash, RunEvent, SessionId,
+        execution_recovery::{
+            OpenedSession, ProviderSessionDescriptor, ProviderSessionId, SessionOpenMode,
+            SessionRestoreCapabilities,
+        },
+        id::StageInvocationId,
+    };
+    let home = FixtureHome::new().unwrap();
+    let path = capture_path(home.path());
+    let mut capture = live_provider_capture::ProtocolCapture::new("gpt-6.1-sol".into())
+        .unwrap()
+        .snapshot;
+    capture.adapter_name = Some("adapter".into());
+    capture.adapter_version = Some("1".into());
+    capture.provider_session = Some("fixture-session".into());
+    capture.selected_model = Some("gpt-6.1-sol".into());
+    capture.offered_models = vec!["gpt-6.1-sol".into()];
+    capture.prompts = 1;
+    capture.selection_source = Some(live_provider_capture::SelectionMode::ExplicitSetAck);
+    let descriptor = ProviderSessionDescriptor::new(
+        ProviderSessionId::new("fixture-session".into()).unwrap(),
+        StageInvocationId::new(),
+        "codex-acp".into(),
+        ContentHash::compute(b"launch"),
+        home.path().to_owned(),
+        SessionRestoreCapabilities::default(),
+    )
+    .unwrap();
+    let session = SessionId::new();
+    let opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
+    let events = [RunEvent {
+        run_id: RunId::new(),
+        seq: 1,
+        timestamp: chrono::Utc::now(),
+        payload: EventPayload::SessionOpened {
+            handoff: None,
+            opened: Some(opened),
+            node: "smoke".parse().unwrap(),
+            session,
+            agent: "codex-acp".into(),
+            agent_id: Some("codex-acp".into()),
+        },
+    }];
+    let mut file = live_provider_capture::EvidenceFile::create(&path).unwrap();
+    file.write(&capture).unwrap();
+    assert!(check_provider_capture(&path, &events, "gpt-6.1-sol").is_ok());
+    capture.prompt_policy = live_provider_capture::PromptPolicy::NativeSix;
+    capture.prompt_limit = 6;
+    file.write(&capture).unwrap();
+    assert!(check_provider_capture(&path, &events, "gpt-6.1-sol").is_err());
+    drop(file);
+    home.close().unwrap();
+}
+
+#[test]
+fn strict_parent_rejects_published_protocol_rejection() {
+    assert!(
+        completed_parent_fixture(|capture| {
+            capture["rejection"] =
+                serde_json::json!({"code":"malformed_frame","direction":"provider","turn":1});
+        })
+        .is_err()
+    );
 }
