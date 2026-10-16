@@ -154,3 +154,200 @@ Root independently rehashed all five Rust files and the frozen task record again
 Final current macOS gate: focused 27/27; full UI 299/299 + integration 5/5; plain persistence CargoTest 544/544, exit 0; strict default/all-feature all-target affected Clippy, owned-source rustfmt and diff checks passed. Initial RED, repair-specific REDs, bounded mutation, and earlier unexpected failures retain their separate receipts and unconfirmed causes. No suppression, Fleet/secure_lock edit, provider replay or native Windows success is claimed.
 
 Local commit closes only this Results dependency closure. PR150 stays at a2ba09c with Windows CI red and its fourth repair mandate unanswered. This stage does not fix the separately diagnosed gate graph-authority/recovery-observability defects, complete the actual new-app/existing-project journeys, authorize publication of this independent branch, or achieve the full active goal. Next authorized work is the separately reviewed Stage A graph-authority and historical-projection closure, followed by Stage B truthful recovery presentation. No memory update.
+
+
+## Prospective repair 3 pre-code proposal — native planning and run navigation
+
+**Proposal only; no repair dispatch or implementation. Repair count remains 2/3.**
+Prepared from current source at `2923e96c` and read-only observation of the permanent
+habit-tracker acceptance journal. Local stage completion above remains a historical
+claim about its reviewed closure; native N3/N6 demonstrate additional open Results
+requirements. Maintainer recommendation: **ACCEPTABLE pending independent critic
+and security review**. A builder must record 3/3 before implementation, after those
+reviews and the root's decision. No fourth repair is implied. The witness author
+currently owns Cargo under its separate 4/4 mandate; this proposal neither takes
+that lease nor modifies its budget.
+
+### Proven evidence and scope
+
+N3: planning journal `run-01M538BSKHNKR64K4C8TC3X3Z6` records description author
+StageEntered 5 / SessionOpened 9, Description approval 31, roadmap planner
+StageEntered 37 / SessionOpened 41. At watermark 43, native Overview said Roadmap
+not started and Nothing has run yet. There is no BootstrapStageStarted in that
+prefix. The orchestrator has no emitter reference to that event. `mission::fold`
+compiles the planning TaskExecutionView but passes only its recovery into
+`from_execution`; actual planning stages disappear. `fold_plan` requires legacy
+BootstrapStageStarted for Drafting, and the rendered empty-state predicate ignores
+planning activity entirely. Current screen fixtures synthesize that legacy event,
+so their previous passes do not establish the real graph-driven planning journey.
+
+N6: `RunsScreen::rows` deliberately suppresses a planning row when its child is
+listed, except while that planning row is selected. Selecting the child therefore
+changes two rail entries to one. This is not journal deletion: child Overview
+loads both persisted journals. It is a navigation defect because Log/Sessions
+remain selected-run-specific, while the rendered rail no longer offers the parent.
+
+Within Results, `render_header` additionally overlays a Pending operation phase on
+a selected run's own status. A completed parent can consequently appear building
+while its child runs. The selected run lifecycle and the enclosing operation phase
+must be separate identified facts. The independently proven N7 false FAILED Inbox
+parent originates in app.rs and is **not fixed by this Results repair**. Home's 5/5
+budget is exhausted; no Home/app.rs/Inbox owner change or new repair budget is
+inferred from this proposal.
+
+Approved prospective zone: `mission.rs`, `screens/runs.rs`,
+`screens/run_mission.rs`, its Results tests and existing adjacent mission tests;
+only the necessary mechanical shared-projection adapter in
+`project_lifecycle/loading.rs` may join the dependency closure. No scheduler,
+engine emission, persistence authority/schema, provider, witness, receipts,
+sandbox, original acceptance runtime/project or main checkout edits. No push/PR/
+merge. Full product goal, actual two-milestone app, follow-up, existing-project
+journey, platform acceptance and Windows CI remain open.
+
+### Options and selected projection
+
+1. **Selected: generic actual recorded planning steps plus typed review cards.**
+   Reuse TaskExecutionView lifecycle/session/summary/failure/coverage evidence.
+   Humanized recorded node identifiers and actual participant metadata provide
+   useful planning activity without inventing Bootstrap role authority. Existing
+   typed approval events still drive Description/Roadmap/Flow review cards.
+2. Resolve author roles structurally from typed HumanGateMode::Bootstrap and exact
+   graph paths. This could show Roadmap drafting but requires unique-predecessor,
+   branching/cycle and ambiguity semantics. It is unnecessary for truthful actual
+   work visibility; do not implement it in this repair.
+3. Emit BootstrapStageStarted in the engine. Outside Results ownership and cannot
+   repair existing journals; reject for this scope.
+
+Add an internal planning execution presentation owned by the Mission composition,
+separate from implementation steps and terminal state. It carries the actual
+planning RunId, ordered stage occurrences, planning recovery/coverage/through
+watermark, caveats and terminal fact. Actual stage occurrence identity stays its
+StageEntered sequence; attempts are display counters. Retain planning failure and
+unfinished/gap distinctions and actual sessions. No profile-name/node-substring
+role heuristics, inferred approval, inferred completion, cleanup or verification.
+Use node identity as the neutral planning label rather than the existing heuristic
+implementation step_label role mapping. Generic unclassifiable graph work remains
+visible with explicit attribution limitations.
+
+Present review-card absence as **No review recorded** rather than **not started**.
+The internal PlanState::NotStarted may remain for compatibility; its new text must
+refer to review evidence only. Existing legacy BootstrapStageStarted continues to
+produce the existing drafting state and has an explicit control test. A stage's
+StageCompleted cannot itself approve its artifact; only typed approval events do.
+Edit/re-entry preserves review history and the new actual stage occurrence.
+
+Resolve planning node configuration against the planning source graph at that
+occurrence. The authenticated first parent materialization establishes its graph;
+a generated/revised child Flow artifact materialization is not a parent graph
+revision. Only genuine recorded GraphRevisionAccepted transitions may replace the
+parent graph for later parent stages. Journal gaps discard unwarranted graph
+attribution. Reuse existing immutable graph binding and projection helpers where
+they preserve this distinction, rather than importing role inference or mutating
+history. Keep wrong-first/hash/corrupt-later materialization refusal tests.
+
+Avoid a half-migrated from_execution contract: the preferred interface removes the
+recovery-only optional input and compiles the planning view once inside the shared
+composition adapter, returning Result<Mission, TaskExecutionError>. `fold` continues
+to compile the implementation once then delegates; the sole other production
+caller, `project_lifecycle/loading.rs` around line 321, reuses its already compiled
+implementation and maps the shared adapter error through its existing load result.
+There must be no duplicate divergent planning fold and no duplicate implementation
+compile. This caller change is a mechanical dependency-closure migration, not a new
+Home behavior repair, owner, status overwrite or budget reset. A builder may choose
+an equally coherent compile-once internal signature after review, but must migrate
+all callers and retain fallible attribution rather than discard errors.
+
+### Native display and refresh boundaries
+
+Render a separate Recorded planning steps group in Overview. Planning's run ID,
+coverage, recovery, terminal state and stream observation govern its labels. A
+child's live stream cannot make a completed/offline parent agent working now.
+Generalize the existing observation predicate by exact run identity and that run's
+loaded prefix; retain Ready/error checks, complete coverage, registry-vs-stream
+watermark checks and loaded refresh binding. Planning and implementation current
+activity/terminal presentation remain separate, even while both are visible.
+Render available actual session/profile/runtime and summary through existing
+presentation seams; absent metadata remains absent/unknown.
+
+Replace the false Nothing has run yet state. Zero implementation with actual
+planning activity must state that implementation has no recorded work yet while
+showing the real planning activity/reviews. Truly empty ordinary history and
+planned roadmap tasks retain truthful distinct empty/planned wording. No apparent
+running state may survive a terminal fact or a journal gap.
+
+Retain both planning and implementation rail rows independent of selection and
+label the count **Runs**. Add neutral typed Planning / Implementation labels when
+an existing exact BootstrapOperationStatus binds the row; do not infer relation
+from names, prompts or path shape. Unknown/cold relation remains a normal exact run
+row until existing owner lookup establishes it. Preserve project filtering,
+selection identity, ordering/dismissed-failure behavior and action targets.
+
+Results header shows the selected run's own lifecycle/status, with enclosing
+operation phase separately labeled as operation status. A terminal Completed
+parent plus active implementation child must show completed planning separately
+from the implementation/operation activity. Do not synthesize a corrected run
+terminal state from operation status or patch app.rs's cache. If upstream cached
+status is already wrong, retain explicit journal-vs-cache limitations; the N7 Inbox
+finding remains independently open.
+
+### RED-first and complete affected verification map
+
+Before production edits, extend the actual native RunsScreen journey using real
+persisted planning envelopes and actual rendered rail/Overview controls. No manual
+MissionPanel construction or direct selected assignment may substitute for the
+outer acceptance path. At least the following behavioral REDs must reach their
+assertions on current production source:
+
+- Graph-driven planning prefix through description approval then roadmap
+  StageEntered/SessionOpened, with no BootstrapStageStarted: actual recorded
+  planning work visible; no false Nothing has run yet/no claim Roadmap never began.
+- Parent and child both listed, select child then parent via rendered controls:
+  both rows and stable Runs count remain, parent's exact Log/Sessions identity and
+  recorded session data are reachable without an out-of-band selection setter.
+- Selected terminal Completed parent plus active child/operation: selected-run
+  status is Completed and operation activity is separately identified.
+
+Expand accepted tests without claiming every pre-existing behavior as a new RED:
+zero-implementation planning; genuinely empty ordinary history; legacy
+BootstrapStageStarted drafting control; typed approval request/approve/edit/reject;
+re-entry occurrence/attempts; planning stage failure and terminal unfinished work;
+journal gaps and missing attribution; cold persisted owner lookup; generated and
+regenerated child Flow materializations; real GraphRevisionAccepted where valid;
+child start/completion/failure with parent history retained; parent terminal state
+while child runs; independent offline/stale/live watermarks and recovery for each
+run; child live observation never upgrades parent activity; parent progress while
+child watermark stays fixed and vice versa. Retain original delayed generation,
+revision race, bounded stale reload, project alias/foreign refusal and read-only
+storage-negative tests.
+
+Tests that assert labels must use fixed expected recorded node/session/run identity
+and actual native control labels, not a second implementation of the fold. Keep
+pending-read ownership guards and actual fixture writer/pool settlement before
+cleanup. Do not read raw live SQLite/WAL bytes or create external production state
+for a test. This work introduces no polling timer, detached worker, new dependency,
+unsafe code, external public API or authority grant. Graph traversal/view compile
+runs once per existing bounded reload, not per render; presentation does not create
+a second execution engine.
+
+After RED/GREEN run full affected UI unit/native/integration tests, affected shared
+projection tests, strict default/all-feature all-target Clippy, owned-source fmt
+and diff checks. Exercise unchanged persistence inspection regressions when the
+closure touches their seam; retain unexpected failures and honest denominators.
+Use the existing Cargo lease/target strategy only after the root transfers it.
+Independent affected Stage 5a must precede full Stage 5b generic/domain/security
+reviews; freeze/re-hash the complete closure before local commit. A successful
+macOS test gate is not native Windows evidence, CI publication, working-app
+acceptance or full-goal completion.
+
+### Independent pre-code verdicts for prospective repair 3
+
+Root maintainer and independent results_repair3_plan_critic plus results_repair3_plan_security: ACCEPTABLE. No author dispatch yet: repair count remains2/3. Implementation waits for the active witness4/4 author's terminal freeze and Cargo lease release. Binding conditions:
+
+- RPC-01 / RPH-R3-HIST-1: preserve every planning StageEntered occurrence/sequence; do not use adjacent-node push_step replacement or role-inference step_label. Typed review events alone approve. A gap leaves historical review with visible coverage limits, never confirmed current state.
+- RPC-02 / RPH-R3-ADAPTER-1: compile each planning/implementation history once across history::bootstrap fallback and recorded-child paths, not just inside fold. Fallible shared adapter propagates foreign-run/sequence errors through the sole project_lifecycle caller; no Home cache/status ownership change.
+- RPC-03 / RPH-R3-AUTH-1: authenticated first parent graph remains the anchor even after gaps. Generated/regenerated child PipelineMaterialized never replaces or restores parent attribution. GraphRevisionAccepted must validate content/hash and predecessor against parent lineage; otherwise neutral attribution. Retain existing wrong-first/corrupt-later refusals and add same-node/different-config child collision coverage.
+- RPH-R3-OBS-1: parent and child retain independent run IDs, coverage/recovery/terminal/watermarks. Exact parent observation and loaded prefix alone can produce planning working-now; live child/op phase cannot. Cover live-child/offline-terminal-parent, live-parent/stale-child, gaps and terminal unfinished stages.
+- RPC-04 / RPH-R3-NAV-1: actual rendered child→parent rail clicks, then rendered Log/Sessions tabs, prove exact run/session identities, stable Runs count and status/operation facts. No manual panel/direct tab/selection assignment acceptance shortcut. Retain project filtering, actions and delayed-response fencing.
+- RPC-05 / RPH-R3-BOUNDARY-1: selected run status and operation phase separately attributed. N7 app.rs/Inbox remains open; no Home5/5 reset or Windows claim. No execution, scheduler or verification authority changes.
+
+The full goal remains open; this is a reviewed, queued correction of visible native defects rather than a substitute for the actual app journeys.

@@ -1,6 +1,6 @@
 # Bounded native ACP witness — fourth repair
 
-Current status: authorized round **4/4**, local code verified; independent Phase 5a ACCEPTABLE and all full Phase 5b lenses COMPLETE. Installation remains pending. Human mandate and executed checks are recorded below. The observer has not been installed and no live-provider/native run has occurred. Root independently matched the three final source hashes and the tested helper hash.
+Current status: authorized round **4/4**, local code verified; independent Phase 5a ACCEPTABLE and all full Phase 5b lenses COMPLETE. The exact reviewed observer is installed. Human mandate and executed checks are recorded below. No live-provider/native run has occurred. Root independently matched the three final source hashes and the tested helper hash.
 
 ## Original pre-authorization proposal (historical)
 
@@ -364,3 +364,11 @@ witness_fourth_spec_review ACCEPTABLE, no blockers. All final source/helper/gate
 witness_fourth_quality, witness_fourth_domain and witness_fourth_security each COMPLETE after independent5a. No blockers or code advisories. All three independently matched final source/helper/gate-log hashes. Security advisory PW-S-A1 retained as an evidence boundary: local synthetic tests and observed provider settlement do not establish native Windows, global descendant closure, passing verification receipts or full live native acceptance. Those remain requirements of the full goal and are not relabeled complete.
 
 Local code stage COMPLETE, same authorized4/4 count. Root may commit this dependency closure and install the exact reviewed helper at a new retained versioned path with an explicit scoped recipe change. Original helper/recipe, source failed journal and existing paid captures remain preserved. No additional repair or publication authority follows.
+
+## Authorized installation closure
+
+Root installed reviewed helper1845e69306d44b2b0f30b65b311dd90dbcf4bafbbfeef6c3dfc2901a348e43bc at permanent instrumentation/acp_smoke_proxy-1845e69306d4 in the retained habit-tracker fixture, bound to local codecommite39a2c76f6713f3eb0f895396b8ad8385d679fb8. Only that project's ignored Codex recipe command/args changed: explicit --native-multi-turn prepended; exact model gpt-6.1-sol, adapter path and remaining configuration preserved. Parser deep-equality verified no other settings changed. Original observer and private before-recipe retained.
+
+Installation receipt: /Users/vanyastafford/Develop/surge-acceptance/habit-tracker-sol61-20261016/evidence/provider-witness-fourth-round-install.json. Known16 native identities absent, runtime scopedlsof empty; parent114 and child117 event payload hashes plus all existing capture hashes unchanged. Initial replacement assertion refused before config mutation because the pattern omitted optional whitespace; corrected exact-once substitution preserved that chronology. No native/provider process started, original terminalfailed bootstrap not resumed.
+
+Authorized fourth task COMPLETE at local code/review/installation scope; count4/4 unchanged. This does not establish real multi-turn paid acceptance, current Windows execution, legitimate continuation or working-app/full-goal completion. Native bundle remains original03a7ed20 until a separately fresh source-bound build after remaining Results/continuation work. No push/PR/merge.
