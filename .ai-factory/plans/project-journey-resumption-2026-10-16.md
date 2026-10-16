@@ -57,3 +57,32 @@ must not be reported as recovered history.
 
 The cancelled sandbox/verification-receipts work remains cancelled. Stage C
 TaskPlanning implementation remains deferred until the real application outcome.
+
+## Source audit result
+
+Read-only audit of unchanged Rust source at `fe685c37` found no demonstrated
+registry/environment loss at handoff. `bootstrap_supervisor.rs::launch_inputs`
+sets `agent_registry: Some(runtime.agents())` before selecting planning versus
+implementation, and engine admission prefers that per-run registry. Custom
+registry entries retain command/arguments/env; the bridge applies the resolved
+environment at spawn. Missing required injection fails before spawning. This
+does not prove that original resolved values or provider authentication matched.
+
+Planning adaptation changes only untouched bundled authoring profiles. The
+implementation graph retains its approved explicit selections. Successful
+planning alone therefore does not establish identical runtime/recipe selection;
+the missing graph and SessionOpened evidence are needed for that comparison.
+
+A separate diagnostic defect is established directly by current source:
+`surge-acp/src/pool.rs::is_auth_failure` omits the literal provider message
+`Authentication required`. Consequently `bridge/worker.rs` falls back to
+`Bridge(CommandSendFailed(...))`. That wrapper does not prove a broken command
+channel; provider prompt errors pass through the same classifier.
+
+The next bounded code regression is to assert that this actual message reaches
+the existing `AgentAuthenticationFailed` classification, with auth precedence,
+rate-limit and generic-error behavior retained. First execute a failing test
+against unchanged production code, then fix the shared classifier and verify
+its dependent error paths. No such test or fix has yet been executed. This would
+repair truthful problem reporting, not prove or repair the historical login
+failure. Restoring the original fixture remains necessary for its continuation.
