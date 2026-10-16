@@ -2,7 +2,7 @@ use super::*;
 use std::{collections::BTreeMap, num::NonZeroU32};
 use surge_core::{ContentHash, EventPayload as E};
 
-fn files(root: &Path) -> BTreeMap<std::path::PathBuf, ContentHash> {
+fn files(root: &Path) -> BTreeMap<std::path::PathBuf, Option<ContentHash>> {
     let mut found = BTreeMap::new();
     if !root.exists() {
         return found;
@@ -14,10 +14,22 @@ fn files(root: &Path) -> BTreeMap<std::path::PathBuf, ContentHash> {
             if path.is_dir() {
                 pending.push(path);
             } else {
-                found.insert(
-                    path.clone(),
-                    ContentHash::compute(&std::fs::read(path).unwrap()),
-                );
+                // SHM is coordination metadata: retain its path without reading lock bytes.
+                let hash = if path.to_string_lossy().ends_with("-shm") {
+                    None
+                } else {
+                    // A live Windows journal lease locks an empty file's byte range.
+                    // Metadata proves its empty payload; do not issue ReadFile past EOF.
+                    let bytes = if std::fs::metadata(&path).unwrap().len() == 0 {
+                        Vec::new()
+                    } else {
+                        std::fs::read(&path).unwrap_or_else(|error| {
+                            panic!("cannot snapshot durable file {}: {error}", path.display())
+                        })
+                    };
+                    Some(ContentHash::compute(&bytes))
+                };
+                found.insert(path, hash);
             }
         }
     }
@@ -26,8 +38,8 @@ fn files(root: &Path) -> BTreeMap<std::path::PathBuf, ContentHash> {
 // SQLite readers coordinate through existing ephemeral SHM read marks.
 // Every path and every durable DB/WAL/content byte must remain unchanged.
 fn assert_readonly(
-    before: &BTreeMap<std::path::PathBuf, ContentHash>,
-    after: &BTreeMap<std::path::PathBuf, ContentHash>,
+    before: &BTreeMap<std::path::PathBuf, Option<ContentHash>>,
+    after: &BTreeMap<std::path::PathBuf, Option<ContentHash>>,
 ) {
     assert_eq!(
         before.keys().collect::<Vec<_>>(),
@@ -35,7 +47,7 @@ fn assert_readonly(
         "inspection must not create or remove any path"
     );
     for (path, hash) in before {
-        if !path.to_string_lossy().ends_with("-shm") {
+        if hash.is_some() {
             assert_eq!(
                 Some(hash),
                 after.get(path),
@@ -197,6 +209,14 @@ async fn static_event_pages_read_latest_live_wal_and_keep_cold_files_unchanged()
                 .unwrap();
         }
         let before = files(home.path());
+        let run_home = home.path().join("runs").join(run.to_string());
+        let lock = run_home.join("events.sqlite.lock");
+        assert_eq!(std::fs::metadata(&lock).unwrap().len(), 0);
+        assert_eq!(before.get(&lock), Some(&Some(ContentHash::compute(b""))));
+        let wal = run_home.join("events.sqlite-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        assert!(before.get(&wal).unwrap().is_some());
+        assert_eq!(before.get(&run_home.join("events.sqlite-shm")), Some(&None));
         let page = Storage::inspect_existing_events_after(
             home.path().join("runs"),
             run,

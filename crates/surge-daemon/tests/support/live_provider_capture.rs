@@ -372,7 +372,9 @@ pub type ProcessPipes = (
     tokio::process::ChildStderr,
 );
 impl OwnedProcess {
-    pub fn spawn(mut command: std::process::Command, own_group: bool) -> std::io::Result<Self> {
+    pub fn spawn(command: std::process::Command, own_group: bool) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let mut command = command;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -751,6 +753,8 @@ mod tests {
         );
         assert_ne!(ReadStatus::Valid, ReadStatus::Unconfirmed);
         drop(file);
+        #[cfg(windows)]
+        drop(owner);
         root.close().unwrap();
     }
 
