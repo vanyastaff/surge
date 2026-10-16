@@ -2,7 +2,9 @@ use super::{HomeAction, ProjectHomeScreen, lifecycle};
 use crate::app_state::AppState;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, WindowOptions};
-use lifecycle::{HomeProjection, RunOwnership};
+#[cfg(unix)]
+use lifecycle::HomeProjection;
+use lifecycle::RunOwnership;
 use std::{cell::RefCell, rc::Rc};
 use surge_core::RunId;
 #[gpui_kit::test]
