@@ -476,6 +476,10 @@ pub struct RunsScreen {
     guidance: HashMap<GuidanceKey, GuidanceDraft>,
     #[cfg(test)]
     controlled_guidance: Option<ControlledGuidance>,
+    #[cfg(test)]
+    results_home: Option<PathBuf>,
+    #[cfg(test)]
+    results_active_loads: std::rc::Rc<std::cell::Cell<usize>>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
     tab: RunTab,
@@ -589,6 +593,10 @@ impl RunsScreen {
             guidance: HashMap::new(),
             #[cfg(test)]
             controlled_guidance: None,
+            #[cfg(test)]
+            results_home: None,
+            #[cfg(test)]
+            results_active_loads: Default::default(),
             action_note: None,
             tab: RunTab::Overview,
             recorded_target: None,
@@ -946,6 +954,7 @@ impl RunsScreen {
                     row.run_id
                         .map_or_else(|| row.id_label.clone(), |id| id.to_string())
                 )))
+                .test_support()
                 .role(Role::Button)
                 .aria_label(format!("{}, {}", row.title, row.status_label))
                 .v_flex()
@@ -1063,18 +1072,15 @@ impl RunsScreen {
             })
     }
 
-    /// The planning + implementation runs this row stands for.
-    fn mission_runs(&self, row: &RunRow, cx: &Context<Self>) -> Option<run_mission::MissionRuns> {
-        let run = row.run_id?;
-        Some(match self.selected_bootstrap(row, cx) {
-            Some((_, status)) => run_mission::MissionRuns {
-                planning: Some(status.planning_run),
-                implementation: status.implementation_run,
-            },
-            None => run_mission::MissionRuns {
-                planning: None,
-                implementation: run,
-            },
+    /// Resolve operation ownership from disk when Results loads, including cold history.
+    fn mission_request(
+        &self,
+        row: &RunRow,
+        cx: &Context<Self>,
+    ) -> Option<run_mission::MissionRequest> {
+        Some(run_mission::MissionRequest {
+            selected: row.run_id?,
+            project: self.state.read(cx).project_path.clone(),
         })
     }
 
@@ -1361,6 +1367,7 @@ impl RunsScreen {
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("run-tab-{label}")))
+                    .test_support()
                     .role(Role::Tab)
                     .aria_label(label)
                     .h_flex()
@@ -1849,19 +1856,32 @@ impl Render for RunsScreen {
                     if matches!(self.recorded_target,Some((run,RecordedTarget::Stage{..})) if row.run_id==Some(run))
                     {
                         main = main.child(self.render_recorded_stage(cx));
-                    } else if let Some(runs) = self.mission_runs(row, cx) {
+                    } else if let Some(request) = self.mission_request(row, cx) {
                         let stale = self
                             .mission
                             .as_ref()
-                            .is_none_or(|panel| panel.read(cx).runs() != runs);
+                            .is_none_or(|panel| panel.read(cx).request() != &request);
                         if stale {
+                            let home = surge_core::home::surge_home_dir();
+                            #[cfg(test)]
+                            let home = self.results_home.clone().or(home);
                             self.mission = Some(cx.new(|cx| {
-                                run_mission::MissionPanel::new(runs, self.task_focus.clone(), cx)
+                                run_mission::MissionPanel::new(
+                                    home,
+                                    request,
+                                    self.task_focus.clone(),
+                                    #[cfg(test)]
+                                    self.results_active_loads.clone(),
+                                    cx,
+                                )
                             }));
                         }
                         if let Some(panel) = &self.mission {
-                            let seq = row.events.clone();
-                            panel.update(cx, |panel, cx| panel.sync(&seq, cx));
+                            let state = self.state.clone();
+                            panel.update(cx, |panel, cx| {
+                                let refresh = panel.refresh_key(state.read(cx));
+                                panel.sync(refresh, cx);
+                            });
                             main = main.child(panel.clone());
                         }
                     }

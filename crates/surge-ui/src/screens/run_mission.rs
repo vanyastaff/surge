@@ -13,8 +13,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use surge_core::roadmap::RoadmapStatus;
 use surge_core::roadmap::{MilestoneId, RoadmapTaskId};
-use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
 use surge_core::{BootstrapStage, RunId};
 
 use crate::flow_diagram::Lane;
@@ -22,53 +22,23 @@ use crate::mission::{self, MilestoneView, Mission, PlanState, RunEnd, Step, Step
 use crate::theme::{self, Semantic};
 use crate::ui;
 
-/// The runs a mission is made of.
+#[path = "run_mission/history.rs"]
+mod history;
+pub(super) use history::MissionRequest;
+use history::{ImplementationHistory, LoadOutcome};
+use surge_core::bootstrap_operation::{BootstrapOperationStatus, BootstrapState};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MissionRefresh {
+    operation: Option<(RunId, u64)>,
+    streams: Vec<(RunId, Option<u64>, Option<u64>)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MissionRuns {
-    pub planning: Option<RunId>,
-    pub implementation: RunId,
-}
-
-async fn events_of(
-    root: std::path::PathBuf,
-    run: RunId,
-) -> Result<Vec<surge_core::RunEvent>, String> {
-    surge_persistence::runs::Storage::inspect_existing_run_events(root, run)
-        .await
-        .map_err(|error| error.to_string())?
-        .iter()
-        .map(|event| event.to_run_event(run).map_err(|error| error.to_string()))
-        .collect()
-}
-
-async fn load(runs: MissionRuns) -> Result<Mission, String> {
-    // Storage reads run on the app's tokio runtime (entered in `main`);
-    // without one (headless tests) say so instead of panicking.
-    tokio::runtime::Handle::try_current()
-        .map_err(|_| "Run storage is not available".to_string())?;
-    let home = surge_core::home::surge_home_dir().ok_or("Surge home unavailable")?;
-    let root = home.join("runs");
-    let planning = match runs.planning {
-        Some(run) => events_of(root.clone(), run).await?,
-        None => Vec::new(),
-    };
-    let implementation = if Some(runs.implementation) == runs.planning {
-        Vec::new()
-    } else {
-        events_of(root, runs.implementation).await?
-    };
-    let roadmap: Option<RoadmapArtifact> = runs
-        .planning
-        .and_then(|p| crate::roadmap_source::read_run_roadmap(&home, p))
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| toml::from_str(&text).ok());
-    mission::fold(
-        &planning,
-        runs.implementation,
-        &implementation,
-        roadmap.as_ref(),
-    )
-    .map_err(|error| error.to_string())
+enum LoadingState {
+    Reading,
+    Ready,
+    Changed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,13 +47,35 @@ struct StepOccurrence {
     index: usize,
 }
 
+#[cfg(test)]
+type ControlledLoads =
+    std::rc::Rc<std::cell::RefCell<Vec<tokio::sync::oneshot::Sender<Result<LoadOutcome, String>>>>>;
+
+#[cfg(test)]
+struct PendingLoad(std::rc::Rc<std::cell::Cell<usize>>);
+
+#[cfg(test)]
+impl Drop for PendingLoad {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
 pub(super) struct MissionPanel {
-    runs: MissionRuns,
+    #[cfg(test)]
+    active_loads: std::rc::Rc<std::cell::Cell<usize>>,
+    #[cfg(test)]
+    controlled_loads: Option<ControlledLoads>,
+    home: Option<std::path::PathBuf>,
+    request: MissionRequest,
     mission: Option<Mission>,
+    implementation: Option<ImplementationHistory>,
+    operation: Option<BootstrapOperationStatus>,
+    loading: LoadingState,
     error: Option<String>,
     generation: u64,
-    /// Event count the current fold reflects.
-    loaded_seq: Option<String>,
+    /// Operation revision and both run observations the last request reflects.
+    loaded_refresh: Option<MissionRefresh>,
     scope: Vec<usize>,
     requested_task: Option<(MilestoneId, RoadmapTaskId)>,
     expanded_steps: BTreeSet<StepOccurrence>,
@@ -91,16 +83,26 @@ pub(super) struct MissionPanel {
 
 impl MissionPanel {
     pub(super) fn new(
-        runs: MissionRuns,
+        home: Option<std::path::PathBuf>,
+        request: MissionRequest,
         requested_task: Option<(MilestoneId, RoadmapTaskId)>,
+        #[cfg(test)] active_loads: std::rc::Rc<std::cell::Cell<usize>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut panel = Self {
-            runs,
+            #[cfg(test)]
+            controlled_loads: None,
+            #[cfg(test)]
+            active_loads,
+            home,
+            request,
             mission: None,
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Reading,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task,
             expanded_steps: Default::default(),
@@ -109,31 +111,93 @@ impl MissionPanel {
         panel
     }
 
-    pub(super) fn runs(&self) -> MissionRuns {
-        self.runs
+    pub(super) fn request(&self) -> &MissionRequest {
+        &self.request
     }
 
-    /// Reload when the run has moved since the last fold.
-    pub(super) fn sync(&mut self, seq: &str, cx: &mut Context<Self>) {
-        if self.loaded_seq.as_deref() != Some(seq) {
-            self.loaded_seq = Some(seq.to_string());
+    /// Both reserved streams and operation transitions can change this composition.
+    pub(super) fn refresh_key(&self, state: &crate::app_state::AppState) -> MissionRefresh {
+        let operation = state
+            .bootstrap_operations
+            .values()
+            .find(|status| {
+                [status.planning_run, status.implementation_run].contains(&self.request.selected)
+            })
+            .or(self.operation.as_ref());
+        let ids = operation.map_or_else(
+            || vec![self.request.selected],
+            |status| vec![status.planning_run, status.implementation_run],
+        );
+        MissionRefresh {
+            operation: operation.map(|status| (status.operation_id, status.revision)),
+            streams: ids
+                .into_iter()
+                .map(|run| {
+                    (
+                        run,
+                        state
+                            .runs
+                            .iter()
+                            .find(|item| item.run_id == run)
+                            .and_then(|item| item.last_event_seq),
+                        state.run_streams.get(&run).map(|stream| stream.last_seq),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn sync(&mut self, refresh: MissionRefresh, cx: &mut Context<Self>) {
+        if self.loaded_refresh.as_ref() != Some(&refresh) {
+            self.loaded_refresh = Some(refresh);
             self.reload(cx);
         }
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_once(false, cx);
+    }
+
+    fn reload_once(&mut self, retried: bool, cx: &mut Context<Self>) {
         self.generation += 1;
+        self.loading = LoadingState::Reading;
         let generation = self.generation;
-        let runs = self.runs;
+        let request = self.request.clone();
+        let home = self.home.clone();
+        #[cfg(test)]
+        let controlled = self.controlled_loads.clone();
+        #[cfg(test)]
+        let pending = {
+            self.active_loads.set(self.active_loads.get() + 1);
+            PendingLoad(self.active_loads.clone())
+        };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = load(runs).await;
+            #[cfg(test)]
+            let _pending = pending;
+            #[cfg(not(test))]
+            let result = history::load(home, request).await;
+            #[cfg(test)]
+            let result = if let Some(controlled) = controlled {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                controlled.borrow_mut().push(sender);
+                receiver
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(std::convert::identity)
+            } else {
+                history::load(home, request).await
+            };
             cx.update(|cx| {
                 let _ = this.update(cx, |panel, cx| {
                     if panel.generation != generation {
                         return;
                     }
                     match result {
-                        Ok(m) => {
+                        Ok(LoadOutcome::Loaded(snapshot)) => {
+                            let m = snapshot.mission;
+                            panel.implementation = Some(snapshot.implementation);
+                            panel.operation = snapshot.operation;
+                            panel.loading = LoadingState::Ready;
                             if let Some((milestone, task)) = &panel.requested_task
                                 && let Some(path) = task_scope(&m, milestone, task)
                             {
@@ -143,7 +207,12 @@ impl MissionPanel {
                             panel.mission = Some(m);
                             panel.error = None;
                         },
-                        Err(e) => panel.error = Some(e),
+                        Ok(LoadOutcome::Stale) if !retried => panel.reload_once(true, cx),
+                        Ok(LoadOutcome::Stale) => panel.loading = LoadingState::Changed,
+                        Err(e) => {
+                            panel.error = Some(e);
+                            panel.loading = LoadingState::Ready;
+                        },
                     }
                     cx.notify();
                 });
@@ -164,7 +233,7 @@ fn lane_color(lane: Lane) -> Hsla {
 }
 
 /// A step as a small capsule: its role color, its label, and how it went.
-fn step_chip(id: String, step: &Step) -> Stateful<Div> {
+fn step_chip(id: String, step: &Step) -> impl IntoElement {
     let role = lane_color(step.lane);
     let (icon, tone): (Option<IconName>, Hsla) = match &step.state {
         StepState::Done(_) => (Some(IconName::Check), theme::success()),
@@ -192,6 +261,9 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
     let live = matches!(step.state, StepState::Working | StepState::WaitingOnYou);
     div()
         .id(SharedString::from(id))
+        .test_support()
+        .role(Role::Group)
+        .aria_label(format!("{}: {tip}", step.label))
         .flex_none()
         .h_flex()
         .gap(px(5.0))
@@ -994,6 +1066,53 @@ impl Render for MissionPanel {
                 .child("Reading the run…")
                 .into_any_element(),
         };
+        let mut body = div().v_flex().gap(px(12.0));
+        if let Some(status) = &self.operation {
+            let message = history::operation_message(status);
+            body = body.child(
+                div()
+                    .id("mission-operation")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(message.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(message),
+            );
+        }
+        let message = match &self.implementation {
+            Some(ImplementationHistory::PlanningOnly) => {
+                Some("No implementation launch is recorded.".into())
+            },
+            Some(ImplementationHistory::AwaitingStartup) => {
+                Some(match self.operation.as_ref().map(|status| &status.state) {
+                    Some(BootstrapState::Cancelling { .. }) => {
+                        "Implementation start not recorded; cancelling.".into()
+                    },
+                    Some(BootstrapState::NeedsAttention { .. }) => {
+                        "Implementation start not recorded; operator attention is required.".into()
+                    },
+                    _ => "Implementation awaiting startup.".into(),
+                })
+            },
+            Some(ImplementationHistory::Unavailable(issue)) => Some(issue.message()),
+            _ => None,
+        };
+        if let Some(message) = message {
+            body = body.child(
+                div()
+                    .id("mission-implementation-history")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(message.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(message),
+            );
+        }
+        if self.loading == LoadingState::Changed {
+            body = body.child("Run changed while reading; waiting for the next update.");
+        }
         div()
             .id("run-mission")
             .flex_1()
@@ -1001,13 +1120,13 @@ impl Render for MissionPanel {
             .overflow_y_scroll()
             .px(px(20.0))
             .py(px(16.0))
-            .child(div().max_w(px(980.0)).child(content))
+            .child(div().max_w(px(980.0)).child(body.child(content)))
     }
 }
 
 #[cfg(test)]
 mod hierarchy_tests {
-    use super::{MissionPanel, MissionRuns};
+    use super::{LoadingState, MissionPanel, MissionRequest};
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext as _, TestAppContext};
     use surge_core::keys::{NodeKey, SubgraphKey};
@@ -1035,14 +1154,20 @@ mod hierarchy_tests {
         );
         assert!(!mission.milestones[0].tasks[0].verified);
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1130,14 +1255,20 @@ mod hierarchy_tests {
         );
         assert!(super::task_scope(&mission, &"missing".into(), &"t1".into()).is_none());
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1234,14 +1365,20 @@ mod hierarchy_tests {
             },
         ]);
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(crate::mission::fixture_fold(&[], &events, None)),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: vec![0, 0],
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1366,3 +1503,7 @@ mod hierarchy_tests {
         assert_eq!(super::inputs_text(&human.steps[0]), "Resolved inputs: none");
     }
 }
+
+#[cfg(test)]
+#[path = "run_mission/results_history_tests.rs"]
+mod results_history_tests;

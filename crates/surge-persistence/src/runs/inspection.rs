@@ -52,6 +52,28 @@ pub struct FoldedRunInspection {
 }
 
 impl Storage {
+    /// Inspect an exact run without opening storage, creating files or applying migrations.
+    /// Registry and journal observations have separate snapshot boundaries. An absent
+    /// database differs from a present empty database and from an attempted-start directory.
+    pub async fn inspect_existing_run(
+        home: std::path::PathBuf,
+        run_id: RunId,
+    ) -> Result<RunInspection, StorageError> {
+        tokio::task::spawn_blocking(move || {
+            let registry_path = home.join("db/registry.sqlite");
+            let registry = if exists_as(&registry_path, false)? {
+                let connection =
+                    crate::runs::connection::RetainedConnection::read_only(&registry_path)?;
+                super::registry::get_run_connection(&connection, &run_id)?
+            } else {
+                None
+            };
+            inspect_run_files(&home.join("runs").join(run_id.to_string()), registry)
+        })
+        .await
+        .map_err(|error| StorageError::Pool(error.to_string()))?
+    }
+
     /// Inspect the immutable bootstrap base for an exact owned run, without writes.
     /// Missing journals return `None`; invalid or unsupported records remain errors.
     pub async fn inspect_existing_run_capture(
@@ -279,24 +301,31 @@ impl Storage {
         let storage = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let registry = super::registry::get_run(&storage.registry_pool, &run_id)?;
-            let run_directory_present = exists_as(&storage.run_dir(&run_id), true)?;
-            let path = storage.events_db_path(&run_id);
-            let database = if exists_as(&path, false)? {
-                RunDatabaseInspection::Present {
-                    events: read_events(&path)?,
-                }
-            } else {
-                RunDatabaseInspection::Absent
-            };
-            Ok(RunInspection {
-                registry,
-                run_directory_present,
-                database,
-            })
+            inspect_run_files(&storage.run_dir(&run_id), registry)
         })
         .await
         .map_err(|error| StorageError::Pool(error.to_string()))?
     }
+}
+
+fn inspect_run_files(
+    directory: &Path,
+    registry: Option<RunSummary>,
+) -> Result<RunInspection, StorageError> {
+    let run_directory_present = exists_as(directory, true)?;
+    let path = directory.join("events.sqlite");
+    let database = if exists_as(&path, false)? {
+        RunDatabaseInspection::Present {
+            events: read_events(&path)?,
+        }
+    } else {
+        RunDatabaseInspection::Absent
+    };
+    Ok(RunInspection {
+        registry,
+        run_directory_present,
+        database,
+    })
 }
 
 fn exists_as(path: &Path, directory: bool) -> Result<bool, StorageError> {
@@ -1705,3 +1734,83 @@ mod paged_owned_history_tests {
 #[cfg(test)]
 #[path = "inspection/project_history_tests.rs"]
 mod project_history_tests;
+
+#[cfg(test)]
+mod existing_run_tests {
+    use super::{RunDatabaseInspection, Storage};
+    use surge_core::RunId;
+
+    #[tokio::test]
+    async fn exact_existing_inspection_never_creates_missing_storage() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let missing = home.path().join("never-opened");
+        let inspection = Storage::inspect_existing_run(missing.clone(), RunId::new())
+            .await
+            .unwrap();
+        assert!(inspection.registry.is_none());
+        assert!(!inspection.run_directory_present);
+        assert!(matches!(inspection.database, RunDatabaseInspection::Absent));
+        assert!(!missing.exists());
+        home.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exact_existing_inspection_preserves_empty_and_attempt_evidence() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let run = RunId::new();
+        storage
+            .create_run(run, home.path(), None)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+        for inspection in [
+            storage.inspect_run(run).await.unwrap(),
+            Storage::inspect_existing_run(home.path().into(), run)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(inspection.registry.unwrap().id, run);
+            assert!(inspection.run_directory_present);
+            assert!(
+                matches!(inspection.database, RunDatabaseInspection::Present { events } if events.is_empty())
+            );
+        }
+        let path = home.path().join("runs").join(run.to_string());
+        std::fs::remove_file(path.join("events.sqlite")).unwrap();
+        let incomplete = Storage::inspect_existing_run(home.path().into(), run)
+            .await
+            .unwrap();
+        assert!(incomplete.registry.is_some());
+        assert!(incomplete.run_directory_present);
+        assert!(matches!(incomplete.database, RunDatabaseInspection::Absent));
+        std::fs::write(path.join("events.sqlite"), b"corrupt SQLite").unwrap();
+        assert!(
+            Storage::inspect_existing_run(home.path().into(), run)
+                .await
+                .is_err()
+        );
+        drop(storage);
+        home.close().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exact_existing_inspection_rejects_symlink_namespace() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let run = RunId::new();
+        let foreign = home.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::create_dir(home.path().join("runs")).unwrap();
+        std::os::unix::fs::symlink(foreign, home.path().join("runs").join(run.to_string()))
+            .unwrap();
+        assert!(
+            Storage::inspect_existing_run(home.path().into(), run)
+                .await
+                .is_err()
+        );
+        home.close().unwrap();
+    }
+}
