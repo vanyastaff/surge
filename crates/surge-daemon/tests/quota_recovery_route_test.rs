@@ -6,6 +6,8 @@ use runtime_home_fixture::FixtureHome;
 mod cold_host;
 #[path = "support/host_budget_bridge.rs"]
 mod host_budget_bridge;
+#[path = "support/quota_wake_observation.rs"]
+mod quota_wake_observation;
 use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use interprocess::local_socket::tokio::prelude::*;
 use serde_json::{Value, json};
@@ -534,6 +536,46 @@ async fn settle_quota_fixture(
     drop(host_budget);
     let observed = unwrap_settled_owner(bridge, "quota bridge").await;
     observed.bridge.shutdown().await.unwrap();
+}
+
+async fn settle_restored_wake(
+    failed: bool,
+    run: surge_core::RunId,
+    cancel: CancellationToken,
+    scheduler: tokio::task::JoinHandle<()>,
+    engine: Arc<Engine>,
+    budget: Arc<host_budget_bridge::HostBudgetBridge>,
+    bridge: Arc<AcpBridge>,
+) -> Result<(), String> {
+    let mut failures = Vec::new();
+    if failed {
+        match engine
+            .stop_run(run, "unconfirmed quota wake fixture cleanup".into())
+            .await
+        {
+            Ok(()) | Err(surge_orchestrator::engine::EngineError::RunNotFound(_)) => {},
+            Err(error) => failures.push(format!("stop resumed run: {error}")),
+        }
+    }
+    cancel.cancel();
+    if let Err(error) = scheduler.await {
+        failures.push(format!("join wake scheduler: {error}"));
+    }
+    drop(unwrap_settled_owner(engine, "restored engine").await);
+    budget.shutdown().await;
+    drop(budget);
+    if let Err(error) = unwrap_settled_owner(bridge, "restored bridge")
+        .await
+        .shutdown()
+        .await
+    {
+        failures.push(format!("shutdown restored bridge: {error}"));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 #[tokio::test]
@@ -1420,6 +1462,8 @@ async fn quota_dispatch_in_home(
                 engine_config(home, true),
             ));
             let clock = Arc::new(MockClock::new(due));
+            let wake_broadcast = Arc::new(surge_daemon::broadcast::BroadcastRegistry::new());
+            let mut wake_events = wake_broadcast.subscribe_global();
             let scheduler = surge_daemon::wake_scheduler::WakeScheduler {
                 tracking: surge_daemon::tracked_run::TrackingContext::new(
                     restored_engine.clone(),
@@ -1428,7 +1472,7 @@ async fn quota_dispatch_in_home(
                 storage: storage.clone(),
                 facade: Arc::new(LocalEngineFacade::new(restored_engine.clone())),
                 admission: Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
-                broadcast: Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
+                broadcast: wake_broadcast,
                 clock,
                 notifier: Arc::new(surge_notify::MultiplexingNotifier::new()),
                 blind_park_limit: 100,
@@ -1438,12 +1482,30 @@ async fn quota_dispatch_in_home(
             // Generous: a woken run restarts the provider process, which a
             // loaded CI runner can delay well past a few seconds. A real
             // failure to wake still fails here, named as such.
-            let awakened = tokio::time::timeout(
-                Duration::from_secs(30),
-                wait_for_terminal_journal(&storage, next.run),
+            let cleanup_cancel = cancel.clone();
+            let resumed_run = next.run;
+            let (awakened, wake_state) = quota_wake_observation::inspect_after_settlement(
+                quota_wake_observation::confirmed_completion(
+                    &mut wake_events,
+                    next.run,
+                    budget_cap == Some(1000),
+                    Duration::from_secs(30),
+                ),
+                move |failed| {
+                    settle_restored_wake(
+                        failed,
+                        resumed_run,
+                        cleanup_cancel,
+                        scheduler_task,
+                        restored_engine,
+                        restored_budget,
+                        restored_bridge,
+                    )
+                },
+                || wake_failure_state(&storage, next.run, home),
             )
-            .await;
-            let wake_state = wake_failure_state(&storage, next.run, home).await;
+            .await
+            .expect("quota wake owners must settle before inspecting diagnostics");
             let after_control = storage.work_items().execution_control(next.run).unwrap();
             let after_journal = storage.inspect_run(next.run).await.unwrap();
             if let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
@@ -1485,7 +1547,7 @@ async fn quota_dispatch_in_home(
             };
             assert!(
                 awakened.is_ok(),
-                "planned parked task must wake and complete: before={before_control:?}, after={after_control:?}, before_attempt_state={:?}, before_attempt_diagnostic={:?}, diagnostics={diagnostics:?}, last_event={last_event:?}, state={wake_state}",
+                "planned parked task must wake and complete: observation={awakened:?}, before={before_control:?}, after={after_control:?}, before_attempt_state={:?}, before_attempt_diagnostic={:?}, diagnostics={diagnostics:?}, last_event={last_event:?}, state={wake_state}",
                 parked.state,
                 parked.diagnostic
             );
@@ -1527,16 +1589,6 @@ async fn quota_dispatch_in_home(
                         .count(),
                 if mixed { 3 } else { 1 }
             );
-            cancel.cancel();
-            scheduler_task.await.unwrap();
-            drop(unwrap_settled_owner(restored_engine, "restored engine").await);
-            restored_budget.shutdown().await;
-            drop(restored_budget);
-            unwrap_settled_owner(restored_bridge, "restored bridge")
-                .await
-                .shutdown()
-                .await
-                .unwrap();
         }
         let _ = engine
             .stop_run(next.run, "predispatch fixture cleanup".into())
