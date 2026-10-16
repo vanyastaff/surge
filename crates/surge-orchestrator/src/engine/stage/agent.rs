@@ -7,7 +7,6 @@
 //! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -781,14 +780,7 @@ async fn execute_agent_attempt(
         .map_err(|error| StageError::Storage(error.to_string()))?;
     let verification_input = super::verification::begin(p).await?;
     let mut prompt_text = prompt_text;
-    if let Some(input) = &verification_input {
-        let _ = write!(
-            prompt_text,
-            "\nVerification criteria (every ID required): {:?}. Submit verification_report inline to report_stage_outcome with task_id={:?}, outcome=passed, summary and checks (command, result, covers=[IDs]); do not write a report file or supply binding.\n",
-            input.criteria.definitions,
-            p.active_task_id.as_ref().map_or("", |id| id.as_str())
-        );
-    }
+    super::verification::append_guidance(&mut prompt_text, p, verification_input.as_ref());
 
     // Derive declared outcomes from the node's OutcomeDecl list.
     // Fall back to ["done"] when the node has no declared_outcomes so the

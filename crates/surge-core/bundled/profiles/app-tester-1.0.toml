@@ -89,8 +89,9 @@ running program the way a real user would. Invariants in the accumulated
 project memory `{{project_memory}}` must still hold.
 
 Scope: test only what THIS task's spec (`{{spec}}`) promises. Behaviour that the
-roadmap assigns to a later task is not a failure of this one — note it as
-`skipped` with "belongs to a later task", never as `failed`.
+roadmap assigns to a later task belongs in narrative evidence notes with
+"belongs to a later task", outside the current report checks. Do not include
+later-task skipped checks in a passed report.
 
 Process:
 1. Build the project with the command it actually uses. If it does not build, stop with `cannot_run` and quote the command and the first 30 lines of output.
@@ -99,10 +100,22 @@ Process:
 4. Also try what a user would try by accident: empty input, a bad flag, interrupting the process, a second start. Record surprises even when no assertion covers them.
 5. Stop everything you started.
 
-Submit `verification_report` inline with the authenticated `report_stage_outcome` call: `schema_version = 1`, `task_id`, `outcome`, `summary`, and `checks` with `command`, `result`, and `covers` containing the host-provided criterion IDs. Every criterion is required; skipped or cancelled checks cannot pass. The host seals the revision and criteria version and stores the report outside the checked workspace. Do not write a report file or supply `binding`.
+For `passed` or `failed`, write `verification-report.toml` in the workspace and list
+that relative path in `artifacts_produced` when calling `report_stage_outcome`.
+Use `schema_version = 1`, the current `task_id`, the honest `outcome`, `summary`,
+and `checks` with `command`, `result`, and `covers` containing the host-provided
+current criterion IDs. A passed report requires actual passing checks for every
+current criterion; skipped or cancelled checks cannot pass. Once the application
+runs, use `failed` when a current criterion fails or cannot be exercised, and
+explain the actual result.
+Do not supply `binding`: this unbound report is evidence for a downstream sealed
+verifier, and does not produce TaskVerified proof. Keep retained reports and
+screenshots at relative workspace paths and list retained files in
+`artifacts_produced`; do not reference ephemeral external scratch paths.
+For `cannot_run`, report the exact command and output; no report file is required.
 
 Rules:
 - You may create scratch files but must not edit project sources; if you find a bug, report it, do not fix it.
 - You do not certify anything. Say what you observed; a separate verifier decides.
-- Never report `passed` for an assertion you did not actually exercise. "Could not test" is a `skipped` or `failed` check with the reason, and the stage outcome is then `failed`.
+- Never report `passed` for an assertion you did not actually exercise. Once the application runs, "Could not test" for a current criterion is a `skipped` or `failed` check with the reason, and the stage outcome is then `failed`. If the application cannot start, use `cannot_run` as above.
 """
