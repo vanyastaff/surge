@@ -1,16 +1,17 @@
 # N7: separate Bootstrap operation state from recorded run lifecycle
 
-Status: PROPOSED, reshaped for N7-SEC-1/N7-ARCH-01 and N7-ARCH-02; owner pre-code
-verdict ACCEPTABLE for focused independent re-review of the complete closure.
-No implementation, test execution, Cargo, runtime/provider action or dispatch is
-authorized by this proposal. Home repair budget is exhausted at 5/5. The proposed
-work requires explicit human authorization for a sixth round after review.
+Current status: sixth-round implementation AUTHORIZED; pre-dispatch reservation below.
+Owner and independent pre-code re-review ACCEPTABLE; N7-SEC-1/N7-ARCH-01 and
+N7-ARCH-02 are addressed in the plan. The original proposal itself did not grant
+execution authority; the explicit revised user mandate below now does. Home/Inbox
+dispatch budget is five consumed out of six authorized, with no automatic seventh.
 Results/history repair 3 has its own restricted mission/runs/header/loading scope
 and does not authorize app.rs changes. The separate witness 4/4 authorization
 covers its observer only. No budget is reset by this document.
 
-The only authorized write for this design task is this proposal. Main integration
-builder retains the sole Rust/Cargo lease and its staged files must be untouched.
+Historical design phase allowed only this proposal. Main integration is now
+committed locally and its author lease released; sixth-round source/Cargo ownership
+is transferred only by the dispatch below.
 
 ## Actual failure and source-backed cause
 
@@ -446,3 +447,22 @@ This supersedes the pending-response status above. Dispatch count remains five
 until the sixth author dispatch is recorded; maximum is now six, with no
 automatic seventh. Results repair 3 runs first to keep shared projection/Cargo
 ownership sequential; this does not reduce the approved N7 scope.
+
+## Sixth-round pre-dispatch reservation
+
+The sixth slot is reserved; five dispatches have occurred. Record **6/6** again
+immediately before the actual author handoff. Original identity remains
+desktop Home/Inbox; no reset, automatic seventh round or remote publication.
+Source/destination is codex/results-planning-history, same worktree. At reservation
+HEAD was c2001306 plus frozen uncommitted Results closure c7193d6a. The user then
+authorized the narrow fourth Results repair before this author was handed off;
+complete that repair first and bind the sixth handoff to its resulting tree.
+No sixth author handoff or Rust write has occurred. No budget reset is implied.
+
+User's explicit sixth-round answer authorizes the full approved App/AppState/
+Inbox/run_stream and bounded read-only persistence inspection closure. First prove
+actual App-update-to-Inbox RED with private index-location injection only; then
+implement the complete offline/generation/terminal/operation-problem contract.
+Independent 5a then full generic/domain/security/API 5b required before closure.
+Author may update this record/evidence, not the frozen Results files, and must
+release the sole Cargo lease for final review. No commit or publication by author.

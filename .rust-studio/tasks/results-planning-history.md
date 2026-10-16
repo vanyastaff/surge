@@ -1,6 +1,6 @@
 # Results planning history
 
-Status: local Results stage COMPLETE after repair 2, independent affected 5a and all three 5b lenses. Full product journey and native Windows remain unverified. Repair dispatches: **2/3**.
+Status: repair 3 BUILD COMPLETE and frozen for independent affected 5a then full 5b; prior repair 2 completion is historical below. Full product journey and native Windows remain unverified. Repair dispatches: **3/3**.
 
 Base: `a2ba09c5d1abe2d5370cca9710d19e88c604dc07`.
 Worktree: `/Users/vanyastafford/.codex/worktrees/results-planning-history/surge`.
@@ -368,3 +368,52 @@ parent graph lineage, independent observations and actual child-to-parent Log an
 Sessions navigation. Shared projection adapter in project_lifecycle/loading.rs is
 mechanical only. No scheduler, receipts, provider, runtime or Home owner edits.
 Full affected gates and independent 5a then full 5b precede local commit.
+
+## Repair 3 independent reviews
+
+Frozen source closure c7193d6ac803123f235b7b11ec87d94a221edb2c79ee8828e0a05b46b1375a1f:
+5a ACCEPTABLE; generic5b COMPLETE. Domain5b COMPLETE with advisory RPH-R3-DOM-A1;
+security5b NEEDS WORK with blocking RPH-R3-SEC-1 (P2), same fallback-style issue.
+Root confirmed theme.rs's explicit semantic-role documentation and accepts the
+security disposition as a required RPC-03 correction; domain severity disagreement
+is retained. No execution authority or terminal/approval fabrication was found.
+Missing graph attribution currently keeps Agent styling through Lane::Build.
+
+Overall stage remains NEEDS WORK, repair count3/3. No source repair dispatched.
+Concrete narrow prospective fourth-round plan is
+results-neutral-attribution-fourth-round-proposal.md. User's Home/Inbox sixth
+mandate does not extend this task; independent proposal review then explicit
+Results extension are required. All successful gates and failures remain retained.
+
+User subsequently answered "Да, разрешаю четвёртый раунд Results" after the
+focused critic/security proposal re-review ACCEPTABLE. Current Results dispatch
+count **4/4**, recorded before reusing its author. Narrow scope/RED/gates and
+review conditions are in results-neutral-attribution-fourth-round-proposal.md.
+No automatic fifth. Home's sixth slot remains authorized/reserved, not dispatched.
+
+
+## Repair 3 author freeze and executed gates
+
+Author verdict: **BUILD COMPLETE**, awaiting independent affected 5a then full 5b generic/domain/security review. Shared count remains **3/3**; no fourth implementation dispatch is automatic. HEAD `c2001306cce946390b5105644526f99d2b8cf37b`.
+
+The six-source closure SHA256 is `c7193d6ac803123f235b7b11ec87d94a221edb2c79ee8828e0a05b46b1375a1f`. Individual source hashes are in `.rust-studio/evidence/results-repair3/frozen-source-sha.txt`; commands, environment, result denominators and receipt hashes are in `manifest.json` in that directory. No source changed after the final full UI receipt and frozen lint gates.
+
+Implemented: independent actual planning occurrences keyed by StageEntered sequence, every recorded session, neutral node labels, summaries/failures/recovery/terminal/coverage and watermark facts. Typed reviews alone approve; absent review says No review recorded, with historical-current uncertainty after gaps. The first authenticated parent graph remains the anchor, generated/regenerated child artifacts cannot replace or restore it, and genuine revisions require matching predecessor plus content/hash validation. No profile-substring role inference is used for planning. The fallible shared adapter compiles planning once; the history loader chooses the child/fallback before composition, compiles supplied child history once, and the sole lifecycle caller propagates errors mechanically.
+
+Both rail rows remain selectable with a Runs count and exact typed operation membership. Cold loader ownership may inform these read-only labels only for the unchanged selected project request, without writing AppState. Header lifecycle belongs to the selected run and the operation has its own label. Exact full RunId, actual parent Log entries and Sessions opening remain reachable through rendered child-to-parent clicks and rendered tabs. Independent parent/child observation and watermark tests prevent a live child, stale parent or operation phase from upgrading planning activity.
+
+Actual pre-behavior RED: `outer-red-authentic.log` is **0/3**, all intended assertions reached: missing actual description planning occurrence; hidden completed parent after child selection; header waiting to build versus Completed. The first two receipts preserve hidden-parent and incomplete-display-replay setup failures separately. `outer-green-attempt.log` was a visibility compiler failure, not a behavioral RED. `outer-green.log` was **2/3**, exposing shortened header identity. `ui-green.log` was **328/330**: the new recovery fixture lacked RunStarted and correctly projected Unknown; that negative remains and a startup-complete positive was added. Navigation assertions passed but pending reads remained at cleanup; the fixture now settles actual superseded reads before releasing storage/home. Initial all-feature lint rejected one redundant closure; no suppression was added. These receipts remain retained.
+
+Final commands all used `--locked`, the authorized `target/auth-required-diagnostic`, incremental=0, dev/test debug=0, test strip=symbols, jobs=2, login=false:
+
+| Receipt | Final command/result |
+| --- | --- |
+| `ui-final-closure.log` | `cargo test --locked -p surge-ui -- --nocapture`: **330/330** unit/native plus **5/5** integration, **0 ignored**. Includes **31/31 Results**, **22/22 mission**, **15/15 project_lifecycle**. |
+| `persistence-inspection.log` | `cargo test --locked -p surge-persistence --lib inspection -- --nocapture`: **25/25**, **0 ignored**, **535 filtered**. |
+| `clippy-all-frozen.log` | `cargo clippy --locked -p surge-ui -p surge-persistence --all-targets --all-features -- -D warnings`: **exit 0**. |
+| `clippy-default-frozen.log` | Same strict affected-crate/all-target command with default features: **exit 0**. |
+| `fmt.log` / `diff-check.log` | All six owned Rust files rustfmt check, edition2024/skip_children=true; `git diff --check`: **exit 0**. |
+
+The final UI gate is default features; all-feature and default all-target builds are independently linted. No required integration was skipped. UI integration tests only write their isolated decision-file fixtures, so no hardcoded helper publication was needed; the existing target/debug symlink and main checkout were not modified by this author. Existing linker compact-unwind and dependency future-incompatibility warnings are retained. No fresh native Windows, MSRV or full-workspace CI claim. Prior unexpected Fleet/secure_lock receipts remain unchanged with their causes unconfirmed.
+
+All changes are in the approved six Rust files plus this task/evidence record. No app.rs/app_state/Inbox/Home owner, scheduler, authority/schema, provider, acceptance fixture/runtime/capture/bundle, dependency/unsafe/protocol or memory changes. No commit/push/PR/merge. N7 and the queued Home/Inbox mandate are separate; all eight tasks/two milestones and full product/platform goal remain open. Rust/Cargo lease released after terminal gates and source hash verification; reviews must use this frozen closure before any root-owned commit.
