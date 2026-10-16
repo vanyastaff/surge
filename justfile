@@ -52,9 +52,9 @@ build-ui:
     cargo build --locked -p surge-ui
 
 [group("build")]
-[doc("Build surge-ui and wrap it in a macOS Surge.app bundle (macOS only)")]
-bundle-ui *args: build-ui
-    bash scripts/bundle-macos-app.sh {{ args }}
+[doc("Build UI, CLI and daemon, then package Surge.app (macOS only; accepts --release)")]
+bundle-ui *args:
+    bash scripts/bundle-macos-app.sh --build "$@"
 
 [group("build")]
 [doc("Build the surge CLI and daemon in release mode")]

@@ -993,6 +993,7 @@ impl AgentsScreen {
                             .when(!is_default, |el| {
                                 el.child(
                                     Button::new("agent-make-default")
+                                        .debug_selector(|| "agent-make-default".into())
                                         .outline()
                                         .small()
                                         .icon(IconName::Check)
@@ -1172,6 +1173,49 @@ mod tests {
     use super::{fmt_tokens, readiness_look};
     use crate::agent_usage::Readiness;
     use crate::theme::Semantic;
+
+    #[test]
+    fn native_make_default_persists_selected_project_provider_recipe() {
+        use gpui_kit::{AppContext as _, TestAppContext};
+        let root = tempfile::tempdir().unwrap();
+        let entry = surge_acp::Registry::builtin()
+            .find("codex-acp")
+            .unwrap()
+            .clone();
+        let expected = entry.to_agent_config();
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.project_path = Some(root.path().to_path_buf());
+            state.config = Some(surge_core::SurgeConfig::default());
+            state.installed_agents = vec![surge_acp::DetectedAgent {
+                entry,
+                command_path: Some("test-fixture-provider".into()),
+                detected_version: None,
+            }];
+            state
+        });
+        let view = cx.new(|cx| {
+            let mut screen = super::AgentsScreen::new(state.clone(), cx);
+            screen.selected = Some("codex-acp".into());
+            screen
+        });
+        let (_, window) = cx
+            .add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+        let button = window.debug_bounds("agent-make-default").unwrap();
+        window.simulate_click(button.center(), gpui_kit::Modifiers::default());
+        let stored = surge_core::SurgeConfig::load(&root.path().join("surge.toml")).unwrap();
+        assert_eq!(stored.default_agent, "codex-acp");
+        assert_eq!(stored.agents["codex-acp"].command, expected.command);
+        assert_eq!(stored.agents["codex-acp"].args, expected.args);
+        window.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).config.as_ref().unwrap().default_agent,
+                stored.default_agent
+            )
+        });
+    }
 
     #[test]
     fn profiles_are_discoverable_separately_from_runtimes() {

@@ -173,6 +173,13 @@ pub struct ProjectScope {
 }
 
 impl ProjectScope {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+    pub(crate) fn repository(&self) -> Option<&Path> {
+        self.git_common_dir.as_deref()
+    }
+
     /// Resolve the scope for a project root (does filesystem/git IO once).
     pub fn resolve(root: &Path) -> Self {
         Self {

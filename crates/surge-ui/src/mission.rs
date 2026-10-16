@@ -274,6 +274,16 @@ pub fn fold(
         TaskExecutionView::compile(first.run_id, planning)?;
     }
     let view = TaskExecutionView::compile(run, implementation)?;
+    Ok(from_execution(planning, &view, implementation, roadmap))
+}
+
+/// Present an already compiled execution view; planning seeds are not execution evidence.
+pub(crate) fn from_execution(
+    planning: &[RunEvent],
+    view: &TaskExecutionView,
+    implementation: &[RunEvent],
+    roadmap: Option<&RoadmapArtifact>,
+) -> Mission {
     let plan_events: Vec<_> = if planning.is_empty() {
         implementation
     } else {
@@ -317,7 +327,7 @@ pub fn fold(
     for task in view.tasks.iter().filter(|task| task.parent.is_none()) {
         let milestone = match &task.scope {
             surge_core::task_execution::TaskScope::Recorded(scope) => {
-                milestone_for(&mut mission, &view, scope)
+                milestone_for(&mut mission, view, scope)
             },
             surge_core::task_execution::TaskScope::Partial { .. } => {
                 ensure_milestone(&mut mission, "unassigned-work", "Unassigned work")
@@ -329,7 +339,7 @@ pub fn fold(
         while recorded.len() <= milestone {
             recorded.push(Vec::new());
         }
-        let mut rendered = task_view(task, &view, &graphs);
+        let mut rendered = task_view(task, view, &graphs);
         if let Some(seed) = mission.milestones[milestone]
             .tasks
             .iter()
@@ -364,7 +374,7 @@ pub fn fold(
         match stage.scope.recorded() {
             Some([]) => push_step(&mut mission.steps, step),
             Some(scope) => {
-                let index = milestone_for(&mut mission, &view, scope);
+                let index = milestone_for(&mut mission, view, scope);
                 push_step(&mut mission.milestones[index].steps, step);
             },
             None => {
@@ -383,7 +393,7 @@ pub fn fold(
             _ => None,
         });
     mission.now = now(&mission);
-    Ok(mission)
+    mission
 }
 
 fn graphs_at_entry(events: &[RunEvent]) -> HashMap<u64, Arc<Graph>> {

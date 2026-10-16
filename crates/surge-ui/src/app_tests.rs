@@ -614,3 +614,158 @@ fn older_inbox_plan_opens_its_exact_run_in_workflows() {
         assert!(!state.read(cx).plan_edits.contains_key(&newer));
     });
 }
+
+#[test]
+fn existing_project_opens_on_project_home() {
+    assert_project_entry_lands_on_home("existing");
+}
+
+#[test]
+fn new_idea_project_opens_on_project_home() {
+    assert_project_entry_lands_on_home("idea");
+}
+
+fn assert_project_entry_lands_on_home(route: &str) {
+    run_isolated_app_probe(route, "app::tests::project_home_entry_child_probe");
+}
+fn run_isolated_app_probe(route: &str, probe: &str) {
+    let home = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", probe, "--nocapture"])
+        .env("SURGE_HOME", home.path())
+        .env("SURGE_TEST_PROJECT_HOME_ENTRY", route)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "project entry {route} watchdog: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "entry {route}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn project_home_entry_child_probe() {
+    let Ok(route) = std::env::var("SURGE_TEST_PROJECT_HOME_ENTRY") else {
+        return;
+    };
+    let project = tempfile::tempdir().unwrap();
+    let (mut cx, app, _, _) = fixture();
+    if route == "idea" {
+        app.update(&mut cx, |app, cx| {
+            app.handle_welcome_event(crate::screens::welcome::WelcomeEvent::NewProject, cx)
+        });
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.directories);
+            Some(vec![project.path().to_path_buf()])
+        });
+        cx.run_until_parked();
+        assert!(project.path().join(".git").is_dir());
+    } else {
+        std::fs::write(project.path().join("keep.txt"), "Keep existing conventions").unwrap();
+        app.update(&mut cx, |app, cx| {
+            app.handle_welcome_event(
+                crate::screens::welcome::WelcomeEvent::OpenProject(project.path().into()),
+                cx,
+            )
+        });
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("keep.txt")).unwrap(),
+            "Keep existing conventions"
+        );
+    }
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.state.read(cx).project_path.as_deref(),
+            Some(project.path())
+        );
+        assert_eq!(app.active_screen.label(), "Home");
+    });
+}
+
+#[test]
+fn home_exact_run_navigation_preserves_hidden_planning_and_missing_targets() {
+    let mut cx = TestAppContext::single();
+    cx.update(gpui_kit::init);
+    let planning = RunId::new();
+    let implementation = RunId::new();
+    let missing = RunId::new();
+    let state = cx.new(|_| {
+        let mut state = AppState::new();
+        state.project_path = Some(PathBuf::from(PROJECT));
+        for run in [planning, implementation] {
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+        }
+        state.bootstrap_operations.insert(
+            RunId::nil(),
+            surge_core::bootstrap_operation::BootstrapOperationStatus {
+                operation_id: RunId::nil(),
+                planning_run: planning,
+                implementation_run: implementation,
+                state: surge_core::bootstrap_operation::BootstrapState::Completed,
+                result: None,
+                revision: 1,
+                cancel_requested: false,
+                queue_sequence: 1,
+                payload_version: 1,
+            },
+        );
+        state
+    });
+    let app = cx.new(|cx| {
+        let mut app = SurgeApp::new_shell(state, cx);
+        app.mode = super::AppMode::Project {
+            _path: PathBuf::from(PROJECT),
+            _name: "fixture".into(),
+        };
+        app.navigate(Screen::Home, cx);
+        app
+    });
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(app.clone(), window, cx));
+    let mut observed = Vec::new();
+    for target in [planning, missing] {
+        window.update(|_, cx| app.update(cx, |app, cx| app.open_run_cockpit(Some(target), cx)));
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(app.read(cx).active_screen, Screen::Runs);
+            let screen = app.read(cx).runs_screen.as_ref().unwrap().clone();
+            observed.push(screen.update(cx, |screen, cx| screen.visible_run_for_test(cx)));
+        });
+    }
+    assert_eq!(
+        observed,
+        vec![Some(planning), None],
+        "explicit run navigation cannot choose a different run or merge away planning"
+    );
+}
+
+#[cfg(unix)]
+#[path = "app_tests/home_planning.rs"]
+mod home_planning;
+
+#[path = "app_tests/recorded_navigation.rs"]
+mod recorded_navigation;

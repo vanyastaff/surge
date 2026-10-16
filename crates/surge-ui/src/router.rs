@@ -6,6 +6,8 @@ use gpui_kit::assets::IconName;
 /// tools remain available through Customize and contextual navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Screen {
+    /// Home — the complete project journey and exact next destinations.
+    Home,
     /// Tasks — work and progress in the current project.
     Fleet,
     /// Roadmap — description → milestones → runs.
@@ -33,6 +35,7 @@ impl Screen {
     /// Display name for the sidebar.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Home => "Home",
             Self::Fleet => "Tasks",
             Self::Roadmap => "Plan",
             Self::Runs => "Results",
@@ -52,7 +55,8 @@ impl Screen {
     /// [`crate::assets`].
     pub fn icon(self) -> IconName {
         match self {
-            Self::Fleet => IconName::LayoutDashboard,
+            Self::Home => IconName::LayoutDashboard,
+            Self::Fleet => IconName::Kanban,
             Self::Roadmap => IconName::Map,
             Self::Runs => IconName::Activity,
             Self::Flow => IconName::Workflow,
@@ -86,6 +90,7 @@ impl Screen {
     /// Everyday destinations, in the order work moves through them.
     pub fn sidebar_items() -> &'static [Screen] {
         &[
+            Self::Home,
             Self::Fleet,
             Self::Roadmap,
             Self::Inbox,

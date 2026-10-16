@@ -191,7 +191,10 @@ impl FleetScreen {
                                 if !state.tasks.records.iter().any(|record| record.id == item) {
                                     state.tasks.records.push(detail.item.clone());
                                 }
-                                state.tasks.details.insert(item, *detail);
+                                state
+                                    .tasks
+                                    .details
+                                    .insert(item, std::sync::Arc::new(*detail));
                                 cx.notify();
                             });
                             this.refresh_durable_tasks(cx);

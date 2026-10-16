@@ -142,9 +142,17 @@ async fn dispatch(agent: &MockAgent, request: acp::ClientRequest) -> acp::Result
             if std::env::args().any(|arg| arg == "--stall-config-option") {
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             }
-            serde_json::to_value(acp::SetSessionConfigOptionResponse::new(
-                super::mock_config_options(),
-            ))
+            let mut options = super::mock_config_options();
+            if std::env::args().any(|arg| arg == "--ack-config-choice") {
+                for option in &mut options {
+                    if option.id == request.config_id
+                        && let acp::SessionConfigKind::Select(select) = &mut option.kind
+                    {
+                        select.current_value = value.clone().into();
+                    }
+                }
+            }
+            serde_json::to_value(acp::SetSessionConfigOptionResponse::new(options))
         },
         _ => return Err(acp::Error::method_not_found()),
     };

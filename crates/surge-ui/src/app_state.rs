@@ -18,6 +18,7 @@ use crate::daemon_link::ConnectionState;
 /// When data changes, `cx.notify()` triggers UI re-render.
 pub struct AppState {
     pub(crate) tasks: crate::work_items::TaskCache,
+    pub(crate) project_history: crate::project_lifecycle::ProjectHistory,
     // ── Project ──
     pub project_path: Option<PathBuf>,
     /// Ownership rule for runs of the open project; see
@@ -145,6 +146,7 @@ impl AppState {
             plan_edits: HashMap::new(),
             bootstrap_operations: HashMap::new(),
             tasks: crate::work_items::TaskCache::default(),
+            project_history: crate::project_lifecycle::ProjectHistory::default(),
         }
     }
 
@@ -407,6 +409,8 @@ impl AppState {
 
     /// Load project from a directory path.
     pub fn load_project(&mut self, path: &std::path::Path) {
+        self.tasks.clear_project();
+        self.project_history.clear();
         self.config = None;
         self.agent_pool = None;
         self.project_load_error = None;

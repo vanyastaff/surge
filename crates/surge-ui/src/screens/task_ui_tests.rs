@@ -358,7 +358,10 @@ fn lost_ack_ui_retry_preserves_command_and_one_real_discussion(cx: &mut TestAppC
             },
             false,
         );
-        state.tasks.details.insert(item, *detail);
+        state
+            .tasks
+            .details
+            .insert(item, std::sync::Arc::new(*detail));
         state
     });
     let view = cx.new(|cx| FleetScreen::new(state.clone(), cx));
@@ -373,7 +376,9 @@ fn lost_ack_ui_retry_preserves_command_and_one_real_discussion(cx: &mut TestAppC
     let original = command.clone();
     view.update(cx, |view, cx| {
         view.selected_item = Some(item);
-        view.task_refresh_identity = Some((identity, Some(project.path().into())));
+        view.state.update(cx, |state, _| {
+            state.tasks.refresh_identity = Some((identity, Some(project.path().into())))
+        });
         view.submit_task(command, cx);
     });
     drive_until(&runtime, cx, |cx| cx.read(|cx| !view.read(cx).task_busy));
@@ -450,7 +455,10 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
         state.project_path = Some(project.path().into());
         state.daemon_state = crate::daemon_link::ConnectionState::Connected(facade.clone());
         state.tasks.begin(detail.item.workspace.repository.clone());
-        state.tasks.details.insert(item, (*detail).clone());
+        state
+            .tasks
+            .details
+            .insert(item, std::sync::Arc::new((*detail).clone()));
         state.tasks.records.push(detail.item.clone());
         state.tasks.fresh = true;
         state
@@ -465,7 +473,9 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
             view.selected_item = Some(item);
-            view.task_refresh_identity = Some((identity, Some(project.path().into())));
+            view.state.update(cx, |state, _| {
+                state.tasks.refresh_identity = Some((identity, Some(project.path().into())))
+            });
             view.ensure_task_draft(&detail, window, cx);
             view.task_drafts[&item].comment.update(cx, |input, cx| {
                 input.set_value("Unsaved discussion draft", window, cx)
@@ -634,6 +644,7 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
             .block_on(DaemonEngineFacade::connect(socket))
             .unwrap(),
     );
+    let request_transport = Arc::downgrade(&direct);
     cx.update_window(handle, |_, _, cx| {
         view.update(cx, |view, cx| {
             view.state.update(cx, |state, _| {
@@ -806,10 +817,12 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
         ]
     });
     let owner = view.downgrade();
+    let request_owner = cx.read(|cx| view.read(cx).state.downgrade());
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
             view.state.update(cx, |state, _| {
                 state.daemon_state = crate::daemon_link::ConnectionState::Disconnected;
+                state.tasks.disconnected();
             })
         });
         window.remove_window();
@@ -826,6 +839,11 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
         draft_handles.iter().all(|input| input.upgrade().is_none()),
         "all original draft inputs must be released with their owner"
     );
+    // The shared detail owner outlives a screen while readonly requests settle.
+    // Retain the client runtime and daemon until that owner has released its state.
+    drive_until(&runtime, cx, |_| request_owner.upgrade().is_none());
+    // Weak cache publication releases state before its bounded readonly transport settles.
+    drive_until(&runtime, cx, |_| request_transport.upgrade().is_none());
     cx.run_until_parked();
     proxy.abort();
     server.abort();
@@ -1053,8 +1071,14 @@ fn completed_attempt_superseded_by_stored_edit_needs_current_revision_execution(
         let mut state = AppState::new();
         state.daemon_state = crate::daemon_link::ConnectionState::Connected(facade);
         state.tasks.records.push(detail.item.clone());
-        state.tasks.details.insert(item, detail.clone());
-        state.tasks.histories.insert(item, history);
+        state
+            .tasks
+            .details
+            .insert(item, std::sync::Arc::new(detail.clone()));
+        state
+            .tasks
+            .histories
+            .insert(item, std::sync::Arc::new(history));
         state.tasks.fresh = true;
         state
     });
@@ -1067,10 +1091,10 @@ fn completed_attempt_superseded_by_stored_edit_needs_current_revision_execution(
     });
 
     view.update(cx, |view, cx| {
-        view.task_refresh_identity = Some((
-            Arc::as_ptr(&view.state.read(cx).daemon_state.facade().unwrap()) as usize,
-            None,
-        ));
+        let identity = Arc::as_ptr(&view.state.read(cx).daemon_state.facade().unwrap()) as usize;
+        view.state.update(cx, |state, _| {
+            state.tasks.refresh_identity = Some((identity, None))
+        });
     });
     let (handle, root) = cx.update(|cx| {
         gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
@@ -1542,7 +1566,10 @@ fn newly_admitted_suspend_cannot_use_old_executing_detail(cx: &mut TestAppContex
         state.daemon_state = crate::daemon_link::ConnectionState::Connected(facade);
         state.tasks.begin(old.item.workspace.repository.clone());
         state.tasks.records.push(old.item.clone());
-        state.tasks.details.insert(item, old.clone());
+        state
+            .tasks
+            .details
+            .insert(item, std::sync::Arc::new(old.clone()));
         state.tasks.fresh = true;
         state.run_streams.insert(run, stream);
         state

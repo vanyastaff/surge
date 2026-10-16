@@ -664,6 +664,7 @@ mod tests {
         assert_eq!(
             Screen::sidebar_items(),
             [
+                Screen::Home,
                 Screen::Fleet,
                 Screen::Roadmap,
                 Screen::Inbox,

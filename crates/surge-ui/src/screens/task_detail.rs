@@ -10,36 +10,9 @@ use gpui_kit::*;
 
 impl FleetScreen {
     pub(super) fn refresh_tasks_if_changed(&mut self, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let identity = Some((
-            state
-                .daemon_state
-                .facade()
-                .map_or(0, |facade| std::sync::Arc::as_ptr(&facade) as usize),
-            state.project_path.clone(),
-        ));
-        if self.task_refresh_identity == identity {
-            return;
-        }
-        let project_changed = self
-            .task_refresh_identity
-            .as_ref()
-            .is_some_and(|old| Some(&old.1) != identity.as_ref().map(|new| &new.1));
-        self.task_refresh_identity = identity;
-        if project_changed {
+        if crate::work_items::refresh_tasks_if_changed(&self.state, cx) {
             self.selected_item = None;
-            self.state
-                .update(cx, |state, _| state.tasks.clear_project());
         }
-        if self
-            .task_refresh_identity
-            .as_ref()
-            .is_some_and(|identity| identity.0 == 0)
-        {
-            self.state.update(cx, |state, _| state.tasks.disconnected());
-        }
-        self.task_error = None;
-        self.refresh_durable_tasks(cx);
     }
 
     pub(super) fn render_durable_row(
@@ -529,7 +502,7 @@ impl FleetScreen {
         &mut self,
         mut panel: Stateful<Div>,
         detail: &surge_core::work_item::WorkItemDetail,
-        history: Option<crate::work_items::TaskHistory>,
+        history: Option<std::sync::Arc<crate::work_items::TaskHistory>>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         use surge_core::id::WorkItemOperationId;
@@ -540,11 +513,14 @@ impl FleetScreen {
         if let Some(history) = history {
             panel = self.render_task_attempts(panel, &history.attempts.entries, cx);
             panel = panel.child(div().font_weight(FontWeight::BOLD).child("Discussion"));
-            for message in history.discussion.entries {
+            for message in &history.discussion.entries {
                 let proposal_id = message.sequence;
                 panel = panel
-                    .child(thread_message(message.actor.to_string(), message.body))
-                    .when_some(message.proposal, |panel, proposal| {
+                    .child(thread_message(
+                        message.actor.to_string(),
+                        message.body.clone(),
+                    ))
+                    .when_some(message.proposal.as_ref(), |panel, proposal| {
                         let mut panel = panel
                             .child(
                                 div().child(format!("Proposed requirements: {}", proposal.text())),
@@ -681,8 +657,16 @@ impl FleetScreen {
             .find(|current| current.id == record.id)
             .unwrap_or(record);
         let label = crate::work_items::task_status(
-            state.tasks.details.get(&record.id),
-            state.tasks.histories.get(&record.id),
+            state
+                .tasks
+                .details
+                .get(&record.id)
+                .map(std::sync::Arc::as_ref),
+            state
+                .tasks
+                .histories
+                .get(&record.id)
+                .map(std::sync::Arc::as_ref),
             record,
         );
         if matches!(label, "Running" | "Status unavailable") {
@@ -728,80 +712,7 @@ impl FleetScreen {
         kind: crate::work_items::TaskHistoryKind,
         cx: &mut Context<Self>,
     ) {
-        use crate::work_items::TaskHistoryKind as Kind;
-        use surge_core::work_item::{WorkItemCommand, WorkItemResult};
-        let state = self.state.read(cx);
-        let Some(facade) = state.daemon_state.facade() else {
-            return;
-        };
-        let Some(after) = state
-            .tasks
-            .histories
-            .get(&item)
-            .and_then(|history| history.next(kind))
-        else {
-            return;
-        };
-        let scope = state.tasks.scope.clone();
-        let observed_cursor = after.clone();
-        let command = match kind {
-            Kind::Attempts => WorkItemCommand::Attempts {
-                item,
-                after: Some(after),
-                limit: 100,
-            },
-            Kind::Discussion => WorkItemCommand::Discussion {
-                item,
-                after: Some(after),
-                limit: 100,
-            },
-            Kind::Revisions => WorkItemCommand::Revisions {
-                item,
-                after: Some(after),
-                limit: 100,
-            },
-        };
-        cx.spawn(async move |this, cx| {
-            let result = facade.work_item(command).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.selected_item != Some(item) || this.state.read(cx).tasks.scope != scope {
-                    return;
-                }
-                match result {
-                    Ok(result) => this.state.update(cx, |state, cx| {
-                        let Some(history) = state.tasks.histories.get_mut(&item) else {
-                            return;
-                        };
-                        if history.next(kind).as_deref() != Some(observed_cursor.as_str()) {
-                            return;
-                        }
-                        match (kind, result) {
-                            (Kind::Attempts, WorkItemResult::Attempts(page)) => {
-                                history.attempts.entries.extend(page.entries);
-                                history.attempts.next_cursor = page.next_cursor;
-                            },
-                            (Kind::Discussion, WorkItemResult::Discussion(page)) => {
-                                history.discussion.entries.extend(page.entries);
-                                history.discussion.next_cursor = page.next_cursor;
-                            },
-                            (Kind::Revisions, WorkItemResult::Revisions(page)) => {
-                                history.revisions.entries.extend(page.entries);
-                                history.revisions.next_cursor = page.next_cursor;
-                            },
-                            _ => {
-                                state.tasks.error = Some("Unexpected task history response".into());
-                            },
-                        }
-                        cx.notify();
-                    }),
-                    Err(error) => {
-                        this.task_error = Some(error.to_string());
-                        cx.notify();
-                    },
-                }
-            });
-        })
-        .detach();
+        crate::work_items::request_task_history(&self.state, item, kind, cx);
     }
 
     pub(super) fn ensure_task_draft(
@@ -1133,93 +1044,7 @@ impl FleetScreen {
     }
 
     pub(super) fn load_durable_tasks(&mut self, append: bool, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let Some(facade) = state.daemon_state.facade() else {
-            return;
-        };
-        let Some(project) = state.project_path.as_ref() else {
-            return;
-        };
-        let Some(repository) = crate::project::git_common_dir(project) else {
-            return;
-        };
-        let after = if append {
-            state.tasks.next_cursor.clone()
-        } else {
-            None
-        };
-        let scope = self.state.update(cx, |state, cx| {
-            let scope = state.tasks.begin(repository.clone());
-            cx.notify();
-            scope
-        });
-        cx.spawn(async move |this, cx| {
-            let result = crate::work_items::list_project_tasks(&facade, &repository, after).await;
-            let _ = this.update(cx, |this, cx| {
-                this.state.update(cx, |state, cx| {
-                    match result {
-                        Ok(page) => state.tasks.apply_page(&scope, page, append),
-                        Err(error) => state.tasks.fail(&scope, error),
-                    }
-                    cx.notify();
-                });
-                let items = this
-                    .state
-                    .read(cx)
-                    .tasks
-                    .records
-                    .iter()
-                    .take(40)
-                    .map(|record| record.id)
-                    .collect();
-                this.refresh_task_details(facade.clone(), scope.clone(), items, cx);
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn refresh_task_details(
-        &mut self,
-        facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
-        scope: crate::work_items::TaskRequestScope,
-        items: Vec<surge_core::id::WorkItemId>,
-        cx: &mut Context<Self>,
-    ) {
-        let items: Vec<_> = self.state.update(cx, |state, _| {
-            items
-                .into_iter()
-                .map(|item| (item, state.tasks.begin_detail(item)))
-                .collect()
-        });
-        cx.spawn(async move |this, cx| {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
-            for (item, request) in items {
-                let result =
-                    tokio::time::timeout_at(deadline, crate::work_items::load_task(&facade, item))
-                        .await;
-                let Ok(result) = result else {
-                    break;
-                };
-                let alive = this.update(cx, |this, cx| {
-                    this.state.update(cx, |state, cx| {
-                        if !state.tasks.accepts(&scope) {
-                            return;
-                        }
-                        if let Ok((detail, history)) = result {
-                            if detail.item.workspace.repository != scope.repository {
-                                return;
-                            }
-                            state.tasks.apply_detail(request, detail, history);
-                            cx.notify();
-                        }
-                    });
-                });
-                if alive.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+        crate::work_items::refresh_project_tasks(&self.state, append, cx);
     }
 
     pub(super) fn select_item(&mut self, item: surge_core::id::WorkItemId, cx: &mut Context<Self>) {
@@ -1231,34 +1056,7 @@ impl FleetScreen {
     }
 
     pub(super) fn reload_item(&mut self, item: surge_core::id::WorkItemId, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let Some(facade) = state.daemon_state.facade() else {
-            cx.notify();
-            return;
-        };
-        let scope = state.tasks.scope.clone();
-        let request = self
-            .state
-            .update(cx, |state, _| state.tasks.begin_detail(item));
-        cx.spawn(async move |this, cx| {
-            let result = crate::work_items::load_task(&facade, item).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.selected_item != Some(item) || this.state.read(cx).tasks.scope != scope {
-                    return;
-                }
-                match result {
-                    Ok((detail, history)) => this.state.update(cx, |state, cx| {
-                        state.tasks.apply_detail(request, detail, history);
-                        cx.notify();
-                    }),
-                    Err(error) => {
-                        this.task_error = Some(error);
-                        cx.notify();
-                    },
-                }
-            });
-        })
-        .detach();
+        crate::work_items::request_task_detail(&self.state, item, cx);
         cx.notify();
     }
 

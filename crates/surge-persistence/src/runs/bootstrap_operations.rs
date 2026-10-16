@@ -610,6 +610,20 @@ pub(super) fn read_capture_for_run(
     connection: &Connection,
     run_id: RunId,
 ) -> Result<Option<BootstrapCapture>, BootstrapStoreError> {
+    match read_record_for_run(connection, run_id)?.map(|record| record.payload) {
+        Some(BootstrapStoredPayload::V1 { capture, .. }) => Ok(Some(*capture)),
+        Some(BootstrapStoredPayload::Unsupported { .. }) => {
+            Err(BootstrapStoreError::UnsupportedPayload)
+        },
+        None => Ok(None),
+    }
+}
+
+/// Read the complete checked operation, preserving every accepted continuation reference.
+pub(super) fn read_record_for_run(
+    connection: &Connection,
+    run_id: RunId,
+) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
     let mut statement = connection.prepare(
         "SELECT operation_id FROM bootstrap_operations WHERE planning_run=?1 OR implementation_run=?1 LIMIT 2",
     )?;
@@ -623,11 +637,9 @@ pub(super) fn read_capture_for_run(
         return Ok(None);
     };
     let id = id.parse().map_err(|_| BootstrapStoreError::CorruptRecord)?;
-    let record = read(connection, id)?.ok_or(BootstrapStoreError::CorruptRecord)?;
-    match record.payload {
-        BootstrapStoredPayload::V1 { capture, .. } => Ok(Some(*capture)),
-        BootstrapStoredPayload::Unsupported { .. } => Err(BootstrapStoreError::UnsupportedPayload),
-    }
+    read(connection, id)?
+        .map(Some)
+        .ok_or(BootstrapStoreError::CorruptRecord)
 }
 
 fn read(

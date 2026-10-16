@@ -497,9 +497,7 @@ fn validate(graph: &Graph, context: &HandoffContext<'_>) -> Result<(), HandoffRe
         let resolved = profiles
             .resolve(&key)
             .map_err(|error| HandoffRejection::GraphInvalid(error.to_string()))?;
-        let runtime = agent
-            .runtime_override()
-            .unwrap_or(&resolved.profile.runtime.agent_id);
+        let runtime = crate::profile_loader::effective_runtime_selector(agent, &resolved);
         if agents.find_normalized(runtime).is_none() {
             return Err(HandoffRejection::GraphInvalid(format!(
                 "node {} needs agent runtime {runtime}, which is not in the agent catalog",

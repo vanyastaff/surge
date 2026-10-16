@@ -19,6 +19,7 @@ use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
 use crate::screens::inbox::{InboxAction, InboxScreen};
 use crate::screens::memory::{MemoryAction, MemoryScreen};
+use crate::screens::project_home::{HomeAction, ProjectHomeScreen};
 use crate::screens::roadmap::{RoadmapEvent, RoadmapScreen};
 use crate::screens::runs::{RunsEvent, RunsScreen};
 use crate::screens::settings::SettingsScreen;
@@ -64,6 +65,7 @@ pub struct SurgeApp {
     command_palette: Option<Entity<CommandPalette>>,
     // Screen entities (created on demand).
     fleet: Option<Entity<FleetScreen>>,
+    home: Option<Entity<ProjectHomeScreen>>,
     fleet_drafts: HashMap<PathBuf, Entity<FleetScreen>>,
     accepted_planning_runs: HashMap<surge_core::RunId, surge_core::RunId>,
     flow: Option<Entity<FlowScreen>>,
@@ -88,6 +90,8 @@ pub struct SurgeApp {
     /// select_run before it exists would silently drop the selection.
     pending_run_selection: Option<surge_core::id::RunId>,
     pending_run_tab: Option<crate::screens::runs::RunTab>,
+    pending_recorded_selection: Option<(surge_core::RunId, crate::screens::runs::RecordedTarget)>,
+    pending_home_decision: Option<(surge_core::RunId, u64)>,
     pending_task_selection: Option<(
         surge_core::roadmap::MilestoneId,
         surge_core::roadmap::RoadmapTaskId,
@@ -111,7 +115,7 @@ impl SurgeApp {
 
     fn new_shell(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let active_screen = Screen::Fleet;
+        let active_screen = Screen::Home;
         let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, state.clone(), cx));
 
         cx.subscribe(
@@ -190,6 +194,7 @@ impl SurgeApp {
             command_palette_open: false,
             command_palette: None,
             fleet: None,
+            home: None,
             fleet_drafts: HashMap::new(),
             accepted_planning_runs: HashMap::new(),
             flow: None,
@@ -209,6 +214,8 @@ impl SurgeApp {
             stream_subscribed: HashSet::new(),
             pending_run_selection: None,
             pending_run_tab: None,
+            pending_recorded_selection: None,
+            pending_home_decision: None,
             pending_task_selection: None,
             bootstrap_operations: HashMap::new(),
             bootstrap_index: Self::load_bootstrap_index(),
@@ -220,6 +227,7 @@ impl SurgeApp {
     /// the (lazily created) RunsScreen renders.
     fn open_run_cockpit(&mut self, run_id: Option<surge_core::id::RunId>, cx: &mut Context<Self>) {
         self.pending_task_selection = None;
+        self.pending_recorded_selection = None;
         self.pending_run_tab = None;
         self.pending_run_selection = run_id;
         self.navigate(Screen::Runs, cx);
@@ -594,6 +602,13 @@ impl SurgeApp {
                 run_id,
                 description,
             } => {
+                if self.active_screen != Screen::SpecWizard
+                    || self.spec_wizard.as_ref() != Some(&wizard)
+                    || self.state.read(cx).project_path.as_ref()
+                        != Some(&wizard.read(cx).project_path)
+                {
+                    return;
+                }
                 self.dispatch_bootstrap(
                     description.clone(),
                     *run_id,
@@ -928,6 +943,8 @@ impl SurgeApp {
         {
             self.fleet_drafts.insert(project, fleet);
         }
+        self.home = None;
+        self.pending_home_decision = None;
         // Load project data into AppState.
         self.state.update(cx, |state, _cx| {
             state.load_project(path);
@@ -955,15 +972,15 @@ impl SurgeApp {
             _path: path.to_path_buf(),
             _name: name,
         };
-        self.active_screen = Screen::Fleet;
+        self.active_screen = Screen::Home;
         self.sidebar
-            .update(cx, |sb, cx| sb.set_active(Screen::Fleet, cx));
+            .update(cx, |sb, cx| sb.set_active(Screen::Home, cx));
         cx.notify();
     }
 
     fn install_top_bar(&mut self, name: &str, path: &std::path::Path, cx: &mut Context<Self>) {
         let path = path.to_path_buf();
-        let top_bar = cx.new(|cx| TopBar::new(name, Some(path), Screen::Fleet, cx));
+        let top_bar = cx.new(|cx| TopBar::new(name, Some(path), Screen::Home, cx));
         cx.subscribe(
             &top_bar,
             |this, _bar, event: &TopBarEvent, cx| match event {
@@ -1436,6 +1453,55 @@ impl SurgeApp {
 
     fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.active_screen {
+            Screen::Home => {
+                if self.home.is_none() {
+                    let state = self.state.clone();
+                    let home = cx.new(|cx| ProjectHomeScreen::new(state, cx));
+                    cx.subscribe(
+                        &home,
+                        |this: &mut Self, _, event: &HomeAction, cx| match event {
+                            HomeAction::PlanApplication => {
+                                this.wizard_return_screen = Screen::Home;
+                                if this.spec_wizard.as_ref().is_some_and(|wizard| {
+                                    Some(&wizard.read(cx).project_path)
+                                        != this.state.read(cx).project_path.as_ref()
+                                }) {
+                                    this.spec_wizard = None;
+                                }
+                                this.navigate(Screen::SpecWizard, cx);
+                            },
+                            HomeAction::CreateTask => this.open_new_task(cx),
+                            HomeAction::OpenRecorded { run, target } => {
+                                this.open_run_cockpit(Some(*run), cx);
+                                this.pending_recorded_selection = Some((*run, *target));
+                            },
+                            HomeAction::OpenTask(item) => {
+                                this.navigate(Screen::Fleet, cx);
+                                this.ensure_fleet(cx)
+                                    .update(cx, |fleet, cx| fleet.open_saved_task(*item, cx));
+                            },
+                            HomeAction::OpenRun(run) => this.open_run_cockpit(Some(*run), cx),
+                            HomeAction::OpenPlan => this.navigate(Screen::Roadmap, cx),
+                            HomeAction::OpenDecision { run, request_seq } => {
+                                this.navigate(Screen::Inbox, cx);
+                                if let Some(inbox) = &this.inbox {
+                                    inbox.update(cx, |inbox, cx| {
+                                        inbox.select_decision(*run, *request_seq, cx)
+                                    });
+                                } else {
+                                    this.pending_home_decision = Some((*run, *request_seq));
+                                }
+                            },
+                        },
+                    )
+                    .detach();
+                    self.home = Some(home);
+                }
+                self.home
+                    .as_ref()
+                    .map(|home| home.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element())
+            },
             Screen::Fleet => self.ensure_fleet(cx).into_any_element(),
             Screen::Flow => {
                 let state = self.state.clone();
@@ -1466,6 +1532,9 @@ impl SurgeApp {
                 }
                 if let Some((milestone, task)) = self.pending_task_selection.take() {
                     s.update(cx, |screen, cx| screen.select_task(milestone, task, cx));
+                }
+                if let Some((run, target)) = self.pending_recorded_selection.take() {
+                    s.update(cx, |screen, cx| screen.select_recorded(run, target, cx));
                 }
                 if let Some(tab) = self.pending_run_tab.take() {
                     s.update(cx, |screen, cx| screen.select_tab(tab, cx));
@@ -1541,6 +1610,9 @@ impl SurgeApp {
                     .detach();
                     i
                 });
+                if let Some((run, seq)) = self.pending_home_decision.take() {
+                    inbox.update(cx, |inbox, cx| inbox.select_decision(run, seq, cx));
+                }
                 inbox.clone().into_any_element()
             },
             Screen::Backlog => {

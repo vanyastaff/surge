@@ -159,7 +159,6 @@ pub struct FleetScreen {
     task_busy: bool,
     task_error: Option<String>,
     task_rejections: std::collections::HashSet<surge_core::id::WorkItemId>,
-    task_refresh_identity: Option<(usize, Option<std::path::PathBuf>)>,
     task_drafts: std::collections::HashMap<surge_core::id::WorkItemId, TaskDraft>,
     task_feedback: std::collections::HashMap<surge_core::id::WorkItemId, String>,
     task_clear_comment: std::collections::HashMap<surge_core::id::WorkItemId, String>,
@@ -219,7 +218,6 @@ impl FleetScreen {
             task_busy: false,
             task_error: None,
             task_rejections: std::collections::HashSet::new(),
-            task_refresh_identity: None,
             task_drafts: std::collections::HashMap::new(),
             task_feedback: std::collections::HashMap::new(),
             task_clear_comment: std::collections::HashMap::new(),
@@ -1219,7 +1217,7 @@ mod accessibility_tests {
                 .collect();
             state.tasks.histories.insert(
                 item.id,
-                crate::work_items::TaskHistory {
+                std::sync::Arc::new(crate::work_items::TaskHistory {
                     attempts: WorkItemPage {
                         entries: attempts,
                         next_cursor: None,
@@ -1232,7 +1230,7 @@ mod accessibility_tests {
                         entries: vec![],
                         next_cursor: None,
                     },
-                },
+                }),
             );
             for run_id in [first, second, unrelated] {
                 state.runs.push(crate::app_state::UiRun {
