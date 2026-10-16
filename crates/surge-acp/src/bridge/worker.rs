@@ -1259,6 +1259,36 @@ mod tests {
     }
 
     #[test]
+    fn classify_prompt_error_authentication_required_has_actionable_guidance() {
+        use crate::bridge::error::SendMessageError;
+
+        for details in [
+            "Authentication required",
+            "AUTHENTICATION REQUIRED",
+            "Internal error: Authentication required",
+            r#"Error { code: -32000, message: "Authentication required" }"#,
+            "Authentication required: too many requests; retry after 30s",
+        ] {
+            let error = classify_prompt_dispatch_error(details.to_string());
+            assert!(
+                matches!(
+                    &error,
+                    SendMessageError::AgentAuthenticationFailed { details: actual }
+                        if actual == details
+                ),
+                "authentication requirement must retain its details in the auth variant: {error:?}"
+            );
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("verify the agent runtime is logged in")
+                    && rendered.contains("run the agent's own login, or set its API key"),
+                "auth error must retain actionable guidance: {rendered}"
+            );
+            assert!(rendered.contains(details), "raw details lost: {rendered}");
+        }
+    }
+
+    #[test]
     fn classify_prompt_error_keeps_non_auth_as_bridge_error() {
         let err = classify_prompt_dispatch_error("connection reset by peer".to_string());
         assert!(

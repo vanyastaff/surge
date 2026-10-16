@@ -86,3 +86,22 @@ against unchanged production code, then fix the shared classifier and verify
 its dependent error paths. No such test or fix has yet been executed. This would
 repair truthful problem reporting, not prove or repair the historical login
 failure. Restoring the original fixture remains necessary for its continuation.
+
+## User-confirmed loss and new acceptance attempt
+
+The user subsequently confirmed that the computer was shut down after hanging
+and that no saved copy exists. The original journal is unavailable; do not claim
+that it has been recovered. Continue the same complete habit-tracker requirements
+as a distinct acceptance attempt in the private persistent directory
+`/Users/vanyastafford/Develop/surge-acceptance/habit-tracker-sol61-20261016`.
+Its `acceptance.json` fixes both milestones, usable app inspection, follow-up
+history, exact-model evidence and cold recovery. Empty project/runtime/evidence/
+backups/bundle directories are prepared; no app implementation or native run has
+started in that directory.
+
+Installed local package metadata confirms
+`@agentclientprotocol/codex-acp` version `2.2.2` remains available in the npm cache.
+The standard `/opt/homebrew/bin/codex login status` exits zero and reports logged
+in. Raw output was withheld. This is current CLI readiness, not authentication
+or model-selection proof for any new Surge child session. Fresh same-session
+`gpt-6.1-sol` evidence is still required before claiming real-provider acceptance.
