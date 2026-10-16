@@ -117,7 +117,7 @@ pub struct InboxEntry {
     pub run_id: RunId,
     /// Project (worktree) path the run recorded.
     pub project_path: PathBuf,
-    /// `needs_input` | `working` | `waiting` | `done`.
+    /// `needs_input` | `working` | `waiting` | `recovery` | `unknown` | `done`.
     pub attention: AttentionGroup,
     /// Why the run is done, when it is; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,7 +132,8 @@ pub struct InboxEntry {
     /// claimed success.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_backed: Option<bool>,
-    /// Active node for a working/blocked run, when known.
+    /// Last recorded graph cursor from a trusted complete journal, when known.
+    /// The historical field name does not establish current execution or liveness.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_node: Option<String>,
     /// Prompt the operator must answer, when blocked with one.
@@ -220,6 +221,8 @@ pub async fn collect_entries(
 /// recovery requires operator inspection. Missing, corrupt or invalid journals
 /// yield an Unknown entry without hiding healthy runs. Capacity is looked up
 /// only for the runtime recorded by this run's current parked event.
+/// A static working prefix also remains Unknown without a current observation;
+/// its last recorded graph cursor remains available as history.
 pub async fn classify(
     storage: &Arc<Storage>,
     summary: &RunSummary,
@@ -264,9 +267,16 @@ pub async fn classify(
         _ => None,
     };
     if let Some(group) = attention_group {
+        let recorded_node = state.as_ref().and_then(active_node);
         return Ok(InboxEntry {
             display,
-            ..base(group, None, None, None, CapacityStatus::NeverObserved)
+            ..base(
+                group,
+                None,
+                recorded_node,
+                None,
+                CapacityStatus::NeverObserved,
+            )
         });
     }
     let Some(state) = state else {
@@ -625,6 +635,43 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_observability_offline_inbox_keeps_recorded_cursor_without_current_work() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let project = home.path().join("project");
+        let run = RunId::new();
+        let writer = storage.create_run(run, &project, None).await.unwrap();
+        append(
+            &writer,
+            vec![
+                run_started(),
+                pipeline_materialized(),
+                EventPayload::RunRecoveryRequired {
+                    control_generation: 0,
+                    diagnostic: "historical refusal".into(),
+                },
+                EventPayload::StageEntered {
+                    node: NodeKey::try_new("plan").unwrap(),
+                    attempt: 1,
+                },
+            ],
+        )
+        .await;
+        writer.flush().await.unwrap();
+        let entries = collect_entries(&storage, Some(project), 100).await.unwrap();
+        let entry = entries
+            .into_iter()
+            .find(|entry| entry.run_id == run)
+            .unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
+        assert_eq!(entry.display, RunDisplayState::Unknown);
+        assert_eq!(entry.attention, AttentionGroup::Unknown);
+        assert_eq!(entry.active_node.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_groups_runs_by_attention() {
         let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
@@ -691,7 +738,8 @@ mod tests {
         assert_eq!(b.prompt.as_deref(), Some("Approve the plan?"));
         assert_eq!(b.active_node.as_deref(), Some("plan"));
 
-        assert_eq!(find(working).attention, AttentionGroup::Working);
+        assert_eq!(find(working).attention, AttentionGroup::Unknown);
+        assert_eq!(find(working).active_node.as_deref(), Some("plan"));
 
         let d = find(done);
         assert_eq!(d.attention, AttentionGroup::Done);
@@ -1129,9 +1177,8 @@ mod tests {
             .expect("run present");
         assert_eq!(
             entry.attention,
-            AttentionGroup::Working,
-            "RunWokeFromPark must clear the parked state — a resumed run must not still show \
-             as \"waiting\" in the inbox"
+            AttentionGroup::Unknown,
+            "RunWokeFromPark clears the recorded pause; a static journal does not establish current execution"
         );
         w.close().await.unwrap();
         drop(storage);
@@ -1454,7 +1501,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run)
             .expect("run present");
-        assert_eq!(entry.attention, AttentionGroup::Working);
+        assert_eq!(entry.attention, AttentionGroup::Unknown);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
         w.close().await.unwrap();
         drop(storage);

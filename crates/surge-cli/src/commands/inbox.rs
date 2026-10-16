@@ -117,6 +117,9 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
     for group in [AttentionGroup::Recovery, AttentionGroup::Unknown] {
         for e in entries.iter().filter(|e| e.attention == group) {
             let _ = writeln!(out, "\n⚠ {}  {}", short_run(e.run_id), e.display.label());
+            if let Some(node) = &e.active_node {
+                let _ = writeln!(out, "      Last recorded node: {node}");
+            }
             print_display_action(out, e);
         }
     }
@@ -351,6 +354,20 @@ mod tests {
             evidence_backed,
             started_at_ms: 0,
         }
+    }
+
+    #[test]
+    fn recovery_observability_unknown_inbox_prints_recorded_node() {
+        let mut entry = done_entry(RunId::new(), None);
+        entry.display = surge_core::run_display::RunDisplayState::Unknown;
+        entry.attention = AttentionGroup::Unknown;
+        entry.done_reason = None;
+        entry.active_node = Some("last-stage".into());
+        let mut out = Vec::new();
+        print_inbox_to(&mut out, &[entry], false);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Run state is unconfirmed"));
+        assert!(text.contains("Last recorded node: last-stage"));
     }
 
     /// Spec §10/R30, `surge inbox`'s printed (non-JSON) rendering: an

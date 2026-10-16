@@ -38,6 +38,10 @@ pub(super) fn compile(
         previous = event.seq;
         projection.observe(event);
     }
+    if events.is_empty() {
+        projection.memory.recovery.invalidate();
+    }
+    projection.view.recovery = projection.memory.recovery.observation().clone();
     Ok(projection.view)
 }
 pub(super) struct Projection {
@@ -67,6 +71,7 @@ impl Projection {
                 iterations: Vec::new(),
                 caveats: Vec::new(),
                 terminal: None,
+                recovery: Default::default(),
             },
             active: Vec::new(),
             partial_after: None,

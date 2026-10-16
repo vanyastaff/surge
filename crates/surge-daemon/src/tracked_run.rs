@@ -601,6 +601,36 @@ mod tests {
         assert!(!confirms(&events, &RunOutcome::Completed { terminal }));
     }
 
+    #[test]
+    fn recovery_observability_confirmation_requires_exact_latest_durable_refusal() {
+        let recovery = |generation, diagnostic: &str| EventPayload::RunRecoveryRequired {
+            control_generation: generation,
+            diagnostic: diagnostic.into(),
+        };
+        let outcome = |generation, diagnostic: &str| RunOutcome::RecoveryRequired {
+            control_generation: generation,
+            diagnostic: diagnostic.into(),
+        };
+        let first = outcome(9, "earlier");
+        let latest = outcome(0, "latest");
+        let events = [
+            event(1, recovery(9, "earlier")),
+            event(2, recovery(0, "latest")),
+        ];
+        assert!(confirms(&events, &latest));
+        assert!(!confirms(&events, &first));
+        assert!(!confirms(&events, &outcome(1, "latest")));
+        assert!(!confirms(&events, &outcome(0, "different diagnostic")));
+        assert!(!confirms(&[event(2, recovery(0, "latest"))], &latest));
+        assert!(!confirms(
+            &events,
+            &RunOutcome::SettlementFailed {
+                original: Box::new(latest),
+                failures: vec![RunSettlementFailure::WriterSeal],
+            }
+        ));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn final_flush_delivers_persisted_rows_even_without_tap_delivery() {
         let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();

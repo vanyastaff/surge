@@ -114,6 +114,8 @@ pub enum RunState {
     Bootstrapping {
         stage: BootstrapStage,
         substate: BootstrapSubstate,
+        /// Shared read-only journal observation retained before materialization.
+        recovery: crate::recovery_observation::RecoveryObserver,
     },
     Pipeline {
         /// `Arc<Graph>` because each fold step shares the current graph by
@@ -377,6 +379,8 @@ pub struct RunMemory {
     pub verification_graph: Option<Box<Graph>>,
     /// Immutable host accepted context, never resolved through mutable artifact names.
     pub work_item: Option<crate::work_item::WorkItemContext>,
+    /// Read-only recovery history; never consulted by runtime admission or controls.
+    pub recovery: crate::recovery_observation::RecoveryObserver,
 }
 
 /// Task-ledger view folded from ledger events. The source of truth is the
@@ -671,6 +675,9 @@ pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
 
 /// Apply a single event to the current state. Pure function, no I/O.
 pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
+    if let RunState::Bootstrapping { recovery, .. } = &mut state {
+        recovery.observe(event);
+    }
     if let RunState::Pipeline { memory, .. } = &mut state {
         if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
             memory.work_item = Some(context.clone());
@@ -690,26 +697,34 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
         }
     }
     match (state, &event.payload) {
-        (RunState::NotStarted, EventPayload::RunStarted { .. }) => Ok(RunState::Bootstrapping {
-            stage: BootstrapStage::Description,
-            substate: BootstrapSubstate::AgentRunning {
-                // Replay determinism: fold must not introduce random IDs.
-                // The real session id arrives via `BootstrapStageStarted` /
-                // `SessionOpened` events; this is a stable placeholder until
-                // then.
-                session: SessionId::nil(),
-                started_seq: event.seq,
-            },
-        }),
+        (RunState::NotStarted, EventPayload::RunStarted { .. }) => {
+            let mut recovery = crate::recovery_observation::RecoveryObserver::default();
+            recovery.observe(event);
+            Ok(RunState::Bootstrapping {
+                recovery,
+                stage: BootstrapStage::Description,
+                substate: BootstrapSubstate::AgentRunning {
+                    // Replay determinism: fold must not introduce random IDs.
+                    // The real session id arrives via `BootstrapStageStarted` /
+                    // `SessionOpened` events; this is a stable placeholder until
+                    // then.
+                    session: SessionId::nil(),
+                    started_seq: event.seq,
+                },
+            })
+        },
         (
-            RunState::Bootstrapping { .. },
+            RunState::Bootstrapping { recovery, .. },
             EventPayload::BootstrapApprovalDecided {
                 stage,
                 decision: BootstrapDecision::Approve,
                 ..
             },
-        ) => Ok(advance_bootstrap_stage(*stage, event.seq)),
-        (RunState::Bootstrapping { .. }, EventPayload::PipelineMaterialized { graph, .. }) => {
+        ) => Ok(advance_bootstrap_stage(*stage, event.seq, recovery)),
+        (
+            RunState::Bootstrapping { recovery, .. },
+            EventPayload::PipelineMaterialized { graph, .. },
+        ) => {
             // The graph is part of the event payload, so fold can fully
             // reconstruct `Pipeline` state from the event log alone. The
             // first cursor lands on `graph.start` with attempt 1 — actual
@@ -724,6 +739,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 },
                 memory: RunMemory {
                     verification_graph: Some(Box::new(effective)),
+                    recovery,
                     ..RunMemory::default()
                 },
                 pending_human_input: None,
@@ -1092,7 +1108,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 parked,
             } = state
             {
-                memory.apply_event(event);
+                memory.apply_non_recovery_event(event);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
@@ -1122,7 +1138,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                         node: cursor.node.clone(),
                     });
                 }
-                memory.apply_event(event);
+                memory.apply_non_recovery_event(event);
                 Ok(RunState::Pipeline {
                     graph: Arc::new(revised),
                     cursor,
@@ -1143,7 +1159,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 parked,
             } = state
             {
-                memory.apply_event(event);
+                memory.apply_non_recovery_event(event);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
@@ -1246,9 +1262,14 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
     }
 }
 
-fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
+fn advance_bootstrap_stage(
+    stage: BootstrapStage,
+    seq: u64,
+    recovery: crate::recovery_observation::RecoveryObserver,
+) -> RunState {
     match stage {
         BootstrapStage::Description => RunState::Bootstrapping {
+            recovery,
             stage: BootstrapStage::Roadmap,
             substate: BootstrapSubstate::AgentRunning {
                 // Deterministic placeholder — see RunStarted arm in `apply`
@@ -1258,6 +1279,7 @@ fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
             },
         },
         BootstrapStage::Roadmap => RunState::Bootstrapping {
+            recovery,
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AgentRunning {
                 // Deterministic placeholder — see RunStarted arm in `apply`
@@ -1267,6 +1289,7 @@ fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
             },
         },
         BootstrapStage::Flow => RunState::Bootstrapping {
+            recovery,
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AwaitingApproval {
                 artifact: ContentHash::compute(b"placeholder-flow-toml"),
@@ -1397,6 +1420,7 @@ impl RunMemory {
     }
 
     fn apply_recovery_event(&mut self, event: &RunEvent) {
+        self.recovery.observe(event);
         match &event.payload {
             EventPayload::StageEntered { node, .. } => {
                 self.stage_occurrences.insert(node.clone(), event.seq);
@@ -1715,7 +1739,10 @@ impl RunMemory {
                 self.control_generation = *control_generation;
             },
             EventPayload::RunContinued { control_generation }
-                if *control_generation > self.control_generation =>
+                if crate::recovery_observation::continuation_advances(
+                    self.control_generation,
+                    *control_generation,
+                ) =>
             {
                 self.control_generation = *control_generation;
                 self.suspension = None;
@@ -1726,6 +1753,11 @@ impl RunMemory {
     /// Apply an event to the memory accumulator only. Used independently of
     /// the full state machine for "what's the cost so far" queries.
     pub fn apply_event(&mut self, event: &RunEvent) {
+        self.apply_recovery_event(event);
+        self.apply_non_recovery_event(event);
+    }
+    // Full-state apply has already observed recovery exactly once before its transition.
+    fn apply_non_recovery_event(&mut self, event: &RunEvent) {
         use crate::verification_evidence::VerificationInvalidation;
         if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
             self.work_item = Some(context.clone());
@@ -1733,7 +1765,6 @@ impl RunMemory {
         if let EventPayload::RunStarted { config, .. } = &event.payload {
             self.bootstrap_edit_loop_cap = config.bootstrap_edit_loop_cap;
         }
-        self.apply_recovery_event(event);
         self.apply_mcp_call_event(event);
         self.apply_override_event(event);
         if let EventPayload::EdgeTraversed { edge, to, .. } = &event.payload {
@@ -2186,7 +2217,29 @@ mod tests {
                 node: NodeKey::try_from("plan").unwrap(),
                 attempt: 1,
             },
-            memory: RunMemory::default(),
+            memory: RunMemory {
+                recovery: {
+                    let mut observer = crate::recovery_observation::RecoveryObserver::default();
+                    observer.observe(&make_event(
+                        1,
+                        EventPayload::RunStarted {
+                            pipeline_template: None,
+                            project_path: "/project".into(),
+                            initial_prompt: "test".into(),
+                            config: RunConfig {
+                                bootstrap_edit_loop_cap: None,
+                                budget: Default::default(),
+                                sandbox_default: SandboxMode::WorkspaceWrite,
+                                approval_default: ApprovalPolicy::OnRequest,
+                                auto_pr: false,
+                                mcp_servers: vec![],
+                            },
+                        },
+                    ));
+                    observer
+                },
+                ..RunMemory::default()
+            },
             pending_human_input: Some(PendingHumanInput {
                 node: NodeKey::try_from("plan").unwrap(),
                 call_id: Some("exact-call".into()),
@@ -3670,6 +3723,7 @@ mod tests {
     #[test]
     fn attention_classifies_bootstrap_awaiting_approval_as_needs_input() {
         let awaiting = RunState::Bootstrapping {
+            recovery: Default::default(),
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AwaitingApproval {
                 artifact: ContentHash::compute(b"flow"),
@@ -3679,6 +3733,7 @@ mod tests {
         assert_eq!(awaiting.attention(), Attention::NeedsInput);
 
         let running = RunState::Bootstrapping {
+            recovery: Default::default(),
             stage: BootstrapStage::Description,
             substate: BootstrapSubstate::AgentRunning {
                 session: SessionId::nil(),

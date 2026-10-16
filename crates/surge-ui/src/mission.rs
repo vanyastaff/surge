@@ -28,6 +28,8 @@ use crate::flow_diagram::{Lane, lane_of};
 pub enum StepState {
     Working,
     WaitingOnYou,
+    /// Recorded refusal stopped this unfinished work.
+    RecoveryRequired,
     Done(String),
     Failed(String),
     /// A journal gap may have changed this unfinished occurrence.
@@ -131,6 +133,8 @@ pub struct Mission {
     pub now: Option<String>,
     /// Journal coverage and attribution limitations.
     pub caveats: Vec<String>,
+    /// Shared journal observation, independent of a current subscription.
+    pub recovery: surge_core::recovery_observation::RecoveryObservation,
 }
 
 /// Every node in the graph, subgraphs included.
@@ -270,16 +274,24 @@ pub fn fold(
     implementation: &[RunEvent],
     roadmap: Option<&RoadmapArtifact>,
 ) -> Result<Mission, TaskExecutionError> {
-    if let Some(first) = planning.first() {
-        TaskExecutionView::compile(first.run_id, planning)?;
-    }
+    let planning_view = planning
+        .first()
+        .map(|first| TaskExecutionView::compile(first.run_id, planning))
+        .transpose()?;
     let view = TaskExecutionView::compile(run, implementation)?;
-    Ok(from_execution(planning, &view, implementation, roadmap))
+    Ok(from_execution(
+        planning,
+        planning_view.as_ref().map(|view| &view.recovery),
+        &view,
+        implementation,
+        roadmap,
+    ))
 }
 
 /// Present an already compiled execution view; planning seeds are not execution evidence.
 pub(crate) fn from_execution(
     planning: &[RunEvent],
+    planning_recovery: Option<&surge_core::recovery_observation::RecoveryObservation>,
     view: &TaskExecutionView,
     implementation: &[RunEvent],
     roadmap: Option<&RoadmapArtifact>,
@@ -292,7 +304,13 @@ pub(crate) fn from_execution(
     .iter()
     .map(|event| event.payload.clone())
     .collect();
+    let recovery = if implementation.is_empty() {
+        planning_recovery.unwrap_or(&view.recovery).clone()
+    } else {
+        view.recovery.clone()
+    };
     let mut mission = Mission {
+        recovery,
         plan: fold_plan(&plan_events),
         milestones: seed(roadmap),
         caveats: view
@@ -392,8 +410,68 @@ pub(crate) fn from_execution(
             EventPayload::RunAborted { reason } => Some(RunEnd::Aborted(reason.clone())),
             _ => None,
         });
+    if mission.end.is_none() {
+        let state = if mission.recovery.active().is_some() {
+            Some(StepState::RecoveryRequired)
+        } else if !mission.recovery.is_complete() {
+            Some(StepState::Unknown)
+        } else {
+            None
+        };
+        if let Some(state) = state {
+            pause_unfinished(&mut mission.steps, &state);
+            for milestone in &mut mission.milestones {
+                pause_unfinished(&mut milestone.steps, &state);
+                pause_tasks(&mut milestone.tasks, &state);
+            }
+        }
+    }
     mission.now = now(&mission);
     mission
+}
+
+/// Literal journal problem text, with independent confirmation/coverage caveats.
+pub(crate) fn recovery_problem(
+    recovery: &surge_core::recovery_observation::RecoveryObservation,
+    confirmation_unknown: bool,
+) -> Option<String> {
+    let recorded = recovery.latest()?;
+    let status = if !recovery.is_complete() {
+        "Recorded recovery request · current state unconfirmed (partial history)"
+    } else if confirmation_unknown {
+        "Recorded recovery request · outcome and cleanup confirmation unconfirmed"
+    } else if recovery.active().is_some() {
+        "Recovery requires review"
+    } else {
+        "Historical recovery request"
+    };
+    Some(format!(
+        "{status} · event {}\n{}",
+        recorded.seq,
+        surge_core::recovery_observation::recovery_diagnostic(&recorded.diagnostic)
+    ))
+}
+
+fn pause_unfinished(steps: &mut [Step], state: &StepState) {
+    for step in steps {
+        if matches!(step.state, StepState::Working | StepState::WaitingOnYou) {
+            step.state = state.clone();
+        }
+    }
+}
+
+fn pause_tasks(tasks: &mut [TaskView], state: &StepState) {
+    for task in tasks {
+        pause_unfinished(&mut task.steps, state);
+        if task.iteration == IterationState::Running {
+            task.iteration = if *state == StepState::Unknown {
+                IterationState::Unknown
+            } else {
+                IterationState::Unfinished
+            };
+        }
+        pause_tasks(&mut task.subtasks, state);
+    }
 }
 
 fn graphs_at_entry(events: &[RunEvent]) -> HashMap<u64, Arc<Graph>> {
@@ -578,8 +656,24 @@ pub(crate) fn fixture_fold(
 ) -> Mission {
     let run: RunId = "run-00000000000000000000000001".parse().unwrap();
     let envelopes = |events: &[EventPayload]| {
-        events
-            .iter()
+        if events.is_empty() {
+            return Vec::new();
+        }
+        let startup = EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: "/project".into(),
+            initial_prompt: "mission fixture".into(),
+            config: surge_core::RunConfig {
+                budget: Default::default(),
+                sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                auto_pr: false,
+                mcp_servers: Vec::new(),
+                bootstrap_edit_loop_cap: None,
+            },
+        };
+        std::iter::once(&startup)
+            .chain(events.iter())
             .enumerate()
             .map(|(index, payload)| RunEvent {
                 run_id: run,
@@ -657,6 +751,122 @@ mod tests {
     use surge_core::keys::{NodeKey, OutcomeKey};
     use surge_core::roadmap::RoadmapStatus;
     use surge_core::{BootstrapDecision, BootstrapStage, ContentHash, EventPayload};
+
+    #[test]
+    fn recovery_observability_mission_pauses_preserving_nonterminal_history() {
+        let mission = fold(
+            &[],
+            &[
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph()),
+                    graph_hash: ContentHash::compute(b"mission"),
+                },
+                EventPayload::StageEntered {
+                    node: key("impl_task"),
+                    attempt: 1,
+                },
+                EventPayload::RunRecoveryRequired {
+                    control_generation: 0,
+                    diagnostic: "durable conflict [click](https://example.test)".into(),
+                },
+            ],
+            None,
+        );
+        assert!(mission.end.is_none());
+        assert!(mission.now.is_none());
+        assert!(
+            mission
+                .steps
+                .iter()
+                .chain(
+                    mission
+                        .milestones
+                        .iter()
+                        .flat_map(|milestone| &milestone.steps)
+                )
+                .any(|step| step.state == StepState::RecoveryRequired)
+        );
+        let problem = super::recovery_problem(&mission.recovery, true).unwrap();
+        assert!(problem.contains("confirmation unconfirmed"));
+        assert!(problem.contains("durable conflict [click](https://example.test)"));
+        assert!(problem.contains("event 4"));
+    }
+
+    #[test]
+    fn recovery_observability_missing_start_and_gap_never_claim_current_worker() {
+        let run = surge_core::RunId::new();
+        let event = |seq, payload| surge_core::RunEvent {
+            run_id: run,
+            seq,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            payload,
+        };
+        for sequences in [[1, 2, 3], [2, 3, 5]] {
+            let events = [
+                event(
+                    sequences[0],
+                    EventPayload::PipelineMaterialized {
+                        graph: Box::new(graph()),
+                        graph_hash: ContentHash::compute(b"partial"),
+                    },
+                ),
+                event(
+                    sequences[1],
+                    EventPayload::StageEntered {
+                        node: key("impl_task"),
+                        attempt: 1,
+                    },
+                ),
+                event(
+                    sequences[2],
+                    EventPayload::RunRecoveryRequired {
+                        control_generation: 0,
+                        diagnostic: "retained partial diagnostic".into(),
+                    },
+                ),
+            ];
+            let mission = super::fold(&[], run, &events, None).unwrap();
+            assert!(mission.now.is_none());
+            assert!(mission.end.is_none());
+            assert!(
+                mission
+                    .steps
+                    .iter()
+                    .chain(
+                        mission
+                            .milestones
+                            .iter()
+                            .flat_map(|milestone| &milestone.steps)
+                    )
+                    .any(|step| step.state == StepState::Unknown)
+            );
+            assert!(mission.recovery.active().is_none());
+            assert!(
+                super::recovery_problem(&mission.recovery, false)
+                    .unwrap()
+                    .contains("partial history")
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_observability_planning_only_problem_survives_without_child() {
+        let mission = fold(
+            &[EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: "planning refused".into(),
+            }],
+            &[],
+            None,
+        );
+        assert!(mission.recovery.active().is_some());
+        assert!(
+            super::recovery_problem(&mission.recovery, false)
+                .unwrap()
+                .contains("planning refused")
+        );
+        assert!(mission.end.is_none());
+    }
 
     fn graph() -> surge_core::graph::Graph {
         toml::from_str(include_str!("../testdata/nested_loops_flow.toml")).expect("fixture parses")

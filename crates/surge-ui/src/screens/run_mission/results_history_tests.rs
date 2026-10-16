@@ -619,7 +619,7 @@ fn actual_screen_journey(cx: &mut TestAppContext, journey: ScreenJourney) {
                     attempt: 1,
                 },
             ],
-            "Spec: working now",
+            "Spec: last recorded progress",
         ),
         (
             vec![EventPayload::StageCompleted {

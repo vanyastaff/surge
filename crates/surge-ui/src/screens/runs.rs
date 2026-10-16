@@ -350,7 +350,14 @@ impl RunRow {
         self.live_stream = stream.live;
         let display = stream.display();
         self.status_label = display.label();
-        self.waiting_detail = display.next_action().map(ToOwned::to_owned);
+        self.waiting_detail = if display == surge_core::run_display::RunDisplayState::Unknown {
+            stream
+                .recorded_host_loss_detail()
+                .or_else(|| display.next_action())
+        } else {
+            display.next_action()
+        }
+        .map(ToOwned::to_owned);
         if let Some((until, basis)) = display.wake()
             && let Some(detail) = &mut self.waiting_detail
         {
@@ -373,6 +380,24 @@ impl RunRow {
         }
         if !stream.stages.is_empty() {
             self.stages = stream.stages.iter().map(stage_from_stream).collect();
+        }
+        if matches!(
+            display,
+            surge_core::run_display::RunDisplayState::Waiting(
+                surge_core::run_display::WaitingReason::RecoveryRequired
+            ) | surge_core::run_display::RunDisplayState::Unknown
+        ) {
+            for stage in &mut self.stages {
+                if stage.state == StageState::Running {
+                    stage.state = StageState::Unfinished;
+                    stage.sub = if stream.recovery().active().is_some() {
+                        "paused · recovery requires review"
+                    } else {
+                        "last recorded progress · current state unconfirmed"
+                    }
+                    .into();
+                }
+            }
         }
         if !stream.log.is_empty() {
             self.event_rows = stream
@@ -554,9 +579,13 @@ fn attention_reason(
             "The remaining budget could not be confirmed",
             "Check the agent's quota or budget, then retry.",
         ),
+        R::RecoveryRequired => (
+            "Recovery requires review",
+            "Inspect recorded history before choosing how to recover. No retry has been authorized.",
+        ),
         R::StorageUnconfirmed => (
-            "The result could not be recorded",
-            "Check free disk space in the Surge home folder, then retry.",
+            "The run outcome is unconfirmed",
+            "Inspect recorded history and the connection or storage error before retrying.",
         ),
     }
 }
@@ -1212,6 +1241,10 @@ impl RunsScreen {
                     )
                     .child(
                         div()
+                            .id("run-header-facts")
+                            .test_support()
+                            .role(Role::Group)
+                            .aria_label(facts.join("  ·  "))
                             .text_size(px(10.5))
                             .text_color(theme::text_dim())
                             .child(facts.join("  ·  ")),
@@ -1225,10 +1258,25 @@ impl RunsScreen {
     fn render_attention(&self, row: &RunRow, cx: &mut Context<Self>) -> Option<Div> {
         use surge_core::bootstrap_operation::BootstrapState as B;
         let (operation_id, status) = self.selected_bootstrap(row, cx)?;
-        let B::NeedsAttention { phase, reason, .. } = status.state else {
+        let B::NeedsAttention {
+            phase,
+            reason,
+            run_id,
+        } = status.state
+        else {
             return None;
         };
         let (what, fix) = attention_reason(reason);
+        let recovery = run_id.and_then(|run_id| self.state.read(cx).run_streams.get(&run_id))
+            .and_then(|stream| crate::mission::recovery_problem(stream.recovery(),
+                reason == surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed));
+        let recovery = recovery.or_else(|| {
+            (reason == surge_core::bootstrap_operation::BootstrapAttentionReason::RecoveryRequired)
+                .then(|| {
+                    "Recorded recovery diagnostic is unavailable; inspect the run history."
+                        .to_string()
+                })
+        });
         let revision = status.revision;
         Some(
             ui::node_card(theme::warning())
@@ -1262,7 +1310,19 @@ impl RunsScreen {
                                 .text_size(px(11.0))
                                 .text_color(theme::text_muted())
                                 .child(fix),
-                        ),
+                        )
+                        .when_some(recovery, |el, message| {
+                            el.child(
+                                div()
+                                    .id("run-recovery-problem")
+                                    .test_support()
+                                    .role(Role::Group)
+                                    .aria_label(message.clone())
+                                    .text_size(px(11.0))
+                                    .text_color(theme::warning())
+                                    .child(message),
+                            )
+                        }),
                 )
                 .when(!status.cancel_requested, |el| {
                     el.child(
@@ -2426,5 +2486,226 @@ mod usage_completeness_tests {
         let usage = RunUsage::from_stream(&stream);
         assert_eq!(usage.token_label(), "10 in · 5 out tokens");
         assert_eq!(usage.cost_label(), "$0.50");
+    }
+}
+
+#[cfg(test)]
+mod recovery_observability_tests {
+    #[gpui_kit::test]
+    fn recovery_observability_known_crash_and_stream_error_keep_native_recorded_fact(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+        use surge_orchestrator::engine::handle::EngineRunEvent;
+        cx.update(gpui_kit::init);
+        let run = surge_core::RunId::new();
+        let mut stream = crate::run_stream::RunStreamState::default();
+        stream.live = true;
+        stream.apply(&EngineRunEvent::StreamError {
+            message: "journal read unavailable".into(),
+        });
+        stream.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        assert!(!stream.live);
+        assert_eq!(stream.display().label(), "Run state is unconfirmed");
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let screen = cx.new(|cx| {
+            let mut screen = super::RunsScreen::new(state, cx);
+            screen.selected = Some(run);
+            screen.tab = super::RunTab::Log;
+            screen
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let rail = window
+                .find(format!("run-row-{run}"))
+                .label()
+                .unwrap()
+                .to_owned();
+            assert!(rail.contains("Run state is unconfirmed"));
+            let facts = window.find("run-header-facts").label().unwrap().to_owned();
+            assert!(
+                facts.contains("Recorded loss of daemon ownership"),
+                "known registry fact missing from rendered card: {facts}"
+            );
+            assert!(facts.contains("current observation is unconfirmed"));
+            screen.update(cx, |screen, cx| {
+                let (rows, _, _) = screen.rows(cx);
+                let row = rows.iter().find(|row| row.run_id == Some(run)).unwrap();
+                assert!(!row.live_stream);
+                assert!(
+                    row.stages
+                        .iter()
+                        .all(|stage| stage.state != super::StageState::Running)
+                );
+                assert!(!row.status_label.contains("Running"));
+                assert!(!row.waiting_detail.as_ref().unwrap().contains("settled"));
+            });
+        });
+    }
+
+    #[test]
+    fn recovery_observability_known_crash_detail_preserves_neutral_fresh_and_terminal_states() {
+        use surge_core::EventPayload;
+        use surge_orchestrator::engine::handle::{EngineRunEvent, RunStatus};
+        let run = surge_core::RunId::new();
+        let row_for = |stream: &crate::run_stream::RunStreamState| {
+            let mut row = super::RunRow::from_run(
+                &crate::app_state::UiRun {
+                    run_id: run,
+                    status: RunStatus::Active,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                },
+                None,
+            );
+            row.attach_stream(stream);
+            row
+        };
+        let mut neutral = crate::run_stream::RunStreamState::default();
+        neutral.apply(&EngineRunEvent::StreamError {
+            message: "read failed".into(),
+        });
+        let row = row_for(&neutral);
+        assert_eq!(row.status_label, "Run state is unconfirmed");
+        assert_eq!(
+            row.waiting_detail.as_deref(),
+            Some("Inspect the run journal before taking action.")
+        );
+        let mut fresh_crash = crate::run_stream::RunStreamState::default();
+        fresh_crash.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        let row = row_for(&fresh_crash);
+        assert_eq!(row.status_label, "Recovery requires an operator");
+        assert_eq!(
+            row.waiting_detail.as_deref(),
+            Some("Inspect the run and choose whether to resume or abort.")
+        );
+        let mut terminal = crate::run_stream::RunStreamState::default();
+        terminal.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        for (seq, payload) in [
+            (
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: "/project".into(),
+                    initial_prompt: "terminal".into(),
+                    config: surge_core::RunConfig {
+                        budget: Default::default(),
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                        bootstrap_edit_loop_cap: None,
+                    },
+                },
+            ),
+            (
+                2,
+                EventPayload::RunAborted {
+                    reason: "recorded stop".into(),
+                },
+            ),
+        ] {
+            terminal.apply(&EngineRunEvent::Persisted {
+                seq,
+                payload: Box::new(payload),
+            });
+        }
+        terminal.apply(&EngineRunEvent::StreamError {
+            message: "later read failed".into(),
+        });
+        let row = row_for(&terminal);
+        assert_eq!(row.status_label, "Aborted");
+        assert!(
+            row.waiting_detail.is_none(),
+            "independent crash/error detail cannot replace durable terminal outcome"
+        );
+        assert!(!row.live_stream);
+    }
+
+    #[test]
+    fn recovery_observability_actual_run_card_and_problem_log_use_shared_state() {
+        use surge_core::EventPayload;
+        use surge_orchestrator::engine::handle::EngineRunEvent;
+        let run = surge_core::RunId::new();
+        let mut stream = crate::run_stream::RunStreamState::default();
+        stream.begin_display_history(run, None);
+        for (seq, payload) in [
+            (
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: "/project".into(),
+                    initial_prompt: "card".into(),
+                    config: surge_core::RunConfig {
+                        budget: Default::default(),
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                        bootstrap_edit_loop_cap: None,
+                    },
+                },
+            ),
+            (
+                2,
+                EventPayload::RunRecoveryRequired {
+                    control_generation: 0,
+                    diagnostic: "card durable conflict".into(),
+                },
+            ),
+        ] {
+            stream.apply(&EngineRunEvent::Persisted {
+                seq,
+                payload: Box::new(payload),
+            });
+        }
+        stream.finish_display_history(2);
+        let mut row = super::RunRow::from_run(
+            &crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: Some(2),
+                ended_at: None,
+            },
+            None,
+        );
+        row.attach_stream(&stream);
+        assert_eq!(row.status_label, "Recovery requires an operator");
+        assert!(!row.live_stream);
+        assert!(row.event_rows.iter().any(|row| row.kind == "RECOVERY"
+            && row.problem
+            && row.text == "card durable conflict"));
+        assert!(
+            row.stages
+                .iter()
+                .all(|stage| stage.state != super::StageState::Running)
+        );
+    }
+
+    #[test]
+    fn recovery_observability_unknown_storage_copy_does_not_invent_disk_diagnosis() {
+        let (title, detail) = super::attention_reason(
+            surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+        );
+        assert!(title.contains("unconfirmed"));
+        assert!(!detail.contains("free disk"));
+        assert!(detail.contains("history"));
     }
 }

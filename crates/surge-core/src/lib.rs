@@ -65,6 +65,7 @@ pub mod node_overrides;
 pub mod notify_config;
 pub mod predicate;
 pub mod profile;
+pub mod recovery_observation;
 pub mod route_selection;
 pub mod run_display;
 pub mod run_event;

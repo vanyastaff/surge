@@ -440,7 +440,7 @@ fn fleet_submission_fixture() -> (
 }
 
 #[test]
-fn fleet_acknowledgment_after_leaving_does_not_navigate() {
+fn recovery_observability_fleet_acceptance_does_not_claim_subscription() {
     let (mut cx, app, fleet, operation_id) = fleet_submission_fixture();
     let planning_id = RunId::new();
     app.update(&mut cx, |app, cx| {
@@ -454,7 +454,7 @@ fn fleet_acknowledgment_after_leaving_does_not_navigate() {
         );
         assert_eq!(app.active_screen, Screen::Settings);
         assert!(app.pending_run_selection.is_none());
-        assert!(app.state.read(cx).run_streams[&planning_id].live);
+        assert!(!app.state.read(cx).run_streams[&planning_id].live);
     });
 }
 
@@ -769,3 +769,56 @@ mod home_planning;
 
 #[path = "app_tests/recorded_navigation.rs"]
 mod recorded_navigation;
+
+#[test]
+fn recovery_observability_attention_status_never_reasserts_live() {
+    run_isolated_app_probe(
+        "recovery",
+        "app::tests::recovery_observability_attention_status_child_probe",
+    );
+}
+
+#[test]
+fn recovery_observability_attention_status_child_probe() {
+    if std::env::var("SURGE_TEST_PROJECT_HOME_ENTRY").as_deref() != Ok("recovery") {
+        return;
+    }
+    use surge_core::bootstrap_operation::{
+        BootstrapAttentionReason as R, BootstrapOperationStatus, BootstrapPhase, BootstrapState,
+    };
+    let (mut cx, app, _, _) = fixture();
+    let planning = RunId::new();
+    let implementation = RunId::new();
+    app.update(&mut cx, |app, cx| {
+        for (revision, reason) in [(1, R::StorageUnconfirmed), (2, R::RecoveryRequired)] {
+            app.state.update(cx, |state, _| {
+                state.run_streams.entry(planning).or_default().live = true
+            });
+            app.update_bootstrap_view(
+                RunId::nil(),
+                BootstrapOperationStatus {
+                    operation_id: RunId::nil(),
+                    planning_run: planning,
+                    implementation_run: implementation,
+                    state: BootstrapState::NeedsAttention {
+                        phase: BootstrapPhase::Planning,
+                        run_id: Some(planning),
+                        reason,
+                    },
+                    result: None,
+                    revision,
+                    cancel_requested: false,
+                    queue_sequence: 1,
+                    payload_version: 1,
+                },
+                std::path::Path::new(PROJECT),
+                cx,
+            );
+            assert!(!app.state.read(cx).run_streams[&planning].live);
+        }
+    });
+}
+
+#[cfg(unix)]
+#[path = "app_recovery_subscription_tests.rs"]
+mod recovery_subscription_tests;

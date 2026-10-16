@@ -110,4 +110,13 @@ RunMemory {
         },
     ),
     work_item: None,
+    recovery: RecoveryObserver {
+        observation: CompletePrefix {
+            through: 12,
+            latest: None,
+        },
+        bound: false,
+        control_generation: 0,
+        terminal_seq: None,
+    },
 }

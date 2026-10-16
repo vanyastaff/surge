@@ -32,6 +32,7 @@ use surge_core::bootstrap_operation::{BootstrapOperationStatus, BootstrapState};
 pub(super) struct MissionRefresh {
     operation: Option<(RunId, u64)>,
     streams: Vec<(RunId, Option<u64>, Option<u64>)>,
+    observations: Vec<(RunId, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +129,20 @@ impl MissionPanel {
             || vec![self.request.selected],
             |status| vec![status.planning_run, status.implementation_run],
         );
+        let observations = ids
+            .iter()
+            .map(|run| {
+                (
+                    *run,
+                    state
+                        .run_streams
+                        .get(run)
+                        .is_some_and(|stream| stream.observation_available_for(*run)),
+                )
+            })
+            .collect();
         MissionRefresh {
+            observations,
             operation: operation.map(|status| (status.operation_id, status.revision)),
             streams: ids
                 .into_iter()
@@ -148,10 +162,51 @@ impl MissionPanel {
     }
 
     pub(super) fn sync(&mut self, refresh: MissionRefresh, cx: &mut Context<Self>) {
-        if self.loaded_refresh.as_ref() != Some(&refresh) {
-            self.loaded_refresh = Some(refresh);
+        let history_changed = self.loaded_refresh.as_ref().is_none_or(|loaded| {
+            loaded.operation != refresh.operation || loaded.streams != refresh.streams
+        });
+        let observation_changed = self
+            .loaded_refresh
+            .as_ref()
+            .is_none_or(|loaded| loaded.observations != refresh.observations);
+        self.loaded_refresh = Some(refresh);
+        if history_changed {
             self.reload(cx);
+        } else if observation_changed {
+            cx.notify();
         }
+    }
+
+    fn current_observation(&self) -> bool {
+        if self.loading != LoadingState::Ready || self.error.is_some() {
+            return false;
+        }
+        let Some(refresh) = &self.loaded_refresh else {
+            return false;
+        };
+        let run = self
+            .operation
+            .as_ref()
+            .map_or(self.request.selected, |status| {
+                if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
+                    status.implementation_run
+                } else {
+                    status.planning_run
+                }
+            });
+        let Some(mission) = &self.mission else {
+            return false;
+        };
+        let surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+            through, ..
+        } = mission.recovery
+        else {
+            return false;
+        };
+        refresh.observations.contains(&(run, true))
+            && refresh.streams.iter().any(|(id, registry, stream)| {
+                *id == run && *stream == Some(through) && registry.is_none_or(|seq| seq <= through)
+            })
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -233,12 +288,12 @@ fn lane_color(lane: Lane) -> Hsla {
 }
 
 /// A step as a small capsule: its role color, its label, and how it went.
-fn step_chip(id: String, step: &Step) -> impl IntoElement {
+fn step_chip(id: String, step: &Step, available: bool) -> impl IntoElement {
     let role = lane_color(step.lane);
     let (icon, tone): (Option<IconName>, Hsla) = match &step.state {
         StepState::Done(_) => (Some(IconName::Check), theme::success()),
         StepState::Failed(_) => (Some(IconName::Close), theme::error()),
-        StepState::WaitingOnYou => (None, theme::warning()),
+        StepState::WaitingOnYou | StepState::RecoveryRequired => (None, theme::warning()),
         StepState::Working => (None, theme::accent()),
         StepState::Unknown | StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
     };
@@ -249,7 +304,13 @@ fn step_chip(id: String, step: &Step) -> impl IntoElement {
             .unwrap_or_else(|| format!("finished · {outcome}")),
         StepState::Failed(reason) => format!("failed · {reason}"),
         StepState::WaitingOnYou => "waiting for your answer".into(),
-        StepState::Working => "working now".into(),
+        StepState::RecoveryRequired => "paused · recovery requires review".into(),
+        StepState::Working => if available {
+            "working now"
+        } else {
+            "last recorded progress"
+        }
+        .into(),
         StepState::Unknown => "continuation unknown after a journal gap".into(),
         StepState::Unfinished => "the run ended before this step reported".into(),
     };
@@ -258,7 +319,7 @@ fn step_chip(id: String, step: &Step) -> impl IntoElement {
     } else {
         tip
     };
-    let live = matches!(step.state, StepState::Working | StepState::WaitingOnYou);
+    let live = available && matches!(step.state, StepState::Working | StepState::WaitingOnYou);
     div()
         .id(SharedString::from(id))
         .test_support()
@@ -293,13 +354,13 @@ fn step_chip(id: String, step: &Step) -> impl IntoElement {
         .children(icon.map(|i| Icon::new(i).size(px(10.0)).text_color(tone)))
 }
 
-fn step_row(prefix: &str, steps: &[Step]) -> Div {
+fn step_row(prefix: &str, steps: &[Step], available: bool) -> Div {
     let mut row = div().h_flex().flex_wrap().gap(px(4.0)).items_center();
     for (i, step) in steps.iter().enumerate() {
         if i > 0 {
             row = row.child(div().w(px(6.0)).h(px(1.0)).bg(theme::graph_line()));
         }
-        row = row.child(step_chip(format!("{prefix}-{i}"), step));
+        row = row.child(step_chip(format!("{prefix}-{i}"), step, available));
     }
     row
 }
@@ -381,7 +442,7 @@ impl MissionPanel {
             .child(row)
     }
 
-    fn render_subtask(task: &TaskView, path: &str) -> AnyElement {
+    fn render_subtask(&self, task: &TaskView, path: &str) -> AnyElement {
         let (state, color) = match &task.iteration {
             mission::IterationState::Planned => ("Planned".to_string(), theme::text_muted()),
             mission::IterationState::Discovered => {
@@ -391,7 +452,15 @@ impl MissionPanel {
             mission::IterationState::Replaced => {
                 ("Split into smaller tasks".into(), theme::text_muted())
             },
-            mission::IterationState::Running => ("Running".to_string(), theme::accent()),
+            mission::IterationState::Running => (
+                if self.current_observation() {
+                    "Running"
+                } else {
+                    "Last recorded in progress"
+                }
+                .to_string(),
+                theme::accent(),
+            ),
             mission::IterationState::Finished(outcome) => {
                 (format!("Process finished · {outcome}"), theme::text_muted())
             },
@@ -436,13 +505,13 @@ impl MissionPanel {
                 item.child(ui::meta("Verification recorded"))
             })
             .when(!task.steps.is_empty(), |item| {
-                item.child(step_row(path, &task.steps))
+                item.child(step_row(path, &task.steps, self.current_observation()))
             })
             .children(
                 task.subtasks
                     .iter()
                     .enumerate()
-                    .map(|(index, child)| Self::render_subtask(child, &format!("{path}-s{index}"))),
+                    .map(|(index, child)| self.render_subtask(child, &format!("{path}-s{index}"))),
             )
             .into_any_element()
     }
@@ -451,9 +520,14 @@ impl MissionPanel {
         let (label, role) = match task.status {
             RoadmapStatus::Completed if task.verified => ("verified", Semantic::Verified),
             RoadmapStatus::Completed => ("done · unverified", Semantic::External),
-            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => {
-                ("in progress", Semantic::Agent)
-            },
+            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             RoadmapStatus::Failed | RoadmapStatus::FailedVerification => {
                 ("failed", Semantic::Failure)
             },
@@ -468,9 +542,14 @@ impl MissionPanel {
             },
             mission::IterationState::Queued => ("queued after split", Semantic::External),
             mission::IterationState::Replaced => ("split into smaller tasks", Semantic::External),
-            mission::IterationState::Running if task.status == RoadmapStatus::Pending => {
-                ("in progress", Semantic::Agent)
-            },
+            mission::IterationState::Running if task.status == RoadmapStatus::Pending => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             mission::IterationState::Finished(_) if task.status == RoadmapStatus::Pending => {
                 ("process finished · unverified", Semantic::External)
             },
@@ -480,10 +559,11 @@ impl MissionPanel {
             _ => (label, role),
         };
         let color = role.color();
-        let live = task
-            .steps
-            .iter()
-            .any(|s| matches!(s.state, StepState::Working | StepState::WaitingOnYou));
+        let live = self.current_observation()
+            && task
+                .steps
+                .iter()
+                .any(|s| matches!(s.state, StepState::Working | StepState::WaitingOnYou));
         div()
             .id(SharedString::from(format!("task-state-{m}-{t}")))
             .test_support()
@@ -540,16 +620,16 @@ impl MissionPanel {
                     }),
             )
             .when(!task.steps.is_empty(), |el| {
-                el.child(
-                    div()
-                        .pl(px(17.0))
-                        .child(step_row(&format!("t{m}-{t}"), &task.steps)),
-                )
+                el.child(div().pl(px(17.0)).child(step_row(
+                    &format!("t{m}-{t}"),
+                    &task.steps,
+                    self.current_observation(),
+                )))
             })
             .when(!task.subtasks.is_empty(), |el| {
                 el.child(ui::meta("Subtasks"))
                     .children(task.subtasks.iter().enumerate().map(|(index, child)| {
-                        Self::render_subtask(child, &format!("t{m}-{t}-s{index}"))
+                        self.render_subtask(child, &format!("t{m}-{t}-s{index}"))
                     }))
             })
             .into_any_element()
@@ -568,7 +648,14 @@ impl MissionPanel {
                 ("done", Semantic::Verified)
             },
             (Some(_), _) => ("ended", Semantic::Failure),
-            (None, true) => ("in progress", Semantic::Agent),
+            (None, true) => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             (None, false) => ("planned", Semantic::External),
         };
         let color = role.color();
@@ -636,7 +723,11 @@ impl MissionPanel {
                         .px(px(14.0))
                         .pb(px(10.0))
                         .child(ui::section_label("Milestone steps"))
-                        .child(step_row(&format!("m{index}"), &m.steps)),
+                        .child(step_row(
+                            &format!("m{index}"),
+                            &m.steps,
+                            self.current_observation(),
+                        )),
                 )
             })
             .child(
@@ -683,19 +774,30 @@ impl MissionPanel {
             body = body.child(self.render_plan(mission));
         }
         if let Some(now) = &mission.now {
+            let activity = if self.current_observation() {
+                format!("Working on  {now}")
+            } else {
+                format!("Last recorded activity  {now}")
+            };
             body = body.child(
                 ui::node_card(theme::accent())
+                    .id("mission-current-activity")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(activity.clone())
                     .h_flex()
                     .gap(px(10.0))
                     .items_center()
                     .px(px(14.0))
                     .py(px(10.0))
-                    .child(ui::live_dot(theme::accent()))
+                    .when(self.current_observation(), |el| {
+                        el.child(ui::live_dot(theme::accent()))
+                    })
                     .child(
                         div()
                             .text_size(px(12.0))
                             .text_color(theme::text_primary())
-                            .child(format!("Working on  {now}")),
+                            .child(activity),
                     ),
             );
         }
@@ -760,7 +862,7 @@ impl MissionPanel {
                     .v_flex()
                     .gap(px(8.0))
                     .child(ui::section_label("Whole-project steps"))
-                    .child(step_row("run", &mission.steps)),
+                    .child(step_row("run", &mission.steps, self.current_observation())),
             );
         }
         if mission.milestones.is_empty() && mission.steps.is_empty() && mission.end.is_none() {
@@ -892,7 +994,15 @@ impl MissionPanel {
                 StepState::Done(_) => ("Finished", theme::success()),
                 StepState::Failed(_) => ("Failed", theme::error()),
                 StepState::WaitingOnYou => ("Needs your decision", theme::warning()),
-                StepState::Working => ("Working", theme::accent()),
+                StepState::Working => (
+                    if self.current_observation() {
+                        "Working"
+                    } else {
+                        "Last recorded progress"
+                    },
+                    theme::accent(),
+                ),
+                StepState::RecoveryRequired => ("Recovery requires review", theme::warning()),
                 StepState::Unknown => ("Continuation unknown", theme::text_muted()),
                 StepState::Unfinished => ("No completion recorded", theme::text_muted()),
             };
@@ -1067,6 +1177,20 @@ impl Render for MissionPanel {
                 .into_any_element(),
         };
         let mut body = div().v_flex().gap(px(12.0));
+        if let Some(message) = self.mission.as_ref().and_then(|mission| {
+            let unknown = self.operation.as_ref().is_some_and(|status| matches!(
+                status.state,
+                BootstrapState::NeedsAttention {
+                    reason: surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+                    ..
+                }
+            ));
+            mission::recovery_problem(&mission.recovery, unknown)
+        }) {
+            body = body.child(div().id("mission-recovery").test_support()
+                .role(Role::Group).aria_label(message.clone())
+                .text_size(px(12.0)).text_color(theme::warning()).child(message));
+        }
         if let Some(status) = &self.operation {
             let message = history::operation_message(status);
             body = body.child(
@@ -1134,6 +1258,201 @@ mod hierarchy_tests {
     use surge_core::{ContentHash, EventPayload, RunId};
 
     #[gpui_kit::test]
+    fn recovery_observability_offline_mission_does_not_claim_current_worker(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let mission = crate::mission::Mission {
+            now: Some("Recorded stage".into()),
+            ..Default::default()
+        };
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
+            },
+            mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
+            error: None,
+            generation: 0,
+            loaded_refresh: None,
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let label = window
+                .find("mission-current-activity")
+                .label()
+                .unwrap()
+                .to_owned();
+            assert_eq!(label, "Last recorded activity  Recorded stage");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn recovery_observability_availability_changes_render_without_history_reload(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let run = RunId::new();
+        let other = RunId::new();
+        let mission = crate::mission::Mission {
+            now: Some("Recorded stage".into()),
+            recovery: surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+                through: 7,
+                latest: None,
+            },
+            ..Default::default()
+        };
+        let refresh = |live| super::MissionRefresh {
+            operation: None,
+            streams: vec![(run, Some(7), Some(7)), (other, Some(7), Some(7))],
+            observations: vec![(run, live), (other, true)],
+        };
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: run,
+                project: None,
+            },
+            mission: Some(mission),
+            implementation: Some(super::ImplementationHistory::Recorded),
+            operation: None,
+            loading: LoadingState::Ready,
+            error: None,
+            generation: 5,
+            loaded_refresh: Some(refresh(false)),
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(panel.clone(), window, cx)
+        });
+        for live in [false, true, false] {
+            window.update(|window, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.sync(refresh(live), cx);
+                    assert_eq!(
+                        panel.generation, 5,
+                        "availability cannot reload journal history"
+                    );
+                    assert_eq!(panel.current_observation(), live);
+                });
+                window.render_frame(cx);
+                let label = window
+                    .find("mission-current-activity")
+                    .label()
+                    .unwrap()
+                    .to_owned();
+                assert!(label.starts_with(if live {
+                    "Working on"
+                } else {
+                    "Last recorded activity"
+                }));
+            });
+        }
+        window.update(|_, cx| {
+            panel.update(cx, |panel, _| {
+                panel.loading = LoadingState::Reading;
+                assert!(!panel.current_observation());
+                panel.loading = LoadingState::Ready;
+                let mut advanced = refresh(true);
+                advanced.streams[0].2 = Some(8);
+                panel.loaded_refresh = Some(advanced);
+                assert!(
+                    !panel.current_observation(),
+                    "old stage cannot be current after a newer watermark"
+                );
+                panel.loaded_refresh = Some(refresh(false));
+                panel.operation = Some(surge_core::bootstrap_operation::BootstrapOperationStatus {
+                    operation_id: run,
+                    planning_run: run,
+                    implementation_run: other,
+                    state: surge_core::bootstrap_operation::BootstrapState::Pending {
+                        phase: surge_core::bootstrap_operation::BootstrapPhase::Implementing,
+                    },
+                    result: None,
+                    revision: 1,
+                    cancel_requested: false,
+                    queue_sequence: 1,
+                    payload_version: 1,
+                });
+                panel.implementation = Some(super::ImplementationHistory::PlanningOnly);
+                assert!(
+                    !panel.current_observation(),
+                    "live child is not live planning history"
+                );
+                panel.implementation = Some(super::ImplementationHistory::Recorded);
+                assert!(
+                    panel.current_observation(),
+                    "recorded child uses its exact attributed observation"
+                );
+                panel.mission.as_mut().unwrap().recovery =
+                    surge_core::recovery_observation::RecoveryObservation::PartialPrefix {
+                        through: Some(7),
+                        latest: None,
+                    };
+                assert!(
+                    !panel.current_observation(),
+                    "partial history cannot show a current worker"
+                );
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn recovery_observability_native_problem_keeps_old_reason_unknown(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let run = RunId::new();
+        let mission = crate::mission::fixture_fold(
+            &[EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: "gate occurrence mismatch <literal> [inspect](https://example.test)"
+                    .into(),
+            }],
+            &[],
+            None,
+        );
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None, active_loads: Default::default(), home: None,
+            request: MissionRequest { selected: run, project: None }, mission: Some(mission),
+            implementation: Some(super::ImplementationHistory::PlanningOnly),
+            operation: Some(surge_core::bootstrap_operation::BootstrapOperationStatus {
+                operation_id: run, planning_run: run, implementation_run: RunId::new(),
+                state: surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
+                    phase: surge_core::bootstrap_operation::BootstrapPhase::Planning, run_id: Some(run),
+                    reason: surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+                }, result: None, revision: 1, cancel_requested: false, queue_sequence: 1, payload_version: 1,
+            }), loading: LoadingState::Ready, error: None, generation: 0, loaded_refresh: None,
+            scope: Vec::new(), requested_task: None, expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let label = window.find("mission-recovery").label().unwrap().to_owned();
+            assert!(label.contains("confirmation unconfirmed"));
+            assert!(
+                label
+                    .contains("gate occurrence mismatch <literal> [inspect](https://example.test)")
+            );
+            assert!(!label.contains("free disk"));
+        });
+    }
+
+    #[gpui_kit::test]
     fn started_pending_task_displays_progress_without_a_ledger_promotion(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let events = [
@@ -1178,7 +1497,7 @@ mod hierarchy_tests {
             window.render_frame(cx);
             assert_eq!(
                 window.find("task-state-0-0").label(),
-                Some("Login: in progress")
+                Some("Login: last recorded in progress")
             );
         });
     }
@@ -1279,7 +1598,7 @@ mod hierarchy_tests {
             window.render_frame(cx);
             assert_eq!(
                 window.find("t0-0-s0").label(),
-                Some(format!("{title}: Running").as_str())
+                Some(format!("{title}: Last recorded in progress").as_str())
             );
         });
     }

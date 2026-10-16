@@ -507,7 +507,10 @@ impl SurgeApp {
             state
                 .bootstrap_operations
                 .insert(operation_id, snapshot.clone());
-            state.run_streams.entry(run_id).or_default().live = !status.state.phase().is_none();
+            let stream = state.run_streams.entry(run_id).or_default();
+            if matches!(status.state, BootstrapState::NeedsAttention { .. }) {
+                stream.live = false;
+            }
             if !state.runs.iter().any(|run| run.run_id == run_id) {
                 state.runs.push(crate::app_state::UiRun {
                     run_id,
@@ -683,7 +686,7 @@ impl SurgeApp {
         cx: &mut Context<Self>,
     ) {
         self.state.update(cx, |state, cx| {
-            state.run_streams.entry(run_id).or_default().live = true;
+            state.run_streams.entry(run_id).or_default();
             cx.notify();
         });
         self.accepted_planning_runs.insert(operation_id, run_id);
@@ -795,8 +798,10 @@ impl SurgeApp {
                 let mut next_retry = std::time::Instant::now() + history_retry_delay(0);
                 cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| {
-                        s.run_streams.entry(run_id).or_default().live = true;
-                        cx.notify();
+                        if s.runs.iter().any(|run| run.run_id == run_id) {
+                            s.run_streams.entry(run_id).or_default().live = true;
+                            cx.notify();
+                        }
                     });
                 });
                 loop {
@@ -1927,10 +1932,8 @@ fn history_retry_delay(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(FIRST_MS.saturating_mul(factor).min(CAP_MS))
 }
 
-/// Replay `run_id`'s durable journal into its stream so pending decisions
-/// rest on trusted history. Returns whether the stream now holds it; without
-/// a Surge home there is nothing to read, so that counts as done (retrying
-/// cannot help).
+/// Replay an attributed durable prefix without inferring that an attached feed is current.
+/// Read failure retains recorded history and keeps current observation unconfirmed.
 async fn hydrate_run_history(
     state: &WeakEntity<AppState>,
     run_id: surge_core::id::RunId,
@@ -1938,37 +1941,63 @@ async fn hydrate_run_history(
 ) -> bool {
     let Some(home) = surge_core::home::surge_home_dir() else {
         tracing::warn!(%run_id, "no Surge home; run history cannot be restored");
-        return true;
+        mark_history_unconfirmed(
+            state,
+            run_id,
+            "Surge home is unavailable; run history is unconfirmed",
+            cx,
+        );
+        return false;
     };
     match surge_persistence::runs::Storage::inspect_existing_run_events(home.join("runs"), run_id)
         .await
     {
-        Ok(events) => {
-            cx.update(|cx| {
-                let _ = state.update(cx, |s, cx| {
-                    let stream = s.run_streams.entry(run_id).or_default();
-                    stream.begin_display_history(run_id, None);
-                    let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
-                    for event in events {
-                        stream.apply_recorded(
-                            &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
-                                seq: event.seq.as_u64(),
-                                payload: Box::new(event.payload.payload),
-                            },
-                            event.timestamp_ms,
-                        );
-                    }
-                    stream.finish_display_history(through_seq);
-                    cx.notify();
-                });
-            });
-            true
-        },
+        Ok(events) => cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                if !s.runs.iter().any(|run| run.run_id == run_id) { return false; }
+                let stream = s.run_streams.entry(run_id).or_default();
+                stream.begin_display_history(run_id, None);
+                let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
+                for event in events {
+                    stream.apply_recorded(
+                        &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                            seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
+                        }, event.timestamp_ms,
+                    );
+                }
+                stream.finish_display_history(through_seq);
+                let confirmed = stream.session_history_confirmed() && stream.recovery().is_complete();
+                if confirmed { stream.observation_error = None; }
+                else { stream.history_unconfirmed("The supplied run history is incomplete or cannot confirm the retained prefix"); }
+                cx.notify();
+                confirmed
+            }).unwrap_or(false)
+        }),
         Err(error) => {
             tracing::warn!(%run_id, %error, "could not restore run history; will retry");
+            mark_history_unconfirmed(state, run_id, &format!("Could not restore run history: {error}"), cx);
             false
         },
     }
+}
+
+fn mark_history_unconfirmed(
+    state: &WeakEntity<AppState>,
+    run_id: surge_core::id::RunId,
+    message: &str,
+    cx: &mut AsyncApp,
+) {
+    cx.update(|cx| {
+        let _ = state.update(cx, |s, cx| {
+            if s.runs.iter().any(|run| run.run_id == run_id) {
+                s.run_streams
+                    .entry(run_id)
+                    .or_default()
+                    .history_unconfirmed(message);
+                cx.notify();
+            }
+        });
+    });
 }
 
 #[cfg(test)]
