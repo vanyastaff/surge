@@ -1,6 +1,6 @@
 # Results planning history
 
-Status: repair 3 BUILD COMPLETE and frozen for independent affected 5a then full 5b; prior repair 2 completion is historical below. Full product journey and native Windows remain unverified. Repair dispatches: **3/3**.
+Current status: local Results COMPLETE after authorized repair4, focused independent5a and all three affected5b lenses. Dispatches **4/4**, no automatic fifth. Full goal and native Windows remain open. Earlier statuses below are historical receipts.
 
 Base: `a2ba09c5d1abe2d5370cca9710d19e88c604dc07`.
 Worktree: `/Users/vanyastafford/.codex/worktrees/results-planning-history/surge`.
@@ -417,3 +417,50 @@ Final commands all used `--locked`, the authorized `target/auth-required-diagnos
 The final UI gate is default features; all-feature and default all-target builds are independently linted. No required integration was skipped. UI integration tests only write their isolated decision-file fixtures, so no hardcoded helper publication was needed; the existing target/debug symlink and main checkout were not modified by this author. Existing linker compact-unwind and dependency future-incompatibility warnings are retained. No fresh native Windows, MSRV or full-workspace CI claim. Prior unexpected Fleet/secure_lock receipts remain unchanged with their causes unconfirmed.
 
 All changes are in the approved six Rust files plus this task/evidence record. No app.rs/app_state/Inbox/Home owner, scheduler, authority/schema, provider, acceptance fixture/runtime/capture/bundle, dependency/unsafe/protocol or memory changes. No commit/push/PR/merge. N7 and the queued Home/Inbox mandate are separate; all eight tasks/two milestones and full product/platform goal remain open. Rust/Cargo lease released after terminal gates and source hash verification; reviews must use this frozen closure before any root-owned commit.
+
+
+## Fourth-round independent closure
+
+Focused5a ACCEPTABLE; affected generic, domain/async/history and security/integrity
+5b COMPLETE, no remaining blocker/advisory. RPH-R3-SEC-1, RPH-R3-DOM-A1,
+RPH-R4-PLAN-1 and RPH-R4-PLAN-SEC-1 resolved in code. Explicit attribution from the
+same graph lookup reaches the final production style owner; live/unavailable
+planning stays neutral without changing activity, identity, sessions or caveats.
+Authenticated Agent/HumanGate/external and ordinary implementation stay unchanged.
+
+Root independently verified six final sources, seven fourth-round receipt hashes
+and the narrow repair patch. All reviewers verified exact patch reconstruction
+and unchanged third-round evidence. Final cumulative source closure is
+dd4d2056cab2ba676a53be458d48eed4d641fc19c679910f201eccdc799cd4c6.
+335 UI plus5 integrations passed, zero ignored; strict UI default/all-feature
+all-target Clippy, six-source fmt and diff passed. Persistence inspection25/25 is
+unchanged historical third-round evidence, not a claimed rerun. All failures and
+initial review severity disagreement remain retained.
+
+Local Results closure only: no Windows/MSRV/current full-workspace CI, live
+provider, full app or product completion claim. No publication. Home/Inbox sixth
+round and authentic same-project continuation/all eight tasks remain open.
+
+## Fourth-round author freeze (historical handoff)
+
+Author verdict **BUILD COMPLETE**, frozen for independent focused 5a then affected generic/domain/security 5b. Current Results dispatch count **4/4**, following the explicit user fourth-round authorization; no automatic fifth. The domain advisory/security blocker severity disagreement remains historical evidence; the author does not replace independent review.
+
+Cumulative six-source closure SHA256 `dd4d2056cab2ba676a53be458d48eed4d641fc19c679910f201eccdc799cd4c6` against HEAD `c22696f338578d18fb21d491d753e33c08ec9cac`. Fourth-round changes touch only `mission.rs`, `screens/run_mission.rs` and its adjacent Results tests. The other three source files remain byte-identical to reviewed repair3. `.rust-studio/evidence/results-repair4/frozen-source-sha.txt` contains all six hashes. `narrow-repair.patch` is relative to separately reconstructed baseline source snapshots verified byte-for-byte against all six third-round hashes. `baseline-verification.json` additionally verifies the original third manifest and every original receipt remain unchanged. The existing task/proposal records receive this new freeze; the historical third manifest/task hash is not rewritten.
+
+The same authenticated graph/node lookup now records internal Available/Unavailable planning provenance. Planning-only unavailable configuration falls back to neutral Result; shared implementation `stage_step` is unchanged. One actual final style owner supplies step_chip's border, background and optional live cue. Unavailable planning uses External even for live Working/Waiting, preserving factual text, exact occurrence/session/node IDs, caveats, state, indicator presence and outcome icons. Authenticated Agent/HumanGate and authenticated external-node positive controls preserve their existing styles; ordinary implementation uses its unchanged None policy. Unknown is never inferred from Result lane alone. No new theme, lane, classifier, provider or authority.
+
+Genuine RED before behavior changes: `red-style.log` **0/4**, with missing-config Build-vs-Result, offline Working/Waiting actual final border/tint, live Working/Waiting final border/tint/cue, and real RunsScreen complete-prefix/missing-node/no-session/exact-live-parent actual style assertions all reached. The native step retained Working and its recorded label before the failing color assertion. `red-lineage.log` **3/6**, failing gap, invalid predecessor/content and missing-config neutral projection expectations while three other controls passed. Only the two assertions encoding the defective Build fallback were replaced; original history/lineage/session/review assertions remain. Before RED, provenance was wired from the existing lookup and the existing final style computation was mechanically extracted without changing its returned colors. No compiler/setup failure is described as RED.
+
+Final gates, sequential Cargo lease, login=false, CARGO_TARGET_DIR=target/auth-required-diagnostic (absolute worktree target), incremental=0, dev/test debug=0, test strip=symbols, jobs=2:
+
+| Receipt | Command/result |
+| --- | --- |
+| `ui-green.log` | `cargo test --locked -p surge-ui -- --nocapture`: **335/335 unit/native +5/5 integration**, **0 ignored**. Includes **23/23 mission** and **35/35 Results**. |
+| `clippy-all.log` | `cargo clippy --locked -p surge-ui --all-targets --all-features -- -D warnings`: **exit0**. |
+| `clippy-default.log` | `cargo clippy --locked -p surge-ui --all-targets -- -D warnings`: **exit0**. |
+| `fmt.log` | All six cumulative Rust files, `rustfmt --check --edition 2024 --config skip_children=true`: **exit0**. |
+| `diff-check.log` | `git diff --check`: **exit0**. |
+
+The full UI gate is default features; both requested UI lint feature configurations are separately recorded. Persistence has no fourth-round seam change; repair3's **25/25 inspection** is retained as historical evidence and was not rerun. Existing linker compact-unwind and dependency future-incompatibility warnings remain recorded; no suppression. No helper publication needed for UI-only tests; target/debug symlink is unchanged. No fresh native Windows/MSRV/full-workspace CI claim.
+
+No Home/Inbox/app.rs/app_state, authority/schema/scheduler, receipts/provider/witness/native-fixture/runtime/main or memory changes. No commit/push/PR/merge. N7, Home's authorized/reserved sixth round, all eight tasks/two milestones, actual provider/native/product and Windows acceptance remain open. Source is frozen after terminal gates and rehash. Exclusive Rust/Cargo lease released for independent focused 5a THEN affected generic/domain/security 5b; no source edits after freeze without further explicit authorization.

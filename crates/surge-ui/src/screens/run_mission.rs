@@ -25,6 +25,7 @@ use crate::ui;
 #[path = "run_mission/history.rs"]
 mod history;
 pub(super) use history::MissionRequest;
+pub(super) use history::operation_message;
 use history::{ImplementationHistory, LoadOutcome};
 use surge_core::bootstrap_operation::{BootstrapOperationStatus, BootstrapState};
 
@@ -116,6 +117,13 @@ impl MissionPanel {
         &self.request
     }
 
+    /// Read-only exact ownership learned by the existing cold history lookup.
+    pub(super) fn operation_for(&self, run: RunId) -> Option<&BootstrapOperationStatus> {
+        self.operation
+            .as_ref()
+            .filter(|status| [status.planning_run, status.implementation_run].contains(&run))
+    }
+
     /// Both reserved streams and operation transitions can change this composition.
     pub(super) fn refresh_key(&self, state: &crate::app_state::AppState) -> MissionRefresh {
         let operation = state
@@ -178,12 +186,6 @@ impl MissionPanel {
     }
 
     fn current_observation(&self) -> bool {
-        if self.loading != LoadingState::Ready || self.error.is_some() {
-            return false;
-        }
-        let Some(refresh) = &self.loaded_refresh else {
-            return false;
-        };
         let run = self
             .operation
             .as_ref()
@@ -197,9 +199,24 @@ impl MissionPanel {
         let Some(mission) = &self.mission else {
             return false;
         };
+        self.observes_run(run, &mission.recovery, mission.end.is_some())
+    }
+
+    fn observes_run(
+        &self,
+        run: RunId,
+        recovery: &surge_core::recovery_observation::RecoveryObservation,
+        terminal: bool,
+    ) -> bool {
+        if terminal || self.loading != LoadingState::Ready || self.error.is_some() {
+            return false;
+        }
+        let Some(refresh) = &self.loaded_refresh else {
+            return false;
+        };
         let surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
             through, ..
-        } = mission.recovery
+        } = *recovery
         else {
             return false;
         };
@@ -287,9 +304,26 @@ fn lane_color(lane: Lane) -> Hsla {
     }
 }
 
-/// A step as a small capsule: its role color, its label, and how it went.
-fn step_chip(id: String, step: &Step, available: bool) -> impl IntoElement {
-    let role = lane_color(step.lane);
+/// Final colors actually consumed by the capsule border, tint and live cue.
+struct StepChipStyle {
+    border: Hsla,
+    background: Hsla,
+    activity: Option<Hsla>,
+    icon: Option<IconName>,
+    outcome: Hsla,
+}
+
+fn step_chip_style(
+    step: &Step,
+    available: bool,
+    attribution: Option<mission::PlanningAttribution>,
+) -> StepChipStyle {
+    let unavailable = attribution == Some(mission::PlanningAttribution::Unavailable);
+    let role = if unavailable {
+        Semantic::External.color()
+    } else {
+        lane_color(step.lane)
+    };
     let (icon, tone): (Option<IconName>, Hsla) = match &step.state {
         StepState::Done(_) => (Some(IconName::Check), theme::success()),
         StepState::Failed(_) => (Some(IconName::Close), theme::error()),
@@ -297,6 +331,37 @@ fn step_chip(id: String, step: &Step, available: bool) -> impl IntoElement {
         StepState::Working => (None, theme::accent()),
         StepState::Unknown | StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
     };
+    let live = available && matches!(step.state, StepState::Working | StepState::WaitingOnYou);
+    let activity = if unavailable {
+        Semantic::External.color()
+    } else {
+        tone
+    };
+    StepChipStyle {
+        border: if live {
+            theme::stroke(activity)
+        } else {
+            theme::stroke(role).opacity(0.5)
+        },
+        background: if live {
+            theme::tint(activity)
+        } else {
+            theme::tint(role)
+        },
+        activity: live.then_some(activity),
+        icon,
+        outcome: tone,
+    }
+}
+
+/// A step as a small capsule: its role color, its label, and how it went.
+fn step_chip(
+    id: String,
+    step: &Step,
+    available: bool,
+    attribution: Option<mission::PlanningAttribution>,
+) -> impl IntoElement {
+    let style = step_chip_style(step, available, attribution);
     let tip = match &step.state {
         StepState::Done(outcome) => step
             .summary
@@ -319,7 +384,6 @@ fn step_chip(id: String, step: &Step, available: bool) -> impl IntoElement {
     } else {
         tip
     };
-    let live = available && matches!(step.state, StepState::Working | StepState::WaitingOnYou);
     div()
         .id(SharedString::from(id))
         .test_support()
@@ -333,25 +397,21 @@ fn step_chip(id: String, step: &Step, available: bool) -> impl IntoElement {
         .px(px(8.0))
         .rounded(px(999.0))
         .border_1()
-        .border_color(if live {
-            theme::stroke(tone)
-        } else {
-            theme::stroke(role).opacity(0.5)
-        })
-        .bg(if live {
-            theme::tint(tone)
-        } else {
-            theme::tint(role)
-        })
+        .border_color(style.border)
+        .bg(style.background)
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-        .when(live, |el| el.child(ui::live_dot(tone)))
+        .children(style.activity.map(ui::live_dot))
         .child(
             div()
                 .text_size(px(10.5))
                 .text_color(theme::text_primary())
                 .child(step.label.clone()),
         )
-        .children(icon.map(|i| Icon::new(i).size(px(10.0)).text_color(tone)))
+        .children(
+            style
+                .icon
+                .map(|i| Icon::new(i).size(px(10.0)).text_color(style.outcome)),
+        )
 }
 
 fn step_row(prefix: &str, steps: &[Step], available: bool) -> Div {
@@ -360,7 +420,7 @@ fn step_row(prefix: &str, steps: &[Step], available: bool) -> Div {
         if i > 0 {
             row = row.child(div().w(px(6.0)).h(px(1.0)).bg(theme::graph_line()));
         }
-        row = row.child(step_chip(format!("{prefix}-{i}"), step, available));
+        row = row.child(step_chip(format!("{prefix}-{i}"), step, available, None));
     }
     row
 }
@@ -385,7 +445,7 @@ impl MissionPanel {
                 );
             }
             let (note, tone, icon) = match step.state {
-                PlanState::NotStarted => ("not started".to_string(), theme::slate(), None),
+                PlanState::NotStarted => ("No review recorded".to_string(), theme::slate(), None),
                 PlanState::Drafting { edits } => (
                     if edits > 0 {
                         format!("redrafting · {edits} edit")
@@ -412,6 +472,10 @@ impl MissionPanel {
             };
             row = row.child(
                 ui::node_card(Semantic::Plan.color())
+                    .id(SharedString::from(format!("planning-review-{i}")))
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(format!("{}: {note}", plan_label(step.stage)))
                     .flex_1()
                     .min_w(px(0.0))
                     .v_flex()
@@ -440,6 +504,87 @@ impl MissionPanel {
             .gap(px(8.0))
             .child(ui::section_label("Plan"))
             .child(row)
+    }
+
+    fn render_planning(&self, planning: &mission::PlanningExecution) -> Div {
+        let available = self.observes_run(planning.run, &planning.recovery, planning.end.is_some());
+        let coverage = if planning.recovery.is_complete() {
+            "complete loaded prefix"
+        } else {
+            "incomplete history"
+        };
+        let facts = format!(
+            "Planning run {} · {coverage} · through event {}",
+            planning.run,
+            planning
+                .through
+                .map_or_else(|| "unknown".into(), |seq| seq.to_string())
+        );
+        let mut group = div()
+            .v_flex()
+            .gap(px(8.0))
+            .child(ui::section_label("Recorded planning steps"))
+            .child(
+                div()
+                    .id("planning-history-facts")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(facts.clone())
+                    .child(ui::meta(facts)),
+            );
+        if let Some(end) = &planning.end {
+            let text = match end {
+                RunEnd::Completed => "Planning run: Completed".into(),
+                RunEnd::Failed(error) => format!("Planning run: Failed · {error}"),
+                RunEnd::Aborted(reason) => format!("Planning run: Stopped · {reason}"),
+            };
+            group = group.child(
+                div()
+                    .id("planning-terminal")
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(text.clone())
+                    .child(ui::meta(text)),
+            );
+        }
+        for caveat in &planning.caveats {
+            group = group.child(ui::meta(caveat.clone()));
+        }
+        if let Some(problem) = mission::recovery_problem(&planning.recovery, false) {
+            group = group.child(
+                div()
+                    .id("planning-recovery")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(problem.clone())
+                    .child(ui::meta(problem)),
+            );
+        }
+        for occurrence in &planning.steps {
+            let id = format!("planning-step-{}", occurrence.entered);
+            let mut row = div().v_flex().gap(px(4.0)).child(step_chip(
+                id.clone(),
+                &occurrence.step,
+                available,
+                Some(occurrence.attribution),
+            ));
+            if let Some(summary) = &occurrence.step.summary {
+                row = row.child(ui::meta(summary.clone()));
+            }
+            for (index, participant) in occurrence.sessions.iter().enumerate() {
+                row = row.child(process_evidence(
+                    format!("{id}-session-{index}"),
+                    format!(
+                        "Performed by {} · Runtime: {} · Session: {}",
+                        participant.profile,
+                        participant.runtime.as_deref().unwrap_or("not recorded"),
+                        participant.session
+                    ),
+                ));
+            }
+            group = group.child(row);
+        }
+        group
     }
 
     fn render_subtask(&self, task: &TaskView, path: &str) -> AnyElement {
@@ -766,12 +911,16 @@ impl MissionPanel {
                     .child(caveat.clone()),
             );
         }
-        if mission
-            .plan
-            .iter()
-            .any(|p| p.state != PlanState::NotStarted)
+        if mission.planning.is_some()
+            || mission
+                .plan
+                .iter()
+                .any(|p| p.state != PlanState::NotStarted)
         {
             body = body.child(self.render_plan(mission));
+        }
+        if let Some(planning) = &mission.planning {
+            body = body.child(self.render_planning(planning));
         }
         if let Some(now) = &mission.now {
             let activity = if self.current_observation() {
@@ -868,7 +1017,11 @@ impl MissionPanel {
         if mission.milestones.is_empty() && mission.steps.is_empty() && mission.end.is_none() {
             body = body.child(ui::empty_state(
                 "◎",
-                "Nothing has run yet",
+                if mission.planning.is_some() {
+                    "Implementation has no recorded work yet"
+                } else {
+                    "Nothing has run yet"
+                },
                 "Milestones, tasks and their steps appear here as the build moves.",
             ));
         }

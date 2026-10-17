@@ -704,19 +704,6 @@ impl RunsScreen {
                 row
             })
             .collect();
-        // One idea is one entry: a planning run whose build run is listed is
-        // shown through that build run (Overview shows both).
-        let listed: std::collections::HashSet<RunId> =
-            rows.iter().filter_map(|r| r.run_id).collect();
-        rows.retain(|r| {
-            let Some(id) = r.run_id else { return true };
-            Some(id) == self.selected
-                || !state.bootstrap_operations.values().any(|op| {
-                    op.planning_run == id
-                        && op.implementation_run != id
-                        && listed.contains(&op.implementation_run)
-                })
-        });
         rows.sort_by_key(|r| r.rank);
         let sel = match self.selected {
             Some(id) => rows.iter().position(|row| row.run_id == Some(id)),
@@ -977,6 +964,13 @@ impl RunsScreen {
         for (i, row) in rows.iter().enumerate() {
             let is_sel = Some(i) == sel;
             let run_id = row.run_id;
+            let kind = self.selected_bootstrap(row, cx).map(|(_, status)| {
+                if row.run_id == Some(status.planning_run) {
+                    "Planning"
+                } else {
+                    "Implementation"
+                }
+            });
             let item = div()
                 .id(SharedString::from(format!(
                     "run-row-{}",
@@ -985,7 +979,12 @@ impl RunsScreen {
                 )))
                 .test_support()
                 .role(Role::Button)
-                .aria_label(format!("{}, {}", row.title, row.status_label))
+                .aria_label(format!(
+                    "{}{}, {}",
+                    kind.map_or(String::new(), |kind| format!("{kind} · ")),
+                    row.title,
+                    row.status_label
+                ))
                 .v_flex()
                 .gap(px(4.0))
                 .px(px(10.0))
@@ -1031,6 +1030,7 @@ impl RunsScreen {
                                 .child(row.title.clone()),
                         ),
                 )
+                .children(kind.map(ui::meta))
                 .child(
                     div()
                         .h_flex()
@@ -1068,7 +1068,14 @@ impl RunsScreen {
                     .px(px(16.0))
                     .pt(px(14.0))
                     .pb(px(10.0))
-                    .child(ui::section_label(format!("Missions · {}", rows.len())).flex_1())
+                    .child(
+                        ui::section_label(format!("Runs · {}", rows.len()))
+                            .id("runs-count")
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(format!("Runs · {}", rows.len()))
+                            .flex_1(),
+                    )
                     .when(needs > 0, |el| {
                         el.child(ui::role_badge(
                             format!("{needs} need you"),
@@ -1091,14 +1098,29 @@ impl RunsScreen {
         surge_core::bootstrap_operation::BootstrapOperationStatus,
     )> {
         let id = row.run_id?;
-        self.state
-            .read(cx)
+        let state = self.state.read(cx);
+        let mut matching = state
             .bootstrap_operations
-            .iter()
-            .find_map(|(operation_id, status)| {
-                (status.planning_run == id || status.implementation_run == id)
-                    .then_some((*operation_id, status.clone()))
+            .values()
+            .filter(|status| [status.planning_run, status.implementation_run].contains(&id));
+        let cached = matching.next();
+        if matching.next().is_some() {
+            return None;
+        }
+        cached
+            .cloned()
+            .or_else(|| {
+                self.mission
+                    .as_ref()
+                    .and_then(|panel| {
+                        let panel = panel.read(cx);
+                        (panel.request().project == state.project_path)
+                            .then(|| panel.operation_for(id))
+                            .flatten()
+                    })
+                    .cloned()
             })
+            .map(|status| (status.operation_id, status))
     }
 
     /// Resolve operation ownership from disk when Results loads, including cold history.
@@ -1113,30 +1135,18 @@ impl RunsScreen {
         })
     }
 
-    /// Title, one status, one line of facts, and the actions — nothing
-    /// said twice.
+    /// Selected run lifecycle and independently attributed operation phase.
     fn render_header(&self, row: &RunRow, live: bool, cx: &mut Context<Self>) -> Div {
-        use surge_core::bootstrap_operation::BootstrapState as B;
         let bootstrap = self.selected_bootstrap(row, cx);
 
-        // One status: the build's when this run belongs to one, else the run's.
-        let (status_text, status_color) = match bootstrap.as_ref().map(|(_, s)| &s.state) {
-            Some(B::Pending { phase }) => (phase_label(*phase).to_string(), theme::accent()),
-            Some(B::NeedsAttention { .. }) => ("needs you".to_string(), theme::warning()),
-            Some(B::Cancelling { .. }) => ("cancelling".to_string(), theme::warning()),
-            _ => (row.status_label.to_string(), row.color),
-        };
-        let (status_text, status_color) = if row.waiting_detail.is_some() {
-            (row.status_label.to_string(), row.color)
-        } else {
-            (status_text, status_color)
-        };
+        let (status_text, status_color) = (row.status_label.to_string(), row.color);
         let cancellable = bootstrap
             .as_ref()
             .is_some_and(|(_, s)| s.state.phase().is_some() && !s.cancel_requested);
 
         let mut facts: Vec<String> = vec![
-            row.id_label.clone(),
+            row.run_id
+                .map_or_else(|| row.id_label.clone(), |id| id.to_string()),
             format!("started {}", row.started),
             format!("{} elapsed", row.elapsed),
             format!("{} events", row.events),
@@ -1233,12 +1243,27 @@ impl RunsScreen {
                                     .truncate()
                                     .child(row.title.clone()),
                             )
-                            .child(ui::pill(
-                                status_text,
-                                status_color,
-                                theme::tint(status_color),
-                            )),
+                            .child(
+                                ui::pill(
+                                    status_text.clone(),
+                                    status_color,
+                                    theme::tint(status_color),
+                                )
+                                .id("selected-run-status")
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(status_text),
+                            ),
                     )
+                    .children(bootstrap.as_ref().map(|(_, status)| {
+                        let message = run_mission::operation_message(status);
+                        div()
+                            .id("selected-operation-status")
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(message.clone())
+                            .child(ui::meta(message))
+                    }))
                     .child(
                         div()
                             .id("run-header-facts")
@@ -1715,6 +1740,7 @@ impl RunsScreen {
                 body = body.child(
                     div()
                         .id(("run-event", index))
+                        .test_support()
                         .role(Role::Label)
                         .aria_label(format!("{} {} {}", e.t, e.kind, e.text))
                         .h_flex()

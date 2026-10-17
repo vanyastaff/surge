@@ -318,7 +318,8 @@ pub(crate) async fn load_run(
     let execution = TaskExecutionView::compile(run, &events).map_err(|error| error.to_string())?;
     let ownership = checked_ownership(&scope, run, &expected, &events).await?;
     let mission =
-        crate::mission::from_execution(&planning, None, &execution, &events, roadmap.as_deref());
+        crate::mission::from_execution(&planning, &execution, &events, roadmap.as_deref())
+            .map_err(|error| error.to_string())?;
     let pending = surge_orchestrator::operator::PendingDecisions::from_events(run, &events);
     let decisions = if matches!(
         pending.status(),

@@ -363,6 +363,680 @@ impl Fixture {
     }
 }
 
+// The independent oracle is the existing External semantic color, and these
+// outputs are exactly what step_chip consumes for border, background and cue.
+fn repair4_unknown_step(waiting: bool) -> crate::mission::PlanningStep {
+    let mut payloads = vec![EventPayload::StageEntered {
+        node: "missing_configuration".parse().unwrap(),
+        attempt: 1,
+    }];
+    if waiting {
+        payloads.push(EventPayload::HumanInputRequested {
+            node: "missing_configuration".parse().unwrap(),
+            session: None,
+            call_id: Some("request-unknown".into()),
+            prompt: "recorded question".into(),
+            schema: None,
+        });
+    }
+    let planning = crate::mission::fixture_fold(&payloads, &[], None)
+        .planning
+        .unwrap();
+    assert!(planning.recovery.is_complete());
+    assert!(planning.steps[0].sessions.is_empty());
+    planning.steps[0].clone()
+}
+
+#[test]
+fn results_history_repair4_final_style_is_neutral_offline() {
+    let external = crate::theme::Semantic::External.color();
+    let agent = crate::theme::Semantic::Agent.color();
+    let actual: Vec<_> = [false, true]
+        .into_iter()
+        .map(|waiting| {
+            let occurrence = repair4_unknown_step(waiting);
+            let style =
+                super::step_chip_style(&occurrence.step, false, Some(occurrence.attribution));
+            (style.border, style.background, style.activity)
+        })
+        .collect();
+    let expected = (
+        crate::theme::stroke(external).opacity(0.5),
+        crate::theme::tint(external),
+        None,
+    );
+    assert_ne!(expected.0, crate::theme::stroke(agent).opacity(0.5));
+    assert_ne!(expected.1, crate::theme::tint(agent));
+    assert_eq!(actual, vec![expected; 2]);
+}
+
+#[test]
+fn results_history_repair4_final_style_is_neutral_live() {
+    let external = crate::theme::Semantic::External.color();
+    let agent = crate::theme::Semantic::Agent.color();
+    let actual: Vec<_> = [false, true]
+        .into_iter()
+        .map(|waiting| {
+            let occurrence = repair4_unknown_step(waiting);
+            assert_eq!(
+                occurrence.step.state,
+                if waiting {
+                    crate::mission::StepState::WaitingOnYou
+                } else {
+                    crate::mission::StepState::Working
+                }
+            );
+            let style =
+                super::step_chip_style(&occurrence.step, true, Some(occurrence.attribution));
+            (style.border, style.background, style.activity)
+        })
+        .collect();
+    let expected = (
+        crate::theme::stroke(external),
+        crate::theme::tint(external),
+        Some(external),
+    );
+    assert_ne!(expected.0, crate::theme::stroke(agent));
+    assert_ne!(expected.1, crate::theme::tint(agent));
+    assert_ne!(expected.2, Some(agent));
+    assert_eq!(actual, vec![expected; 2]);
+}
+
+#[test]
+fn results_history_repair4_authenticated_and_implementation_styles_stay_unchanged() {
+    use crate::mission::{PlanningAttribution, StepState};
+    use crate::theme::{self, Semantic};
+    let graph = surge_core::BundledFlows::by_name_latest("bootstrap")
+        .unwrap()
+        .graph;
+    let gate = graph
+        .nodes
+        .values()
+        .find(|node| matches!(node.config, surge_core::node::NodeConfig::HumanGate(_)))
+        .unwrap()
+        .id
+        .clone();
+    let terminal = graph
+        .nodes
+        .values()
+        .find(|node| matches!(node.config, surge_core::node::NodeConfig::Terminal(_)))
+        .unwrap()
+        .id
+        .clone();
+    for (node, waiting, role) in [
+        ("description_author".parse().unwrap(), false, Semantic::Plan),
+        (gate, true, Semantic::You),
+        (terminal, false, Semantic::External),
+    ] {
+        let mut events = vec![
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash: graph.identity().unwrap(),
+            },
+            EventPayload::StageEntered {
+                node: node.clone(),
+                attempt: 1,
+            },
+        ];
+        if waiting {
+            events.push(EventPayload::HumanInputRequested {
+                node,
+                session: None,
+                call_id: Some("recorded-question".into()),
+                prompt: "recorded question".into(),
+                schema: None,
+            });
+        }
+        let planning = crate::mission::fixture_fold(&events, &[], None)
+            .planning
+            .unwrap();
+        let occurrence = &planning.steps[0];
+        assert_eq!(occurrence.attribution, PlanningAttribution::Available);
+        assert_eq!(
+            occurrence.step.state,
+            if waiting {
+                StepState::WaitingOnYou
+            } else {
+                StepState::Working
+            }
+        );
+        for available in [false, true] {
+            let style =
+                super::step_chip_style(&occurrence.step, available, Some(occurrence.attribution));
+            let live_tone = if waiting {
+                theme::warning()
+            } else {
+                theme::accent()
+            };
+            let (border, background, cue) = if available {
+                (
+                    theme::stroke(live_tone),
+                    theme::tint(live_tone),
+                    Some(live_tone),
+                )
+            } else {
+                (
+                    theme::stroke(role.color()).opacity(0.5),
+                    theme::tint(role.color()),
+                    None,
+                )
+            };
+            assert_eq!(
+                (style.border, style.background, style.activity),
+                (border, background, cue)
+            );
+        }
+    }
+    let ordinary = crate::mission::fixture_fold(
+        &[],
+        &[EventPayload::StageEntered {
+            node: "ordinary_unknown".parse().unwrap(),
+            attempt: 1,
+        }],
+        None,
+    );
+    assert_eq!(ordinary.steps[0].lane, crate::flow_diagram::Lane::Build);
+    for available in [false, true] {
+        let style = super::step_chip_style(&ordinary.steps[0], available, None);
+        let expected = if available {
+            (
+                theme::stroke(theme::accent()),
+                theme::tint(theme::accent()),
+                Some(theme::accent()),
+            )
+        } else {
+            (
+                theme::stroke(Semantic::Agent.color()).opacity(0.5),
+                theme::tint(Semantic::Agent.color()),
+                None,
+            )
+        };
+        assert_eq!((style.border, style.background, style.activity), expected);
+    }
+}
+
+#[gpui_kit::test]
+fn results_history_repair4_complete_missing_node_retains_exact_live_activity(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::prepare_with_graph(
+        ProjectIdentity::Raw,
+        surge_core::BundledFlows::by_name_latest("bootstrap")
+            .unwrap()
+            .graph,
+    );
+    let mut events = fixture.initial_events(false);
+    events.truncate(2);
+    events.push(EventPayload::StageEntered {
+        node: "missing_configuration".parse().unwrap(),
+        attempt: 1,
+    });
+    fixture.write_events(false, events);
+    let handle = fixture.runtime.handle().clone();
+    let _guard = handle.enter();
+    let (screen, state) = repair3_screen(&fixture, cx);
+    let parent = fixture.record.status.planning_run;
+    state.update(cx, |state, _| {
+        state.run_streams.get_mut(&parent).unwrap().live = true
+    });
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(screen.clone(), window, cx));
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(format!("run-row-{parent}"), cx);
+        window.render_frame(cx);
+        window.click("run-tab-Overview", cx);
+    });
+    fixture.settle_screen(&screen, window, ImplementationHistory::PlanningOnly);
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("planning-step-3").label(),
+            Some("Missing configuration: working now")
+        );
+        let panel = screen.read(cx).mission.as_ref().unwrap().read(cx);
+        let planning = panel.mission.as_ref().unwrap().planning.as_ref().unwrap();
+        assert_eq!(planning.run, parent);
+        assert_eq!(planning.through, Some(3));
+        assert!(panel.observes_run(parent, &planning.recovery, false));
+        assert!(planning.steps[0].sessions.is_empty());
+        assert_eq!(
+            planning.steps[0].step.state,
+            crate::mission::StepState::Working
+        );
+        assert!(planning.caveats.iter().any(|c| {
+            c.contains("Planning event 3 has no authenticated node configuration attribution")
+        }));
+        let style = super::step_chip_style(
+            &planning.steps[0].step,
+            true,
+            Some(planning.steps[0].attribution),
+        );
+        let external = crate::theme::Semantic::External.color();
+        assert_eq!(style.border, crate::theme::stroke(external));
+        assert_eq!(style.background, crate::theme::tint(external));
+        assert_eq!(style.activity, Some(external));
+    });
+    fixture.close();
+}
+
+// Graph-driven planning: deliberately no legacy BootstrapStageStarted.
+fn repair3_fixture(terminal: bool) -> (Fixture, surge_core::SessionId) {
+    let mut fixture = Fixture::prepare_with_graph(
+        ProjectIdentity::Raw,
+        surge_core::BundledFlows::by_name_latest("bootstrap")
+            .unwrap()
+            .graph,
+    );
+    let session = surge_core::SessionId::new();
+    let mut events = fixture.initial_events(false);
+    events.truncate(2);
+    events.extend([
+        EventPayload::StageEntered {
+            node: "description_author".parse().unwrap(),
+            attempt: 1,
+        },
+        EventPayload::SessionOpened {
+            opened: None,
+            handoff: None,
+            node: "description_author".parse().unwrap(),
+            session: surge_core::SessionId::new(),
+            agent: "description-author@1.0".into(),
+            agent_id: Some("test-runtime".into()),
+        },
+        EventPayload::StageCompleted {
+            node: "description_author".parse().unwrap(),
+            outcome: "pass".parse().unwrap(),
+        },
+        EventPayload::BootstrapApprovalDecided {
+            stage: BootstrapStage::Description,
+            decision: surge_core::BootstrapDecision::Approve,
+            comment: None,
+        },
+        EventPayload::StageEntered {
+            node: "roadmap_planner".parse().unwrap(),
+            attempt: 1,
+        },
+        EventPayload::SessionOpened {
+            opened: None,
+            handoff: None,
+            node: "roadmap_planner".parse().unwrap(),
+            session,
+            agent: "roadmap-planner@1.0".into(),
+            agent_id: Some("test-runtime".into()),
+        },
+    ]);
+    if terminal {
+        events.push(EventPayload::RunCompleted {
+            terminal_node: "end".parse().unwrap(),
+        });
+    }
+    fixture.write_events(false, events);
+    if terminal {
+        fixture.commit_child();
+        let store = fixture.storage.bootstrap_operation_store();
+        fixture.record = store
+            .claim(
+                fixture.record.status.operation_id,
+                fixture.record.status.revision,
+            )
+            .unwrap();
+        fixture.record = store
+            .mark_started(
+                fixture.record.status.operation_id,
+                fixture.record.status.revision,
+            )
+            .unwrap();
+        fixture.write_run(true);
+    }
+    (fixture, session)
+}
+
+fn repair3_screen(
+    fixture: &Fixture,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<super::super::RunsScreen>,
+    Entity<crate::app_state::AppState>,
+) {
+    cx.background_executor.allow_parking();
+    cx.update(gpui_kit::init);
+    let state = cx.new(|_| {
+        let mut state = crate::app_state::AppState::new();
+        state.project_path = Some(fixture.home.path().into());
+        for (run, child) in [
+            (fixture.record.status.planning_run, false),
+            (fixture.record.status.implementation_run, true),
+        ] {
+            if child && fixture.record.child.is_none() {
+                continue;
+            }
+            let rows = fixture
+                .runtime
+                .block_on(Storage::inspect_existing_run_events(
+                    fixture.home.path().join("runs"),
+                    run,
+                ))
+                .unwrap();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: if rows
+                    .iter()
+                    .any(|row| matches!(row.payload.payload, EventPayload::RunCompleted { .. }))
+                {
+                    surge_orchestrator::engine::handle::RunStatus::Completed
+                } else {
+                    surge_orchestrator::engine::handle::RunStatus::Active
+                },
+                started_at: chrono::Utc::now(),
+                last_event_seq: rows.last().map(|r| r.seq.as_u64()),
+                ended_at: None,
+            });
+            let watermark = rows.last().unwrap().seq.as_u64();
+            state
+                .run_streams
+                .entry(run)
+                .or_default()
+                .begin_display_history(run, None);
+            for row in rows {
+                state.run_streams.entry(run).or_default().apply_recorded(
+                    &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                        seq: row.seq.as_u64(),
+                        payload: Box::new(row.payload.payload),
+                    },
+                    row.timestamp_ms,
+                );
+            }
+            state
+                .run_streams
+                .get_mut(&run)
+                .unwrap()
+                .finish_display_history(watermark);
+        }
+        state.bootstrap_operations.insert(
+            fixture.record.status.operation_id,
+            fixture.record.status.clone(),
+        );
+        state
+    });
+    let screen = cx.new(|cx| {
+        let mut screen = super::super::RunsScreen::new(state.clone(), cx);
+        screen.results_home = Some(fixture.home.path().into());
+        screen.results_active_loads = fixture.active_loads.clone();
+        screen
+    });
+    (screen, state)
+}
+
+#[gpui_kit::test]
+fn results_history_repair3_graph_driven_planning_is_visible(cx: &mut TestAppContext) {
+    let (fixture, _) = repair3_fixture(false);
+    let handle = fixture.runtime.handle().clone();
+    let _guard = handle.enter();
+    let (screen, _) = repair3_screen(&fixture, cx);
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(screen.clone(), window, cx));
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(
+            format!("run-row-{}", fixture.record.status.planning_run),
+            cx,
+        );
+        window.render_frame(cx);
+        window.click("run-tab-Overview", cx);
+    });
+    fixture.settle_screen(&screen, window, ImplementationHistory::PlanningOnly);
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("planning-step-3").is_some(),
+            "actual description StageEntered must be visible"
+        );
+        assert_eq!(
+            window.find("planning-step-7").label(),
+            Some("Roadmap planner: last recorded progress")
+        );
+        assert_eq!(
+            window.find("planning-review-1").label(),
+            Some("Roadmap: No review recorded")
+        );
+    });
+    fixture.close();
+}
+
+#[gpui_kit::test]
+fn results_history_repair3_child_parent_navigation_preserves_exact_history(
+    cx: &mut TestAppContext,
+) {
+    let (fixture, session) = repair3_fixture(true);
+    let handle = fixture.runtime.handle().clone();
+    let _guard = handle.enter();
+    let (screen, _) = repair3_screen(&fixture, cx);
+    let parent = fixture.record.status.planning_run;
+    let child = fixture.record.status.implementation_run;
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(screen.clone(), window, cx));
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(format!("run-row-{child}"), cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find(format!("run-row-{parent}")).is_some(),
+            "completed parent rail must survive selecting child"
+        );
+        assert_eq!(window.find("runs-count").label(), Some("Runs · 2"));
+        window.click(format!("run-row-{parent}"), cx);
+        window.render_frame(cx);
+        window.click("run-tab-Log", cx);
+        window.render_frame(cx);
+        assert!(
+            window
+                .find("run-header-facts")
+                .label()
+                .unwrap()
+                .contains(&parent.to_string())
+        );
+        assert!(
+            window
+                .find(("run-event", 1usize))
+                .label()
+                .unwrap()
+                .contains("roadmap-planner@1.0 session @ roadmap_planner")
+        );
+        assert!(
+            window
+                .find(("run-event", 2usize))
+                .label()
+                .unwrap()
+                .contains("STAGE → roadmap_planner")
+        );
+        window.click("run-tab-Sessions", cx);
+        window.render_frame(cx);
+        assert!(
+            window
+                .find("session-opening-8")
+                .label()
+                .unwrap()
+                .contains(&session.to_string())
+        );
+        assert_eq!(window.find("runs-count").label(), Some("Runs · 2"));
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while fixture.active_loads.get() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "superseded screen reads must settle"
+        );
+        window.run_until_parked();
+        fixture.runtime.block_on(tokio::task::yield_now());
+    }
+    fixture.close();
+}
+
+#[gpui_kit::test]
+fn results_history_repair3_parent_child_observations_are_independent(cx: &mut TestAppContext) {
+    let (mut fixture, session) = repair3_fixture(false);
+    fixture.commit_child();
+    fixture.write_run(true);
+    let handle = fixture.runtime.handle().clone();
+    let _guard = handle.enter();
+    let (screen, state) = repair3_screen(&fixture, cx);
+    let parent = fixture.record.status.planning_run;
+    let child = fixture.record.status.implementation_run;
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(screen.clone(), window, cx));
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(format!("run-row-{child}"), cx);
+        window.render_frame(cx);
+        window.click("run-tab-Overview", cx);
+    });
+    fixture.settle_screen(&screen, window, ImplementationHistory::Recorded);
+    for (parent_live, child_live, expected) in [
+        (false, true, "Roadmap planner: last recorded progress"),
+        (true, false, "Roadmap planner: working now"),
+        (false, false, "Roadmap planner: last recorded progress"),
+    ] {
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.run_streams.get_mut(&parent).unwrap().live = parent_live;
+                state.run_streams.get_mut(&child).unwrap().live = child_live;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            assert_eq!(window.find("planning-step-7").label(), Some(expected));
+            assert!(
+                window
+                    .find("planning-step-7-session-0")
+                    .label()
+                    .unwrap()
+                    .contains(&session.to_string())
+            );
+        });
+    }
+    // A live parent observation cannot upgrade a prefix behind its own registry watermark.
+    window.update(|window, cx| {
+        state.update(cx, |state, cx| {
+            state.run_streams.get_mut(&parent).unwrap().live = true;
+            state
+                .runs
+                .iter_mut()
+                .find(|run| run.run_id == parent)
+                .unwrap()
+                .last_event_seq = Some(9);
+            cx.notify();
+        });
+        window.render_frame(cx);
+    });
+    fixture.settle_screen(&screen, window, ImplementationHistory::Recorded);
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("planning-step-7").label(),
+            Some("Roadmap planner: last recorded progress")
+        );
+    });
+    let child_watermark = window.update(|_, cx| state.read(cx).run_streams[&child].last_seq);
+    fixture.append(
+        false,
+        vec![EventPayload::StageCompleted {
+            node: "roadmap_planner".parse().unwrap(),
+            outcome: "pass".parse().unwrap(),
+        }],
+    );
+    let rows = fixture
+        .runtime
+        .block_on(Storage::inspect_existing_run_events(
+            fixture.home.path().join("runs"),
+            parent,
+        ))
+        .unwrap();
+    let last = rows.last().unwrap();
+    window.update(|window, cx| {
+        state.update(cx, |state, cx| {
+            let stream = state.run_streams.get_mut(&parent).unwrap();
+            stream.apply_recorded(
+                &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                    seq: last.seq.as_u64(),
+                    payload: Box::new(last.payload.payload.clone()),
+                },
+                last.timestamp_ms,
+            );
+            state
+                .runs
+                .iter_mut()
+                .find(|run| run.run_id == parent)
+                .unwrap()
+                .last_event_seq = Some(last.seq.as_u64());
+            cx.notify();
+        });
+        window.render_frame(cx);
+    });
+    fixture.settle_screen(&screen, window, ImplementationHistory::Recorded);
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("planning-step-7").label(),
+            Some("Roadmap planner: finished · pass")
+        );
+        assert_eq!(state.read(cx).run_streams[&child].last_seq, child_watermark);
+    });
+    fixture.close();
+}
+
+#[gpui_kit::test]
+fn results_history_repair3_parent_header_is_separate_from_operation(cx: &mut TestAppContext) {
+    let (fixture, _) = repair3_fixture(true);
+    let handle = fixture.runtime.handle().clone();
+    let _guard = handle.enter();
+    let (screen, state) = repair3_screen(&fixture, cx);
+    state.update(cx, |state, _| {
+        state
+            .run_streams
+            .get_mut(&fixture.record.status.implementation_run)
+            .unwrap()
+            .live = true;
+    });
+    let child = state.update(cx, |state, _| state.runs.pop().unwrap());
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(screen.clone(), window, cx));
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(
+            format!("run-row-{}", fixture.record.status.planning_run),
+            cx,
+        );
+        window.render_frame(cx);
+        state.update(cx, |state, cx| {
+            state.runs.push(child);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("selected-run-status").label(),
+            Some("Completed")
+        );
+        assert_eq!(
+            window.find("selected-operation-status").label(),
+            Some("Operation: building")
+        );
+    });
+    // Settle any Overview read before releasing retained fixture resources.
+    fixture.settle_screen(&screen, window, ImplementationHistory::Recorded);
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("planning-step-7").label(),
+            Some("Roadmap planner: the run ended before this step reported")
+        );
+        assert_eq!(
+            window.find("planning-terminal").label(),
+            Some("Planning run: Completed")
+        );
+    });
+    fixture.close();
+}
+
 #[gpui_kit::test]
 fn results_history_actual_screen_overview_tracks_planning_to_implementation(
     cx: &mut TestAppContext,
@@ -488,6 +1162,17 @@ fn actual_screen_journey(cx: &mut TestAppContext, journey: ScreenJourney) {
     fixture.settle_screen(&screen, window, ImplementationHistory::PlanningOnly);
     let original_panel = window.update(|window, cx| {
         window.render_frame(cx);
+        assert!(
+            window
+                .find(format!("run-row-{planning}"))
+                .label()
+                .unwrap()
+                .starts_with("Planning · ")
+        );
+        assert_eq!(
+            window.find("selected-operation-status").label(),
+            Some("Operation: planning")
+        );
         assert_eq!(
             window.find("mission-implementation-history").label(),
             Some("No implementation launch is recorded.")

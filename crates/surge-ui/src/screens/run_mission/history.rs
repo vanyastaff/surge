@@ -145,42 +145,47 @@ async fn bootstrap(
     let roadmap = crate::roadmap_source::read_run_roadmap(home, record.status.planning_run)
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| toml::from_str(&text).ok());
-    let mut mission = mission::fold(
-        &planning,
-        record.status.implementation_run,
-        &[],
-        roadmap.as_ref(),
-    )
-    .map_err(|error| error.to_string())?;
-    let implementation =
+    // Decide which implementation prefix is usable before composition. Each
+    // supplied journal is compiled once, including fallback/unavailable paths.
+    let observation =
         match Storage::inspect_existing_run(home.into(), record.status.implementation_run).await {
-            Err(error) => ImplementationHistory::Unavailable(HistoryIssue::Read(error.to_string())),
+            Err(error) => Err(HistoryIssue::Read(error.to_string())),
             Ok(inspection) => {
-                match implementation_events(record, inspection, &pins.implementation_worktree) {
-                    Err(issue) => ImplementationHistory::Unavailable(issue),
-                    Ok(ImplementationObservation::Absent) => absence_state(record),
-                    Ok(ImplementationObservation::Recorded(events)) => {
-                        match mission::fold(
-                            &planning,
-                            record.status.implementation_run,
-                            &events,
-                            roadmap.as_ref(),
-                        ) {
-                            Err(error) => ImplementationHistory::Unavailable(HistoryIssue::Read(
-                                error.to_string(),
-                            )),
-                            Ok(_) if !outcome_matches(record, &events) => {
-                                ImplementationHistory::Unavailable(HistoryIssue::TerminalOutcome)
-                            },
-                            Ok(recorded) => {
-                                mission = recorded;
-                                ImplementationHistory::Recorded
-                            },
-                        }
-                    },
-                }
+                implementation_events(record, inspection, &pins.implementation_worktree)
             },
         };
+    let (implementation, events, view) = match observation {
+        Err(issue) => (ImplementationHistory::Unavailable(issue), Vec::new(), None),
+        Ok(ImplementationObservation::Absent) => (absence_state(record), Vec::new(), None),
+        Ok(ImplementationObservation::Recorded(events)) => {
+            match surge_core::task_execution::TaskExecutionView::compile(
+                record.status.implementation_run,
+                &events,
+            ) {
+                Err(error) => (
+                    ImplementationHistory::Unavailable(HistoryIssue::Read(error.to_string())),
+                    Vec::new(),
+                    None,
+                ),
+                Ok(_) if !outcome_matches(record, &events) => (
+                    ImplementationHistory::Unavailable(HistoryIssue::TerminalOutcome),
+                    Vec::new(),
+                    None,
+                ),
+                Ok(view) => (ImplementationHistory::Recorded, events, Some(view)),
+            }
+        },
+    };
+    let view = match view {
+        Some(view) => view,
+        None => surge_core::task_execution::TaskExecutionView::compile(
+            record.status.implementation_run,
+            &[],
+        )
+        .map_err(|error| error.to_string())?,
+    };
+    let mission = mission::from_execution(&planning, &view, &events, roadmap.as_ref())
+        .map_err(|error| error.to_string())?;
     Ok(MissionSnapshot {
         mission,
         implementation,
@@ -365,7 +370,7 @@ fn outcome_matches(record: &BootstrapOperationRecord, events: &[RunEvent]) -> bo
     }
 }
 
-pub(super) fn operation_message(status: &BootstrapOperationStatus) -> String {
+pub(in crate::screens::runs) fn operation_message(status: &BootstrapOperationStatus) -> String {
     match status.state {
         BootstrapState::Pending { phase } => {
             format!("Operation: {}", super::super::phase_label(phase))
