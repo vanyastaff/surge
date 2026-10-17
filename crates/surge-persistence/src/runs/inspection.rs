@@ -7,6 +7,10 @@ use std::{path::Path, sync::Arc};
 
 use surge_core::{RunId, VersionedEventPayload, migrate_payload};
 
+#[path = "inspection/bootstrap.rs"]
+mod bootstrap;
+pub use bootstrap::BootstrapOperationObservation;
+
 use super::{ReadEvent, RunSummary, Storage, StorageError, seq::EventSeq};
 
 /// Facts found without creating storage or repairing registry status.
@@ -75,7 +79,10 @@ impl Storage {
     }
 
     /// Inspect the immutable bootstrap base for an exact owned run, without writes.
-    /// Missing journals return `None`; invalid or unsupported records remain errors.
+    /// Missing records return `None`; invalid or unsupported records remain errors.
+    /// Stored operation text/blob cells together are limited to 4 MiB before Rust
+    /// allocation/JSON decoding. An oversized row returns an inspection error,
+    /// distinct from absence; operation-store execution reads are unchanged.
     pub async fn inspect_existing_run_capture(
         home: std::path::PathBuf,
         run_id: RunId,
@@ -158,6 +165,8 @@ impl Storage {
 
     /// Read a complete integrity-checked operation for either exact reserved run.
     /// Absence is `None`; invalid records fail and unsupported payloads stay explicitly typed.
+    /// Aggregate stored operation text/blob cells are limited to 4 MiB before
+    /// Rust allocation/JSON decoding; an oversized row is an inspection error.
     pub async fn inspect_existing_bootstrap_operation_for_run(
         home: std::path::PathBuf,
         run_id: RunId,
@@ -175,6 +184,23 @@ impl Storage {
         })
         .await
         .map_err(|error| StorageError::Pool(error.to_string()))?
+    }
+
+    /// Observe one exact integrity-checked operation without creating or migrating storage.
+    /// Retains the original registry owner for a later identity/record recheck after
+    /// separately reading journals. `None` means an absent registry or operation;
+    /// invalid records fail and unsupported payloads retain their typed representation.
+    /// Aggregate stored text/blob cells are limited to 4 MiB before Rust allocation
+    /// or JSON decoding; oversized rows return an inspection error, not absence.
+    /// The caller still owns project/generation validation; lookup grants no launch authority.
+    #[must_use = "the checked record and retained observation must be inspected before publication"]
+    pub async fn inspect_existing_bootstrap_operation(
+        home: std::path::PathBuf,
+        operation: RunId,
+    ) -> Result<Option<BootstrapOperationObservation>, StorageError> {
+        tokio::task::spawn_blocking(move || bootstrap::observe(home, operation))
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?
     }
 
     /// Read at most 256 existing journal rows after a watermark, without storage opening.

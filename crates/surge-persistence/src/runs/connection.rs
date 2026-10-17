@@ -27,6 +27,14 @@ impl RetainedConnection {
             .map(|owner| PoolSettlement { owner })
     }
 
+    #[cfg(windows)]
+    pub(crate) fn verify_namespace(&self) -> rusqlite::Result<()> {
+        #[cfg(windows)]
+        if let Some(namespace) = &self._namespace {
+            namespace.verify().map_err(native_error)?;
+        }
+        Ok(())
+    }
     pub(crate) fn read_only(path: &Path) -> rusqlite::Result<Self> {
         Self::open_existing(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
     }

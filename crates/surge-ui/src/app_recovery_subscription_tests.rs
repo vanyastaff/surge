@@ -210,6 +210,7 @@ fn run_reconnect_probe(pending: bool) {
     });
     let state = cx.new(|_| {
         let mut state = AppState::new();
+        state.project_path = Some("/reconnect-fixture".into());
         state.daemon_state = crate::daemon_link::ConnectionState::Connected(facade.clone());
         state.runs.push(UiRun {
             run_id: run,
@@ -248,7 +249,10 @@ fn run_reconnect_probe(pending: bool) {
     // Make the same retained run readable. Only the real in-loop retry may clear the fence.
     std::fs::remove_file(&runs).unwrap();
     let storage = host
-        .block_on(surge_persistence::runs::Storage::open(&home))
+        .block_on(surge_persistence::runs::Storage::open_with(
+            &home,
+            Arc::new(surge_persistence::runs::MockClock::new(0)),
+        ))
         .unwrap();
     let mut restored_events = events.clone();
     restored_events.push(EventPayload::StageEntered {

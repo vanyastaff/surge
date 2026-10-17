@@ -209,6 +209,8 @@ pub struct RunStreamState {
     display_state: Option<surge_core::RunState>,
     recovery_observer: surge_core::recovery_observation::RecoveryObserver,
     display_seq: u64,
+    prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
+    recorded_prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
     trusted_work_item: Option<surge_core::id::WorkItemId>,
     ownership_startup_open: bool,
     ownership_prompt: Option<String>,
@@ -221,6 +223,8 @@ pub struct RunStreamState {
     pub live: bool,
     /// Last observation failure, independent of recorded outcome history.
     pub observation_error: Option<String>,
+    observation_revision: u64,
+    observation_error_from_read: bool,
     pub log: VecDeque<RunLogRow>,
     pub stages: Vec<StageRow>,
     /// Open decisions, published from `decisions` only while the stream's
@@ -249,6 +253,20 @@ pub struct RunStreamState {
 }
 
 impl RunStreamState {
+    pub(crate) fn registry_hint(
+        run: surge_core::RunId,
+        status: surge_core::RunStatus,
+        path: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            display_run_id: Some(run),
+            registry_status: Some(status),
+            git_common_dir: crate::project::git_common_dir(&path),
+            run_path: Some(path),
+            ..Self::default()
+        }
+    }
+
     /// Start replaying a trusted full history for this actual run identity.
     pub fn begin_display_history(
         &mut self,
@@ -259,6 +277,8 @@ impl RunStreamState {
         self.display_state = Some(surge_core::RunState::NotStarted);
         self.recovery_observer = Default::default();
         self.display_seq = 0;
+        self.prefix_evidence.clear();
+        self.recorded_prefix_evidence.clear();
         self.sessions.clear();
         self.session_history_valid = true;
         self.trusted_work_item = None;
@@ -293,6 +313,92 @@ impl RunStreamState {
             self.invalidate_display();
         }
         self.pending_replay = false;
+    }
+
+    pub(crate) fn replay_candidate(
+        run: surge_core::RunId,
+        events: &[surge_persistence::runs::ReadEvent],
+    ) -> Self {
+        let mut candidate = Self::default();
+        candidate.begin_display_history(run, None);
+        for event in events {
+            candidate.apply_recorded(
+                &EngineRunEvent::Persisted {
+                    seq: event.seq.as_u64(),
+                    payload: Box::new(event.payload.payload.clone()),
+                },
+                event.timestamp_ms,
+            );
+        }
+        candidate.finish_display_history(events.last().map_or(0, |event| event.seq.as_u64()));
+        candidate
+    }
+
+    /// Reject a stale prefix before mutating any published fold or decisions.
+    pub(crate) fn publish_candidate(&mut self, mut candidate: Self) -> Result<(), &'static str> {
+        if candidate.display_seq < self.display_seq.max(self.pending_watermark) {
+            return Err("older prefix");
+        }
+        if let Some((seq, digest)) = self.prefix_evidence.back()
+            && candidate
+                .prefix_evidence
+                .iter()
+                .find(|(candidate_seq, _)| candidate_seq == seq)
+                .map(|(_, digest)| digest)
+                != Some(digest)
+        {
+            return Err("conflicting retained prefix");
+        }
+        // The wire feed has no durable timestamp. Separately retain the exact
+        // timestamped prefix already authenticated by disk, alongside live payloads.
+        if let Some((seq, digest)) = self.recorded_prefix_evidence.back()
+            && candidate
+                .recorded_prefix_evidence
+                .iter()
+                .find(|(candidate_seq, _)| candidate_seq == seq)
+                .map(|(_, digest)| digest)
+                != Some(digest)
+        {
+            return Err("conflicting recorded prefix");
+        }
+        if !candidate.session_history_confirmed() || !candidate.recovery().is_complete() {
+            return Err("unconfirmed history");
+        }
+        candidate.registry_status = self.registry_status;
+        candidate.live = self.live;
+        candidate.observation_error = self.observation_error.clone();
+        candidate.observation_revision = self.observation_revision;
+        candidate.observation_error_from_read = self.observation_error_from_read;
+        candidate.pending_watermark = candidate.pending_watermark.max(self.pending_watermark);
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Called only after a replacement publisher's SubscribeOk, before its first read.
+    pub(crate) fn attach_live_owner(&mut self) {
+        self.live = true;
+        if self.observation_error.is_some() {
+            self.history_unconfirmed("New live connection attached; restoring run history");
+        }
+    }
+
+    pub(crate) fn current_registry_hint(&self) -> Option<surge_core::RunStatus> {
+        self.registry_status
+    }
+
+    pub(crate) fn observation_revision(&self) -> u64 {
+        self.observation_revision
+    }
+    pub(crate) fn clear_observation_error_if_unchanged(&mut self, revision: u64) {
+        if revision != u64::MAX
+            && self.observation_revision == revision
+            && self.observation_error.is_some()
+            && self.observation_error_from_read
+        {
+            self.observation_error = None;
+            self.observation_error_from_read = false;
+            self.observation_revision = self.observation_revision.saturating_add(1);
+        }
     }
 
     /// A daemon-confirmed start supersedes old registry crash evidence.
@@ -421,6 +527,16 @@ impl RunStreamState {
             self.invalidate_display();
             return;
         }
+        let previous = self.prefix_evidence.back().map(|(_, hash)| *hash);
+        let Ok(bytes) = serde_json::to_vec(&(previous, seq, payload)) else {
+            self.invalidate_display();
+            return;
+        };
+        self.prefix_evidence
+            .push_back((*seq, surge_core::ContentHash::compute(&bytes)));
+        if self.prefix_evidence.len() > 4096 {
+            self.prefix_evidence.pop_front();
+        }
         let (Some(run_id), Some(state)) = (self.display_run_id, self.display_state.take()) else {
             return;
         };
@@ -509,6 +625,25 @@ impl RunStreamState {
 
     /// Fold durable history using its recorded time rather than replay time.
     pub fn apply_recorded(&mut self, event: &EngineRunEvent, timestamp_ms: i64) {
+        if let EngineRunEvent::Persisted { seq, payload } = event {
+            let previous = self.recorded_prefix_evidence.back().copied();
+            if *seq == previous.map_or(1, |(seq, _)| seq.saturating_add(1)) {
+                let Ok(bytes) = serde_json::to_vec(&(
+                    previous.map(|(_, hash)| hash),
+                    seq,
+                    timestamp_ms,
+                    payload,
+                )) else {
+                    self.invalidate_display();
+                    return;
+                };
+                self.recorded_prefix_evidence
+                    .push_back((*seq, surge_core::ContentHash::compute(&bytes)));
+                if self.recorded_prefix_evidence.len() > 4096 {
+                    self.recorded_prefix_evidence.pop_front();
+                }
+            }
+        }
         match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
             Some(at) => self.apply_at(event, at),
             None => {
@@ -629,11 +764,23 @@ impl RunStreamState {
     /// A failed durable read does not end an independently attached subscription.
     pub(crate) fn history_unconfirmed(&mut self, message: &str) {
         self.record_observation_error(message, chrono::Local::now().format("%H:%M:%S").to_string());
+        self.observation_error_from_read = true;
+    }
+
+    pub(crate) fn history_unconfirmed_if_unchanged(&mut self, message: &str, revision: u64) {
+        if revision != u64::MAX
+            && self.observation_revision == revision
+            && (self.observation_error.is_none() || self.observation_error_from_read)
+        {
+            self.history_unconfirmed(message);
+        }
     }
 
     fn record_observation_error(&mut self, message: &str, time: String) {
         let message = surge_core::recovery_observation::recovery_diagnostic(message);
+        self.observation_revision = self.observation_revision.saturating_add(1);
         self.observation_error = Some(message.clone());
+        self.observation_error_from_read = false;
         self.log.push_back(RunLogRow {
             time,
             kind: "STREAM",

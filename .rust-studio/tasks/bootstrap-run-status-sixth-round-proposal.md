@@ -1,6 +1,31 @@
 # N7: separate Bootstrap operation state from recorded run lifecycle
 
-Current status: sixth-round implementation AUTHORIZED and dispatched below.
+Current status: **LOCALLY CLOSED after authorized repair 10/10**. Independent
+Phase 5a ACCEPTABLE and generic/domain/security Phase 5b COMPLETE; no open findings.
+Final source-bound gates: 388 UI + 5 integration tests, zero ignored; strict
+Clippy default/all-feature all-targets, workspace all-target/all-feature check,
+fmt and diff passed. Persistence 605 + one existing skip, rustdoc nine warnings
+and manual API-GATE are reused against 144 unchanged inputs, not rerun.
+
+Reviewed manifest: `.rust-studio/evidence/home-inbox-tenth/freeze-manifest.json`,
+SHA-256 `9952788ac83ba227062bb160a85260433258f737561b58cd33cab4bf282f733d`;
+17-file Rust digest `17a3a586270eaeffe272d8c3befc425c86fa049a04fa2a533dd59ea959fca8b9`.
+Final review record: `home-inbox-tenth/phase5b-review.json`. Exact prior proposal
+bytes are retained in `home-inbox-tenth/reviewed-task-snapshots/` before this update.
+Budget remains 10/10; no eleventh dispatch, push or remote merge. Local commit
+follows this closed review. Native same-habit/all-eight-task/gpt-6.1-sol,
+Windows, MSRV and release acceptance remain open.
+
+## Historical proposal and repair record
+
+The statuses and authorization limits below describe their original checkpoints;
+the current closure above supersedes them. Their design and evidence are retained.
+
+Current status: Home seventh author gates GREEN and focused Phase5a ACCEPTABLE;
+H6-SPEC-01/02 are resolved. Full Phase5b NEEDS WORK on H7-GEN-01/02,
+H7-SEC-01 and H7-DOM-01. Count7/7 remains exhausted; eighth proposal independently
+accepted but execution/limit extension awaits explicit human answer.
+Historical sixth-round implementation was AUTHORIZED and dispatched below.
 Owner and independent pre-code re-review ACCEPTABLE; N7-SEC-1/N7-ARCH-01 and
 N7-ARCH-02 are addressed in the plan. The original proposal itself did not grant
 execution authority; the explicit revised user mandate below now does. Home/Inbox
@@ -483,3 +508,143 @@ No Results source change unless a new concrete required dependency is named and
 reviewed first. No raw terminal resume, provider/fixture/runtime edits or external
 publication. New continuation implementation remains separate and open; neither
 synthetic tests nor this UI fix completes the real app.
+
+## Sixth author execution chronology (in progress)
+
+Authentic App/update-to-rendered-Inbox RED: `outer-red.log`, one executed test,
+exit 101 at "completed planning must never render as failed" after the child row
+and trusted Completed/Failed preconditions passed. Earlier compile/setup attempts
+are recorded separately in `setup-failures.txt`; they are not behavioral RED.
+First outer GREEN: one executed test. Targeted closure subsequently reached
+11/11 GREEN (`sixth-targeted-4.log`), after fixture teardown and canonical path
+issues were reproduced and repaired. These receipts precede final gates.
+
+One external model-capacity interruption occurred during this same author dispatch.
+Root resumed the same sixth attempt, worktree, scope and Cargo lease. Dispatch
+remains 6/6; no budget reset or seventh round occurred. Final source, complete gate
+results and independent review remain pending until the frozen evidence manifest.
+
+The first complete UI gate executed 350 tests: 347 passed, 3 failed. Two Fleet
+accessibility fixtures supplied only coarse Failed labels; root reviewed and
+explicitly approved migrating exactly those fixtures to real trusted
+RunStarted/RunFailed (and Completed where used) history, preserving their filter,
+label, navigation and action assertions. This is a direct caller dependency of
+canonical failure selection, with no Fleet production semantics change and no
+new task or repair budget. The lost-ack test's runtime-shutdown failure passed its
+isolated reproduction (1 executed, 349 filtered); full-suite recheck remains
+required, and the failure is not classified as baseline or dismissed as flaky.
+
+Root approved one mechanical Results dependency for operation-card readability:
+`phase_label` and `attention_reason` in screens/runs.rs become pub(crate), with
+no body or Results projection/state change. Inbox reuses those canonical human
+labels and owns only its operation-failure reason text. This remains sixth-round
+closure; the separate Results budget and source behavior are not reopened.
+
+Further original-contract RED receipts before freeze: retained-timestamp-red.log
+(one executed, 354 filtered, exit 101) proved equal event sequence/payload cannot
+authenticate changed durable timestamps. equal-generation-red.log (one executed,
+355 filtered, exit 101) proved an equal snapshot must restore the relation after
+A→B→A while retaining the immutable operation identity. Both fixes passed the
+356 unit + 5 integration full UI gate in ui-full-postclosure.log, exit 0.
+
+That UI gate preceded the final live-error ownership check and is not reused as
+final evidence. live-error-revision-red.log (one executed, 356 filtered, exit 101)
+proved a successful delayed same-owner read cleared a newer actual StreamError.
+The success guard passed live-error-revision-green.log. Extending the same actual
+producer/caller test to failed reads reproduced the symmetric overwrite in
+live-error-failure-red.log (one executed, 356 filtered, exit 101). The private
+observation revision now guards both clearing and publication of read-owned
+errors, while current prefix conflicts still retire contradictory display/actions.
+Newer live/error flags remain owned by their actual stream event. This is the
+original sixth-round contract, with no new feature or dispatch.
+
+The final provenance check extended that same actual caller test to errors already
+present before the read. live-error-provenance-red.log failed authentically at
+before=true/success=true (one executed, 356 filtered, exit 101). A private
+read-diagnostic source flag now permits clearing/replacing only history-owned
+errors, preserving actual stream errors both before and during the read, on
+success and failure. The test also proves an old history-owned error clears after
+a successful repair; live-error-provenance-green.log passed one executed test.
+The prior 357+5 full gate and strict/workspace checks are retained, not passed off
+as covering this last source change. Final refreshed receipts are recorded in
+final-gates.json; rustdoc source-input hashes prove the private UI change leaves
+its complete persistence input unchanged. Rustdoc succeeded with nine warnings
+in unchanged persistence documentation, all retained in its log.
+
+The provenance full UI run executed 357 tests, with 356 passing and the existing
+actual reconnect/hydration-retry test failing (ui-full-provenance.log, exit 101).
+Its actual SubscribeOk creates a replacement publisher, but the prior connection's
+stream diagnostic had not been retired before the new owner's first read. Root
+reviewed this producer dependency within the original owner-handoff clause. The
+token-checked successful attachment now marks that replacement live and retires
+the previous owner's diagnostic, leaving the trusted fold intact. Current-owner
+stream errors before/during a read remain protected. Original reconnect assertions
+are retained; no timeout, ignore, serial mask or weakened expectation is added.
+
+The first isolated handoff attempt also retained a failure: owner-handoff-green.log
+has exit 101 despite its filename. Clearing the previous diagnostic immediately
+briefly exposed stale Running before the first read settled. The replacement
+attachment now substitutes a history-owned restoring fence, without inventing
+an event/lifecycle or erasing the retained fold/pending decision. Actual reconnect
+then passed owner-handoff-second.log (one executed, 356 filtered, exit 0), including
+both working and pending subprocess routes and unchanged assertions. Final full
+UI, both strict feature configurations, workspace and fmt/diff gates are refreshed
+again on that same owner handoff source. No seventh attempt is dispatched.
+
+## Sixth author source freeze — independent review pending
+
+Final current-source author gates passed: UI 357/357 unit plus 5/5 integration,
+zero ignored/filtered; persistence nextest 605/605 with one existing deferred
+cross-process test skipped; strict affected default and all-feature/all-target
+clippy with -D warnings; full workspace all-target/all-feature check; persistence
+rustdoc; formatting and diff checks. Exact commands, exit codes, source and log
+hashes are bound in `.rust-studio/evidence/home-inbox-sixth/freeze-manifest.json`.
+The unchanged persistence rustdoc/suite are bound by source-input hashes; workspace
+and both strict/UI gates were rerun after the last private UI owner change.
+
+Author implementation is frozen for independent 5a followed by full generic,
+domain, security and public API 5b review. Author does not close those reviews.
+Cargo/source lease is released after terminal checks and manifest publication.
+No commit, provider/native app launch or external publication occurred; same habit
+tracker history/all eight tasks and current Windows/product acceptance remain open.
+Dispatch remains 6/6, with no automatic seventh repair or new budget.
+
+
+## Independent sixth Phase 5a and proposed extension
+
+Reviewer /root/results_repair3_spec_review returned **NEEDS WORK** on the frozen
+Rust closure 1911c4e1f7c5b41d6890a8c57a0bc969441030145e0ad1d4aab41d28f90e32e2.
+H6-SPEC-01 BLOCKING: unchecked related-history diagnostics mutate operation triage
+before the run Token fence after a live-owner replacement with unchanged operation.
+H6-SPEC-02 BLOCKING: a valid operation containing a failed related-journal read
+receives no bounded retry because retry only checks the outer operation Result.
+No advisory findings. Full Phase 5b is gated and has NOT started.
+
+Author receipts remain valid but do not cover these missing cases: UI 357+5,
+persistence 605+1 existing skip, strict both feature sets, workspace check,
+rustdoc with nine unchanged-doc warnings, fmt/diff. Root and reviewer matched all
+80 listed source/evidence hashes. The frozen task bytes are preserved separately
+as evidence/home-inbox-sixth/phase5a-reviewed-task-snapshot.md, SHA bfacb2d18842e4da1f52ad8101fc4b1a59caae36aba691c7c558dc3fbd335daa;
+this post-review status update changes documentation only. The original manifest
+remains immutable historical freeze evidence, not a hash of this appended status.
+
+Home remains 6/6. No seventh repair was dispatched. The new narrow
+`.rust-studio/tasks/home-inbox-seventh-round-proposal.md`, SHA
+857bb7e02d90b1d73114e285aeb1d55a0e7c333c395b3ca426d914abb321d278,
+received owner ACCEPTABLE and independent critic/security ACCEPTABLE. Critic
+H7-ADV-01/02 are nonblocking implementation cautions already covered by the plan:
+compare captured token identity separately from current stream provenance, and
+validate each failed sibling independently when a queued retry fires. No new
+behavior is accepted beyond the two original blockers and required caller closure.
+
+Explicit revised human authorization is required before seventh implementation,
+verification and 5a then full 5b/API review. No remote publication is requested.
+Real same habit tracker/all eight tasks/history/codex-acp/gpt-6.1-sol continuation
+remains unstarted and must follow closed Home review; no native/product completion
+or Windows/MSRV claim is made.
+
+
+Seventh mandate: user explicitly answered "Да, разрешаю седьмой раунд".
+The two Phase5a blockers are handed to the same implementer at 7/7, with exact
+accepted plan/source identity in home-inbox-seventh-round-proposal.md. Earlier
+6/6 and pending-authorization text is historical. No push/remote merge authority.

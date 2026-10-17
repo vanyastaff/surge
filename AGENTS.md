@@ -129,6 +129,9 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-ui/src/project_lifecycle.rs` | Read-only project history, source coverage and accepted-operation projection for Project Home. |
 | `crates/surge-ui/src/screens/project_home.rs` | Native project landing view and exact task, run and decision navigation. |
 | `crates/surge-persistence/src/runs/inspection.rs` | Read-only bounded registry, run journal and bootstrap-operation inspection. |
+| `crates/surge-persistence/src/runs/inspection/bootstrap.rs` | Exact operation inspection retaining the original read-only registry observation through journal recheck. |
+| `crates/surge-ui/src/app_observation.rs` | Offline indexed operation recovery and authenticated related-run history publication. |
+| `crates/surge-ui/src/run_observation.rs` | Project/home generation and per-run hydration/pump ownership tokens. |
 | `crates/surge-ui/src/screens/task_create.rs` | Task creation form and preserved input drafts. |
 | `crates/surge-ui/src/screens/task_detail.rs` | Task discussion, revision and workflow-start input state. |
 | `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |

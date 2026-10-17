@@ -533,7 +533,7 @@ pub enum RunsEvent {
 impl EventEmitter<RunsEvent> for RunsScreen {}
 
 /// Plain-language bootstrap phase.
-fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'static str {
+pub(crate) fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'static str {
     use surge_core::bootstrap_operation::BootstrapPhase as P;
     match phase {
         P::QueuedPlanning => "waiting to plan",
@@ -546,7 +546,7 @@ fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'stat
 }
 
 /// Why a build stopped for you, and what fixes it.
-fn attention_reason(
+pub(crate) fn attention_reason(
     reason: surge_core::bootstrap_operation::BootstrapAttentionReason,
 ) -> (&'static str, &'static str) {
     use surge_core::bootstrap_operation::BootstrapAttentionReason as R;
