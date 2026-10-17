@@ -1,10 +1,10 @@
 # N7: separate Bootstrap operation state from recorded run lifecycle
 
-Current status: sixth-round implementation AUTHORIZED; pre-dispatch reservation below.
+Current status: sixth-round implementation AUTHORIZED and dispatched below.
 Owner and independent pre-code re-review ACCEPTABLE; N7-SEC-1/N7-ARCH-01 and
 N7-ARCH-02 are addressed in the plan. The original proposal itself did not grant
 execution authority; the explicit revised user mandate below now does. Home/Inbox
-dispatch budget is five consumed out of six authorized, with no automatic seventh.
+dispatch budget is **6/6**, with no automatic seventh round.
 Results/history repair 3 has its own restricted mission/runs/header/loading scope
 and does not authorize app.rs changes. The separate witness 4/4 authorization
 covers its observer only. No budget is reset by this document.
@@ -466,3 +466,20 @@ implement the complete offline/generation/terminal/operation-problem contract.
 Independent 5a then full generic/domain/security/API 5b required before closure.
 Author may update this record/evidence, not the frozen Results files, and must
 release the sole Cargo lease for final review. No commit or publication by author.
+
+## Actual sixth-round author handoff
+
+Dispatch **6/6** recorded before author handoff. Source/destination is
+codex/results-planning-history in this worktree, Results source commit
+`c68c6fb9`. Results4/4 independent5a and all affected5b are closed; source is
+committed. This supersedes the earlier reservation/queue status, without resetting
+either task. User has explicitly authorized this sixth round and reaffirmed the
+sequence: close Results, execute Home/Inbox, then continue the same real habit
+tracker through codex-acp/gpt-6.1-sol with its history and all eight tasks intact.
+
+Implement the complete reviewed UI plus read-only persistence closure, with actual
+App-update/Inbox RED first and controlled offline/generation/publication tests.
+No Results source change unless a new concrete required dependency is named and
+reviewed first. No raw terminal resume, provider/fixture/runtime edits or external
+publication. New continuation implementation remains separate and open; neither
+synthetic tests nor this UI fix completes the real app.
