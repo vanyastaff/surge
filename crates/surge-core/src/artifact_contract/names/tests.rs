@@ -55,7 +55,9 @@ fn artifact(name: &str, seq: u64, content: &str) -> ArtifactRef {
         path: PathBuf::from(format!("{name}.out")),
         name: name.into(),
         produced_by: NodeKey::try_from("roadmap_planner").unwrap(),
-        produced_at_seq: seq,
+        produced_at_seq: Some(
+            crate::execution_recovery::semantic_position::SemanticPosition::local(seq).unwrap(),
+        ),
     }
 }
 
@@ -66,17 +68,25 @@ fn selection_takes_the_latest_of_one_spelling_and_separates_formats() {
         artifact("roadmap_toml", 9, "new"),
         artifact("roadmap_md", 9, "human"),
     ];
-    let toml = select_canonical(&refs, ArtifactKind::Roadmap, None)
+    let toml = select_canonical(&refs, ArtifactKind::Roadmap, None, None)
         .unwrap()
         .unwrap();
-    assert_eq!(toml.produced_at_seq, 9);
+    assert_eq!(
+        toml.produced_at_seq,
+        Some(crate::execution_recovery::semantic_position::SemanticPosition::local(9).unwrap())
+    );
     assert_eq!(toml.name, "roadmap_toml");
-    let markdown = select_canonical(&refs, ArtifactKind::Roadmap, Some(ArtifactFormat::Markdown))
-        .unwrap()
-        .unwrap();
+    let markdown = select_canonical(
+        &refs,
+        ArtifactKind::Roadmap,
+        Some(ArtifactFormat::Markdown),
+        None,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(markdown.name, "roadmap_md");
     assert_eq!(
-        select_canonical(&refs, ArtifactKind::Description, None).unwrap(),
+        select_canonical(&refs, ArtifactKind::Description, None, None).unwrap(),
         None
     );
 }
@@ -87,13 +97,16 @@ fn competing_spellings_and_equal_sequences_are_ambiguous() {
         artifact("roadmap", 4, "a"),
         artifact("roadmap-toml", 5, "b"),
     ];
-    let error = select_canonical(&competing, ArtifactKind::Roadmap, None).unwrap_err();
+    let error = select_canonical(&competing, ArtifactKind::Roadmap, None, None).unwrap_err();
+    let ArtifactSelectionError::Ambiguous(error) = error else {
+        panic!("expected name ambiguity")
+    };
     assert_eq!(error.names, vec!["roadmap", "roadmap-toml"]);
     let same_seq = [artifact("roadmap", 4, "a"), artifact("roadmap", 4, "b")];
-    assert!(select_canonical(&same_seq, ArtifactKind::Roadmap, None).is_err());
+    assert!(select_canonical(&same_seq, ArtifactKind::Roadmap, None, None).is_err());
     // The identical event read twice is not a conflict.
     let duplicate = [artifact("roadmap", 4, "a"), artifact("roadmap", 4, "a")];
-    assert!(select_canonical(&duplicate, ArtifactKind::Roadmap, None).is_ok());
+    assert!(select_canonical(&duplicate, ArtifactKind::Roadmap, None, None).is_ok());
 }
 
 #[test]

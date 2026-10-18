@@ -1,3 +1,9 @@
+mod mock_acp_binary {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/mock_acp_binary.rs"
+    ));
+}
 use super::{runtime_home_fixture::FixtureHome, wire_bridge};
 use futures::FutureExt as _;
 use interprocess::local_socket::tokio::prelude::*;
@@ -223,6 +229,15 @@ struct Host {
 }
 impl Host {
     fn spawn(home: &Path, project: &Path, cut: bool, run: Option<RunId>) -> Self {
+        Self::spawn_configured(home, project, cut, run, false)
+    }
+    fn spawn_configured(
+        home: &Path,
+        project: &Path,
+        cut: bool,
+        run: Option<RunId>,
+        continuation: bool,
+    ) -> Self {
         let log = home.join(if cut {
             "first-host.log"
         } else {
@@ -241,6 +256,21 @@ impl Host {
             .env_remove("SURGE_ROUTE_COMMIT_EXIT")
             .stdout(output.try_clone().unwrap())
             .stderr(output);
+        if continuation {
+            command
+                .env(
+                    "SURGE_TEST_CONTINUATION_MCP_PROXY",
+                    home.join("artifact-proxy.py"),
+                )
+                .env(
+                    "SURGE_TEST_CONTINUATION_PYTHON",
+                    implementation_continuation::python(),
+                )
+                .env(
+                    "SURGE_TEST_CONTINUATION_SCRIPT",
+                    home.join("bootstrap-script.json"),
+                );
+        }
         if cut {
             command.env("SURGE_ROUTE_COMMIT_EXIT", "flow_generator@2");
         }
@@ -435,14 +465,7 @@ fn git(project: &Path, args: &[&str]) {
 
 fn prepare(home: &Path, project: &Path) {
     std::fs::create_dir_all(project).unwrap();
-    let binary = std::env::var_os("SURGE_TEST_MOCK_ACP_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-                "../../target/debug/mock_acp_agent{}",
-                std::env::consts::EXE_SUFFIX
-            ))
-        });
+    let binary = mock_acp_binary::path();
     let config = json!({"schema_version":1,"default_agent":"wire-fixture","agents":{"wire-fixture":{"command":binary,"args":flags(home)}}});
     std::fs::write(
         project.join("surge.toml"),
@@ -907,7 +930,7 @@ fn assert_parent_authority(prefix: &[RunEvent], events: &[RunEvent]) {
         };
         let mut cold = surge_core::RunMemory::default();
         for event in observed {
-            cold.apply_event(event);
+            cold.apply_event(event).unwrap();
         }
         let expected = surge_core::BundledFlows::by_name_latest("bootstrap")
             .unwrap()
@@ -982,3 +1005,6 @@ fn assert_preserved(home: &Path, run: RunId, cut: u64, captured: &RawPrefix) {
         "raw events, snapshots and every original accepted commit column including routed_seq stay unchanged"
     );
 }
+
+#[path = "bootstrap_implementation_continuation.rs"]
+mod implementation_continuation;

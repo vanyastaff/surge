@@ -149,6 +149,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0033-graph-authority",
         include_str!("migrations/registry/0033_graph_authority.sql"),
     ),
+    (
+        "0034_inherited_provenance",
+        include_str!("migrations/registry/0034_inherited_provenance.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -196,6 +200,10 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
     (
         "per-run-0011-graph-authority",
         include_str!("migrations/per_run/0011_graph_authority.sql"),
+    ),
+    (
+        "0012_inherited_provenance",
+        include_str!("migrations/per_run/0012_inherited_provenance.sql"),
     ),
 ];
 
@@ -376,7 +384,8 @@ mod tests {
                     9,
                     100,
                     1,
-                    1
+                    1,
+                    Option::<String>::None
                 ],
             )
             .unwrap();
@@ -440,7 +449,8 @@ mod tests {
                 "updated_at",
                 "accepted_by_human",
                 "requirement_revised",
-                "projection_semantics"
+                "projection_semantics",
+                "inherited_provenance_json"
             ]
         );
         let primary: Vec<String> = current
@@ -455,6 +465,12 @@ mod tests {
         assert_eq!(primary, ["run_id", "task_id"]);
         let mandatory: (bool,Option<String>) = current.query_row("SELECT [notnull],dflt_value FROM pragma_table_info('task_ledger_index') WHERE name='projection_semantics'",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_eq!(mandatory, (true, None));
+        let provenance_column: (bool, Option<String>) = current.query_row(
+            "SELECT [notnull],dflt_value FROM pragma_table_info('task_ledger_index') WHERE name='inherited_provenance_json'",
+            [],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).unwrap();
+        assert_eq!(provenance_column, (false, None));
         for (name, expected) in [
             ("idx_task_ledger_index_status", vec!["status"]),
             (

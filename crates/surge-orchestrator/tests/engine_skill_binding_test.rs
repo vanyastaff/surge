@@ -824,12 +824,14 @@ async fn approved_skill_completion_fixture(revisit: bool) {
         assert_eq!(events.iter().filter(|event|matches!(event.payload.payload(), surge_core::EventPayload::StageEntered { node, .. } if node.as_str()=="implement")).count(), if revisit {2} else {1});
         let mut memory = surge_core::run_state::RunMemory::default();
         for event in events {
-            memory.apply_event(&surge_core::RunEvent {
-                run_id,
-                seq: event.seq.as_u64(),
-                timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
-                payload: event.payload.payload().clone(),
-            });
+            memory
+                .apply_event(&surge_core::RunEvent {
+                    run_id,
+                    seq: event.seq.as_u64(),
+                    timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
+                    payload: event.payload.payload().clone(),
+                })
+                .unwrap();
         }
         assert!(
             memory.gate_decisions.is_empty(),

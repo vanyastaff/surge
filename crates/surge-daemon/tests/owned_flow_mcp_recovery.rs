@@ -6,6 +6,12 @@
 mod cold_host;
 #[path = "support/runtime_home.rs"]
 mod runtime_home_fixture;
+mod mock_acp_binary {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/mock_acp_binary.rs"
+    ));
+}
 use runtime_home_fixture::FixtureHome;
 
 use interprocess::local_socket::tokio::prelude::*;
@@ -179,10 +185,7 @@ fn graph() -> Graph {
 fn engine_config(home: &Path, stall_prompt: bool) -> EngineConfig {
     let profiles = home.join("profiles");
     std::fs::create_dir_all(&profiles).unwrap();
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../target/debug/mock_acp_agent{}",
-        std::env::consts::EXE_SUFFIX
-    ));
+    let binary = mock_acp_binary::path();
     assert!(binary.is_file(), "build mock_acp_agent prerequisite");
     let mut agents = HashMap::new();
     for (role, runtime) in [("mcp-primary", "quota-a"), ("mcp-fallback", "quota-b")] {

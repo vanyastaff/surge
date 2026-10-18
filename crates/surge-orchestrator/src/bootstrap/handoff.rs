@@ -147,6 +147,8 @@ impl BootstrapHandoff {
 /// Why there is no valid handoff.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HandoffRejection {
+    #[error(transparent)]
+    Position(#[from] surge_core::execution_recovery::semantic_position::PositionError),
     /// The parent's event log could not be read.
     #[error("bootstrap parent log could not be read: {0}")]
     ParentUnreadable(String),
@@ -251,14 +253,27 @@ pub async fn prepare(
         .ok_or(HandoffRejection::ParentNotCompleted)?;
     let materialized = follow_up_graph(&events).ok_or(HandoffRejection::FollowUpGraphMissing)?;
 
-    let refs: Vec<ArtifactRef> = events.iter().filter_map(artifact_ref).collect();
+    let refs: Vec<ArtifactRef> = events
+        .iter()
+        .map(artifact_ref)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     let store = ArtifactStore::new(storage.home().join("runs"));
     let mut artifacts = Vec::with_capacity(INHERITED.len());
     for (name, kind) in INHERITED {
-        let source = select_canonical(&refs, kind, None)
-            .map_err(|ambiguous| HandoffRejection::ArtifactAmbiguous {
-                name,
-                names: ambiguous.names,
+        let source = select_canonical(&refs, kind, None, None)
+            .map_err(|error| match error {
+                surge_core::artifact_contract::ArtifactSelectionError::Ambiguous(ambiguous) => {
+                    HandoffRejection::ArtifactAmbiguous {
+                        name,
+                        names: ambiguous.names,
+                    }
+                },
+                surge_core::artifact_contract::ArtifactSelectionError::Position(error) => {
+                    HandoffRejection::Position(error)
+                },
             })?
             .ok_or(HandoffRejection::ArtifactMissing(name))?
             .clone();
@@ -455,7 +470,7 @@ fn follow_up_graph(events: &[ReadEvent]) -> Option<Graph> {
         .map(|graph| (**graph).clone())
 }
 
-fn artifact_ref(event: &ReadEvent) -> Option<ArtifactRef> {
+fn artifact_ref(event: &ReadEvent) -> Result<Option<ArtifactRef>, HandoffRejection> {
     let EventPayload::ArtifactProduced {
         node,
         artifact,
@@ -464,15 +479,19 @@ fn artifact_ref(event: &ReadEvent) -> Option<ArtifactRef> {
         ..
     } = &event.payload.payload
     else {
-        return None;
+        return Ok(None);
     };
-    Some(ArtifactRef {
+    Ok(Some(ArtifactRef {
         hash: *artifact,
         path: path.clone(),
         name: name.clone(),
         produced_by: node.clone(),
-        produced_at_seq: event.seq.as_u64(),
-    })
+        produced_at_seq: Some(
+            surge_core::execution_recovery::semantic_position::SemanticPosition::local(
+                event.seq.as_u64(),
+            )?,
+        ),
+    }))
 }
 
 /// Registry, runtime and M6 validation of the follow-up graph.

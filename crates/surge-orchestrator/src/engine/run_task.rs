@@ -646,7 +646,7 @@ async fn execute_current_stage(
         StageResolution::Terminal(outcome) => StageLoopStep::Done(outcome),
         StageResolution::Outcome(outcome) => {
             if let Err(error) = route_and_snapshot(params, state, &outcome, stage_start_seq).await {
-                return StageLoopStep::Done(failed(params, error).await);
+                return StageLoopStep::Done(failed(params, error.to_string()).await);
             }
             match enforce_budget(params, state).await {
                 Ok(Some(outcome)) => StageLoopStep::Done(outcome),
@@ -2670,27 +2670,30 @@ const SPLIT_TASKS_MAX: usize = 12;
 /// splices twice or loses the splice.
 /// The validated `discovered-tasks` the split planner produced in this occurrence.
 async fn read_split_tasks(
-    params: &RunTaskParams,
-    state: &RunExecutionState,
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: surge_core::RunId,
+    memory: &surge_core::run_state::RunMemory,
     node: &surge_core::keys::NodeKey,
     stage_start_seq: surge_persistence::runs::EventSeq,
 ) -> Result<surge_core::roadmap::DiscoveredTasksArtifact, String> {
-    let artifact = state
-        .memory
+    let artifact = memory
         .artifacts_by_node
         .get(node)
         .into_iter()
         .flatten()
         .rfind(|artifact| {
             artifact.name == "discovered-tasks"
-                && artifact.produced_at_seq > stage_start_seq.as_u64()
+                && artifact.produced_at_seq.is_some_and(|position| {
+                    position
+                        .local_seq()
+                        .is_ok_and(|seq| seq > stage_start_seq.as_u64())
+                })
         })
         .ok_or_else(|| {
             format!("split planner {node} reported split without discovered-tasks.toml")
         })?;
-    let bytes = params
-        .artifact_store
-        .open_bounded(params.run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
+    let bytes = artifact_store
+        .open_bounded(run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
         .await
         .map_err(|error| format!("read split tasks: {error}"))?;
     let text = String::from_utf8(bytes).map_err(|_| "split tasks are not UTF-8".to_owned())?;
@@ -2755,7 +2758,14 @@ async fn task_split_effect(
     if !is_split {
         return Ok(None);
     }
-    let tasks = read_split_tasks(params, state, &node, stage_start_seq).await?;
+    let tasks = read_split_tasks(
+        &params.artifact_store,
+        params.run_id,
+        &state.memory,
+        &node,
+        stage_start_seq,
+    )
+    .await?;
     let Some(crate::engine::frames::Frame::Loop(frame)) = state
         .frames
         .iter_mut()
@@ -2808,12 +2818,33 @@ async fn task_split_effect(
     })))
 }
 
+#[derive(Debug, thiserror::Error)]
+enum StageRouteError {
+    #[error(transparent)]
+    Fold(#[from] surge_core::run_state::FoldError),
+    #[error(transparent)]
+    Storage(#[from] surge_persistence::runs::StorageError),
+    #[error("{0}")]
+    Route(String),
+}
+
+impl From<String> for StageRouteError {
+    fn from(message: String) -> Self {
+        Self::Route(message)
+    }
+}
+impl From<&str> for StageRouteError {
+    fn from(message: &str) -> Self {
+        Self::Route(message.to_owned())
+    }
+}
+
 async fn route_and_snapshot(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
     outcome: &OutcomeKey,
     stage_start_seq: surge_persistence::runs::EventSeq,
-) -> Result<(), String> {
+) -> Result<(), StageRouteError> {
     let mut prepared = state.clone();
     let prefix = params
         .writer
@@ -2830,8 +2861,7 @@ async fn route_and_snapshot(
         )
         .await
         .map_err(|error| format!("read stage route prefix: {error}"))?;
-    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory)
-        .map_err(|error| format!("fold stage route prefix: {error}"))?;
+    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory)?;
     prepared
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
@@ -2874,14 +2904,17 @@ async fn route_and_snapshot(
             .checked_add(events.len() as u64)
             .ok_or_else(|| "stage route sequence overflow".to_owned())?,
     );
-    for (offset, event) in events.iter().enumerate() {
-        prepared.memory.apply_event(&RunEvent {
+    let memory_events: Vec<_> = events
+        .iter()
+        .enumerate()
+        .map(|(offset, event)| RunEvent {
             run_id: params.run_id,
             seq: prefix.as_u64() + offset as u64 + 1,
             timestamp: chrono::Utc::now(),
             payload: event.payload().clone(),
-        });
-    }
+        })
+        .collect();
+    prepared.memory.apply_events(&memory_events)?;
     let next_cursor = Cursor {
         node: routed.target,
         attempt: 1,
@@ -3314,9 +3347,7 @@ fn apply_read_events(
         .iter()
         .map(|event| event.to_run_event(run_id))
         .collect::<Result<Vec<_>, _>>()?;
-    for event in &converted {
-        memory.apply_event(event);
-    }
+    memory.apply_events(&converted)?;
     Ok(AppliedEventBatch {
         graph_revisions: crate::engine::execution_state::pending_revisions(events, 0),
     })
@@ -3496,6 +3527,31 @@ mod tests {
     use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
     use surge_core::keys::ProfileKey;
     use surge_core::node::{Node, OutcomeDecl, Position};
+
+    #[test]
+    fn semantic_zero_position_batch_does_not_apply_earlier_valid_event() {
+        let mut memory = RunMemory::default();
+        let before = memory.clone();
+        let read = |seq| surge_persistence::runs::ReadEvent {
+            seq: surge_persistence::runs::EventSeq(seq),
+            timestamp_ms: 1_760_000_000_000,
+            kind: "RequirementRevised".into(),
+            payload: surge_core::VersionedEventPayload::new(EventPayload::RequirementRevised {
+                node: surge_core::keys::NodeKey::try_from("plan").unwrap(),
+                task: Some(surge_core::roadmap::RoadmapTaskId::from("task")),
+                text: "batch must be atomic before all observers".into(),
+            }),
+        };
+        let refused = apply_read_events(RunId::new(), &[read(1), read(0)], &mut memory);
+        assert!(
+            refused.is_err(),
+            "invalid event position accepted: {refused:?}"
+        );
+        assert_eq!(
+            memory, before,
+            "valid first event leaked from rejected batch"
+        );
+    }
 
     /// #120: a batch with a corrupt timestamp anywhere folds nothing, so the
     /// memory never holds half a batch that a later catch-up would refold.
@@ -4023,3 +4079,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "run_task_semantic_tests.rs"]
+mod semantic_history_tests;

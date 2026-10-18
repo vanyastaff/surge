@@ -862,6 +862,7 @@ mod tests {
         storage
             .task_ledger_store()
             .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                inherited_provenance: None,
                 run_id: boundary_run,
                 task_id: "t1".into(),
                 project_path: project.clone(),
@@ -928,6 +929,7 @@ mod tests {
         storage
             .task_ledger_store()
             .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                inherited_provenance: None,
                 run_id: mixed_run,
                 task_id: "t1".into(),
                 project_path: project.clone(),
@@ -945,6 +947,7 @@ mod tests {
             storage
                 .task_ledger_store()
                 .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                    inherited_provenance: None,
                     run_id: mixed_run,
                     task_id: task_id.into(),
                     project_path: project.clone(),

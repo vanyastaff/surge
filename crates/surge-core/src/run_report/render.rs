@@ -106,6 +106,12 @@ pub fn render_markdown(report: &RunReport) -> String {
         "> Evidence freshness: {} (journal verdicts describe their recorded revision).\n\n",
         report.freshness.label()
     ));
+    if let super::SemanticHistory::Unavailable { reason } = &report.semantic_history {
+        out.push_str(&format!(
+            "**Semantic history unavailable:** {}\n\n",
+            escape_markdown(reason)
+        ));
+    }
     if report.evidence_backed == Some(false) {
         out.push_str(&format!("> {UNVERIFIED_SUCCESS_BANNER}\n\n"));
     }
@@ -600,6 +606,17 @@ pub fn render_html(report: &RunReport) -> String {
     body.push_str(&render_header_section(&report.header));
 
     let (status_class, status_text) = match &report.completion {
+        RunCompletion::Completed { terminal_node }
+            if matches!(
+                report.semantic_history,
+                super::SemanticHistory::Unavailable { .. }
+            ) =>
+        {
+            (
+                "warn",
+                format!("Completed at {terminal_node} — semantic history unavailable"),
+            )
+        },
         // Spec §10/R30: a `Completed` run with no evidence-backed verdict
         // renders with the `warn` class and an explicit label, not the same
         // green `ok` a verified completion gets — `report.evidence_backed`
@@ -654,6 +671,12 @@ pub fn render_html(report: &RunReport) -> String {
         "<p>Evidence freshness: {}. Journal verdicts describe their recorded revision.</p>",
         escape_html(report.freshness.label())
     ));
+    if let super::SemanticHistory::Unavailable { reason } = &report.semantic_history {
+        body.push_str(&format!(
+            "<p class=\"warn\"><strong>Semantic history unavailable:</strong> {}</p>",
+            escape_html(reason)
+        ));
+    }
     if report.evidence_backed == Some(false) {
         body.push_str(&format!(
             "<p class=\"warn\">{}</p>\n",

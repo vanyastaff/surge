@@ -173,6 +173,7 @@ impl Storage {
                         discovered_from: row.discovered_from.clone(),
                         last_authority_node: row.last_authority_node.clone(),
                         updated_seq: row.updated_seq.0,
+                        inherited_provenance: row.inherited_provenance,
                         observed_at_ms,
                         accepted_by_human: row.accepted_by_human,
                         requirement_revised: row.requirement_revised,

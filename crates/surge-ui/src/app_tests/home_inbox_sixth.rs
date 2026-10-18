@@ -742,7 +742,7 @@ fn sixth_cold_index_recovers_both_real_journals_and_operation_reasons_without_da
                             path: name.into(),
                             name: name.into(),
                             produced_by: "author".parse().unwrap(),
-                            produced_at_seq: 2,
+                            produced_at_seq: Some(surge_core::execution_recovery::semantic_position::SemanticPosition::local(2).unwrap()),
                         })
                         .collect(),
                     Default::default(),
@@ -1729,7 +1729,12 @@ impl SeventhFixture {
                     path: name.into(),
                     name: name.into(),
                     produced_by: "author".parse().unwrap(),
-                    produced_at_seq: 2,
+                    produced_at_seq: Some(
+                        surge_core::execution_recovery::semantic_position::SemanticPosition::local(
+                            2,
+                        )
+                        .unwrap(),
+                    ),
                 })
                 .collect(),
             Default::default(),

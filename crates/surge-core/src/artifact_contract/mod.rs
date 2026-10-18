@@ -27,7 +27,8 @@ pub use diagnostic::{
     ArtifactValidationError, ArtifactValidationReport,
 };
 pub use names::{
-    AmbiguousArtifact, ArtifactName, artifact_name, canonical_seed_path, select_canonical,
+    AmbiguousArtifact, ArtifactName, ArtifactSelectionError, artifact_name, canonical_seed_path,
+    select_canonical,
 };
 pub use schema::{ContractSummary, contract_summary, json_schema_for, markdown_outline};
 

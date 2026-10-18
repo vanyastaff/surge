@@ -1,6 +1,12 @@
 //! Controlled ACP protocol oracle; it does not establish production containment.
 #[path = "support/runtime_home.rs"]
 mod runtime_home_fixture;
+mod mock_acp_binary {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/mock_acp_binary.rs"
+    ));
+}
 use runtime_home_fixture::FixtureHome;
 #[path = "support/cold_host.rs"]
 mod cold_host;
@@ -221,10 +227,7 @@ fn engine_config(home: &Path, all_exhausted: bool) -> EngineConfig {
         write_profile(&profiles, "quota-fallback", "quota-b");
         write_profile(&profiles, "quota-warmup", "quota-c");
     }
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../target/debug/mock_acp_agent{}",
-        std::env::consts::EXE_SUFFIX
-    ));
+    let binary = mock_acp_binary::path();
     assert!(binary.exists(), "build real mock_acp_agent prerequisite");
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
@@ -723,10 +726,7 @@ async fn quota_dispatch_in_home(
             AccountEvidence, FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage,
             QuotaRoutingMode,
         };
-        let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../target/debug/mock_acp_agent{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+        let binary = mock_acp_binary::path();
         let candidate = |runtime: &str, scenario: &str, stage_mcp: bool| {
             let mut args = vec![
                 "--scenario".to_owned(),
@@ -1822,10 +1822,7 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task_in_home(hom
     std::fs::create_dir_all(&profiles).unwrap();
     write_profile(&profiles, "quota-primary", "quota-a");
     write_profile(&profiles, "quota-fallback", "quota-b");
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../target/debug/mock_acp_agent{}",
-        std::env::consts::EXE_SUFFIX
-    ));
+    let binary = mock_acp_binary::path();
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
         ("quota-a", "prompt_error=429_no_reset"),

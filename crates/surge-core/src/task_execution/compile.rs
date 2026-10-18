@@ -6,6 +6,21 @@ pub(super) fn compile(
     run: RunId,
     events: &[RunEvent],
 ) -> Result<TaskExecutionView, TaskExecutionError> {
+    let mut previous = 0;
+    for event in events {
+        if event.run_id != run {
+            return Err(TaskExecutionError::ForeignRun { seq: event.seq });
+        }
+        if event.seq == 0 || event.seq <= previous {
+            return Err(TaskExecutionError::Sequence {
+                seq: event.seq,
+                previous,
+            });
+        }
+        previous = event.seq;
+    }
+    crate::execution_recovery::seed_guard::preflight_unhydrated(events)
+        .map_err(crate::run_state::FoldError::from)?;
     let mut projection = Projection::new(run);
     projection.acceptance_markers = events
         .iter()
@@ -36,7 +51,7 @@ pub(super) fn compile(
                 });
         }
         previous = event.seq;
-        projection.observe(event);
+        projection.observe(event)?;
     }
     if events.is_empty() {
         projection.memory.recovery.invalidate();
@@ -152,9 +167,10 @@ impl Projection {
         self.unassigned(seq, "stage record without its active StageEntered");
         None
     }
-    fn observe(&mut self, event: &RunEvent) {
-        let invalidation = self.memory.verification.clone().observe(&event.payload);
-        self.memory.apply_event(event);
+    fn observe(&mut self, event: &RunEvent) -> Result<(), TaskExecutionError> {
+        let mut before = self.memory.verification.clone();
+        self.memory.apply_event(event)?;
+        let invalidation = before.observe(&event.payload);
         self.invalidate(invalidation);
         match &event.payload {
             E::LoopIterationStarted {
@@ -199,6 +215,7 @@ impl Projection {
             },
             _ => self.stage_event(event),
         }
+        Ok(())
     }
     fn invalidate(&mut self, invalidation: crate::verification_evidence::VerificationInvalidation) {
         use crate::verification_evidence::VerificationInvalidation;

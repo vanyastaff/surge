@@ -62,6 +62,9 @@ pub enum OpenError {
 /// Failure modes for reads and writes against an open run.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// Semantic input was rejected before any in-memory projection mutation.
+    #[error(transparent)]
+    Fold(#[from] surge_core::run_state::FoldError),
     /// The in-process writer ownership registry is poisoned.
     #[error("writer ownership registry is poisoned")]
     WriterOwnershipPoisoned,

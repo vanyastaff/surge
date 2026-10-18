@@ -84,6 +84,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Whether semantic evidence was available at compilation, independently of lifecycle facts.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "availability", rename_all = "snake_case")]
+pub enum SemanticHistory {
+    /// Ordinary journals have no external semantic seed to hydrate.
+    #[default]
+    Available,
+    /// A seed or invalid startup boundary prevents interpreting task evidence.
+    Unavailable { reason: String },
+}
+
 /// The compiled report: one document, nine named sections, plus enough
 /// header state ([`run_id`](Self::run_id), [`completion`](Self::completion))
 /// to make sense of them standalone. Build one with [`RunReport::compile`];
@@ -111,6 +122,9 @@ pub struct RunReport {
     /// tasks (the registry's `task_ledger_index`) — see
     /// `surge_core::evidence`'s module doc for how the three line up.
     pub evidence_backed: Option<bool>,
+    /// Semantic history availability never rewrites a recorded terminal fact.
+    #[serde(default)]
+    pub semantic_history: SemanticHistory,
     /// Unknown for a pure historical report; the host enriches against current files.
     #[serde(default)]
     pub freshness: crate::verification_evidence::ProofFreshness,
@@ -172,6 +186,7 @@ impl RunReport {
             header: RunHeader::default(),
             completion: RunCompletion::Incomplete,
             evidence_backed: None,
+            semantic_history: SemanticHistory::Available,
             freshness: crate::verification_evidence::ProofFreshness::Unknown,
             escalations: Vec::new(),
             nodes: Vec::new(),
@@ -763,7 +778,8 @@ impl RunReport {
                 | EventPayload::StageOutcomeCommitted { .. } => {},
                 EventPayload::StageRouteCommitted { .. }
                 | EventPayload::GateStageOutcomeCommitted { .. }
-                | EventPayload::GateStageRouteCommitted { .. } => {},
+                | EventPayload::GateStageRouteCommitted { .. }
+                | EventPayload::ContinuationSeedBound { .. } => {},
             }
         }
 
@@ -837,6 +853,15 @@ impl RunReport {
             | RunCompletion::Incomplete => None,
         };
 
+        if let Err(error) = crate::execution_recovery::seed_guard::preflight_unhydrated(events) {
+            report.semantic_history = SemanticHistory::Unavailable {
+                reason: error.to_string(),
+            };
+            report.evidence_backed = None;
+            report.freshness = crate::verification_evidence::ProofFreshness::Unknown;
+            report.verdicts.clear();
+            report.task_execution = None;
+        }
         report
     }
 }

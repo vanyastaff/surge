@@ -595,12 +595,14 @@ async fn followup_stage(
         .unwrap();
     let mut memory = surge_core::run_state::RunMemory::default();
     for event in events {
-        memory.apply_event(&surge_core::RunEvent {
-            run_id: f.run,
-            seq: event.seq.as_u64(),
-            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
-            payload: event.payload.payload().clone(),
-        });
+        memory
+            .apply_event(&surge_core::RunEvent {
+                run_id: f.run,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
+                payload: event.payload.payload().clone(),
+            })
+            .unwrap();
     }
     let task = toml::Value::try_from(accepted_task()).unwrap();
     let frames = vec![Frame::Loop(LoopFrame {

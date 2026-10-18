@@ -377,6 +377,38 @@ fn candidate_summary(candidate: &RoadmapTargetCandidate) -> RoadmapTargetSummary
 mod tests {
     use super::*;
 
+    #[test]
+    fn actual_latest_artifact_uses_successor_row_index_without_erasing_source_origin() {
+        use surge_core::execution_recovery::semantic_position::{
+            ContinuationSeedId, InheritedProvenance, SourceEventRef,
+        };
+        use surge_persistence::runs::EventSeq;
+        let origin = InheritedProvenance::new(
+            ContinuationSeedId::new(ContentHash::compute(b"roadmap-seed")),
+            SourceEventRef::new(RunId::new(), 87).unwrap(),
+        );
+        let artifact = |name: &str, seq, provenance| ArtifactRecord {
+            id: ContentHash::compute(name.as_bytes()),
+            produced_by_node: None,
+            produced_at_seq: EventSeq(seq),
+            name: "roadmap.toml".into(),
+            path: name.into(),
+            size_bytes: 1,
+            content_hash: ContentHash::compute(name.as_bytes()),
+            inherited_provenance: provenance,
+        };
+        let records = vec![
+            artifact("source-roadmap.toml", 0, Some(origin)),
+            artifact("local-roadmap.toml", 5, None),
+        ];
+        let selected = latest_of_kind(&records, ArtifactKind::Roadmap).unwrap();
+        assert_eq!(selected.path, PathBuf::from("local-roadmap.toml"));
+        assert_eq!(selected.produced_at_seq, EventSeq(5));
+        let only_source = latest_of_kind(&records[..1], ArtifactKind::Roadmap).unwrap();
+        assert_eq!(only_source.produced_at_seq, EventSeq(0));
+        assert_eq!(only_source.inherited_provenance, Some(origin));
+    }
+
     /// Task 12: `RunStatus::Parked` must be treated as an active run, the
     /// same as `Running` — a parked run is paused waiting on provider
     /// capacity, not ended, and it resumes itself against the same

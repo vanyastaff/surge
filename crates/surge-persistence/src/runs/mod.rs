@@ -101,3 +101,5 @@ pub use types::{
     ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution, TaskLedgerRow,
 };
 pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig, WriterLifecycle};
+
+pub(crate) mod provenance;

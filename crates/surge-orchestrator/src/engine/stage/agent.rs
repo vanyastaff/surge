@@ -149,31 +149,52 @@ const FEEDBACK_MAX_CHECKS: usize = 20;
 /// Why the previous attempt of this node was sent back, when it was re-entered
 /// through a backtrack edge: the sending node's outcome and summary, and the
 /// `verification-report` it sealed for that outcome, if any.
-async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
-    let entry = p.run_memory.backtrack_feedback.get(p.node)?;
-    let records = p.run_memory.outcomes.get(&entry.from);
-    let mut sent = records
-        .into_iter()
-        .flatten()
-        .filter(|record| record.seq < entry.edge_seq);
-    let outcome = sent.next_back();
-    let earlier = sent.next_back().map_or(0, |record| record.seq);
-    let report_ref = p
-        .run_memory
+async fn previous_attempt_feedback(
+    node: &NodeKey,
+    memory: &surge_core::run_state::RunMemory,
+    artifact_store: &ArtifactStore,
+    run_id: surge_core::RunId,
+) -> Result<Option<String>, StageError> {
+    let Some(entry) = memory.backtrack_feedback.get(node) else {
+        return Ok(None);
+    };
+    let lineage = memory.semantic_lineage.as_ref();
+    entry.edge_seq.validate(lineage)?;
+    let mut selected = Vec::new();
+    for record in memory.outcomes.get(&entry.from).into_iter().flatten() {
+        if record.seq.compare(entry.edge_seq, lineage)?.is_lt() {
+            selected.push(record);
+        }
+    }
+    let outcome = selected.pop();
+    let earlier = selected.pop().map(|record| record.seq);
+    let mut report_ref = None;
+    for artifact in memory
         .artifacts_by_node
         .get(&entry.from)
         .into_iter()
         .flatten()
-        .rfind(|artifact| {
-            artifact.name == "verification-report"
-                && artifact.produced_at_seq > earlier
-                && artifact.produced_at_seq < entry.edge_seq
-        });
+        .rev()
+    {
+        if artifact.name != "verification-report" {
+            continue;
+        }
+        let position = artifact.recorded_position()?;
+        let after_earlier = if let Some(earlier) = earlier {
+            position.compare(earlier, lineage)?.is_gt()
+        } else {
+            position.validate(lineage)?;
+            true
+        };
+        if after_earlier && position.compare(entry.edge_seq, lineage)?.is_lt() {
+            report_ref = Some(artifact);
+            break;
+        }
+    }
     let report = match report_ref {
         None => None,
-        Some(artifact) => match p
-            .artifact_store
-            .open_bounded(p.run_id, artifact.hash, FEEDBACK_REPORT_MAX_BYTES)
+        Some(artifact) => match artifact_store
+            .open_bounded(run_id, artifact.hash, FEEDBACK_REPORT_MAX_BYTES)
             .await
             .map_err(|error| error.to_string())
             .and_then(|bytes| {
@@ -185,7 +206,7 @@ async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
             Err(error) => {
                 tracing::warn!(
                     target: "engine::feedback",
-                    node = %p.node,
+                    node = %node,
                     from = %entry.from,
                     %error,
                     "verification report unavailable for re-entry feedback"
@@ -198,13 +219,13 @@ async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
     if rendered.is_some() {
         tracing::info!(
             target: "engine::feedback",
-            node = %p.node,
+            node = %node,
             from = %entry.from,
             with_report = report.is_some(),
             "binding previous-attempt feedback into the re-entered stage prompt"
         );
     }
-    rendered
+    Ok(rendered)
 }
 
 /// Requirement revisions a human made (v1 task 1.2) that apply to this stage:
@@ -213,14 +234,18 @@ fn prepend_requirement_revisions(
     prompt: String,
     revisions: &[surge_core::run_state::RequirementRevision],
     task: Option<&surge_core::roadmap::RoadmapTaskId>,
-) -> String {
+    lineage: Option<&surge_core::execution_recovery::semantic_position::SeedLineage>,
+) -> Result<String, StageError> {
     use std::fmt::Write as _;
     let applicable: Vec<_> = revisions
         .iter()
         .filter(|revision| revision.task.is_none() || revision.task.as_ref() == task)
         .collect();
     if applicable.is_empty() {
-        return prompt;
+        return Ok(prompt);
+    }
+    for revision in &applicable {
+        revision.seq.validate(lineage)?;
     }
     let mut text = String::from(
         "## Requirement revised by the operator\n\
@@ -232,7 +257,7 @@ fn prepend_requirement_revisions(
     }
     text.push('\n');
     text.push_str(&prompt);
-    text
+    Ok(text)
 }
 
 fn clip(text: &str) -> String {
@@ -1346,7 +1371,7 @@ async fn execute_agent_attempt(
             .map_err(StageError::RecoveryRequired)?;
     }
 
-    let prompt_text = match previous_attempt_feedback(p).await {
+    let prompt_text = match previous_attempt_feedback(p.node, p.run_memory, p.artifact_store, p.run_id).await? {
         Some(feedback) => feedback + &prompt_text,
         None => prompt_text,
     };
@@ -1354,7 +1379,8 @@ async fn execute_agent_attempt(
         prompt_text,
         &p.run_memory.requirement_revisions,
         p.active_task_id.as_ref(),
-    );
+        p.run_memory.semantic_lineage.as_ref(),
+    )?;
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
     // v1 offers no mid-turn injection channel.
@@ -2834,7 +2860,8 @@ mod tests {
         let record = surge_core::run_state::OutcomeRecord {
             outcome: OutcomeKey::try_from("failed").unwrap(),
             summary: "Login form accepts empty passwords.".into(),
-            seq: 7,
+            seq: surge_core::execution_recovery::semantic_position::SemanticPosition::local(7)
+                .unwrap(),
         };
         assert_eq!(render_previous_attempt_feedback(&from, None, None), None);
         let empty = surge_core::run_state::OutcomeRecord {
@@ -2904,7 +2931,8 @@ mod tests {
             node: NodeKey::try_from("verify").unwrap(),
             task: task.map(surge_core::roadmap::RoadmapTaskId::from),
             text: text.into(),
-            seq,
+            seq: surge_core::execution_recovery::semantic_position::SemanticPosition::local(seq)
+                .unwrap(),
         };
         let revisions = [
             revision(Some("login"), "Allow empty passwords in dev", 3),
@@ -2912,14 +2940,15 @@ mod tests {
             revision(None, "Use UTC everywhere", 5),
         ];
         let login = surge_core::roadmap::RoadmapTaskId::from("login");
-        let prompt = prepend_requirement_revisions("Do it.".into(), &revisions, Some(&login));
+        let prompt =
+            prepend_requirement_revisions("Do it.".into(), &revisions, Some(&login), None).unwrap();
         assert!(prompt.starts_with("## Requirement revised by the operator"));
         assert!(prompt.contains("- Allow empty passwords in dev"));
         assert!(prompt.contains("- Use UTC everywhere"));
         assert!(!prompt.contains("Keep sessions on logout"));
         assert!(prompt.ends_with("Do it."));
         assert_eq!(
-            prepend_requirement_revisions("Do it.".into(), &revisions[..2], None),
+            prepend_requirement_revisions("Do it.".into(), &revisions[..2], None, None).unwrap(),
             "Do it."
         );
     }
@@ -3369,3 +3398,7 @@ mod tests {
         assert!(resolve_profile_runtime_id(None, None, "mock").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "agent/semantic_history_tests.rs"]
+mod semantic_history_tests;

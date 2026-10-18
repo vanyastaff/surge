@@ -5,6 +5,9 @@ pub mod gate_commit;
 pub mod guardian;
 pub mod guardian_ledger;
 pub mod process;
+pub mod seed_guard;
+pub mod semantic_position;
+pub mod snapshot;
 use crate::{ContentHash, SessionId, id::StageInvocationId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -383,3 +386,7 @@ pub struct WorkItemExecutionControl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "execution_recovery/semantic_contract_tests.rs"]
+mod semantic_contract_tests;

@@ -199,7 +199,12 @@ impl Fixture {
                     path: std::path::PathBuf::from(name),
                     name: name.into(),
                     produced_by: "author".parse().unwrap(),
-                    produced_at_seq: 4,
+                    produced_at_seq: Some(
+                        surge_core::execution_recovery::semantic_position::SemanticPosition::local(
+                            4,
+                        )
+                        .unwrap(),
+                    ),
                 })
                 .collect(),
             Default::default(),

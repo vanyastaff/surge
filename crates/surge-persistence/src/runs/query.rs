@@ -206,7 +206,7 @@ pub fn fold_read_events(run_id: RunId, events: &[ReadEvent]) -> Result<RunState,
             event: first.payload.payload.discriminant_str(),
         });
     }
-    let mut state = RunState::NotStarted;
+    let mut state = RunState::not_started();
     for (expected_seq, row) in (1u64..).zip(events) {
         if row.seq.0 != expected_seq {
             return Err(FoldError::CorruptedSequence {

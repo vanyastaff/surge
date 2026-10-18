@@ -478,7 +478,7 @@ fn inherit_artifacts(
             path: path.clone(),
             name: name.clone(),
             produced_by: node.clone(),
-            produced_at_seq: 0,
+            produced_at_seq: None,
         };
         let owned = artifacts
             .inherit_reserved(reservation, request.parent, &reference, parent_worktree)
@@ -733,6 +733,32 @@ mod tests {
             .unwrap()
     }
 
+    fn assert_fixed_child_prefix(actual: &[ReadEvent], fixed_events: &[VersionedEventPayload]) {
+        assert_eq!(actual.len(), 3, "child must have exactly 3 copied events");
+        for (index, event) in actual.iter().enumerate() {
+            assert_eq!(event.seq.as_u64(), index as u64 + 1);
+            assert_eq!(event.payload, fixed_events[index]);
+        }
+    }
+
+    fn fixed_prefix_guard(
+        run: RunId,
+        fixed_events: &[VersionedEventPayload],
+    ) -> surge_core::execution_recovery::seed_guard::SeedStartupGuard {
+        let mut guard = surge_core::execution_recovery::seed_guard::SeedStartupGuard::default();
+        for (index, fixed) in fixed_events.iter().enumerate() {
+            let envelope = surge_core::RunEvent {
+                run_id: run,
+                seq: index as u64 + 1,
+                timestamp: chrono::DateTime::from_timestamp_millis(1_760_000_000_000).unwrap(),
+                payload: fixed.payload.clone(),
+            };
+            guard.observe(&envelope).unwrap();
+            guard.finish().unwrap();
+        }
+        guard
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_copies_prefix_and_records_lineage() {
         let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
@@ -755,31 +781,29 @@ mod tests {
         };
 
         // 5 events; fork at seq 3 so events 4 and 5 must be excluded.
-        writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: worktree.clone(),
-                    initial_prompt: "orig".into(),
-                    config,
-                }),
-                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
-                    graph: Box::new(graph),
-                    graph_hash,
-                }),
-                VersionedEventPayload::new(EventPayload::StageEntered {
-                    node: node.clone(),
-                    attempt: 1,
-                }),
-                VersionedEventPayload::new(EventPayload::OutcomeReported {
-                    node: node.clone(),
-                    outcome: outcome.clone(),
-                    summary: "post-fork".into(),
-                }),
-                VersionedEventPayload::new(EventPayload::StageCompleted { node, outcome }),
-            ])
-            .await
-            .unwrap();
+        let fixed_events = vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree.clone(),
+                initial_prompt: "orig".into(),
+                config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph),
+                graph_hash,
+            }),
+            VersionedEventPayload::new(EventPayload::StageEntered {
+                node: node.clone(),
+                attempt: 1,
+            }),
+            VersionedEventPayload::new(EventPayload::OutcomeReported {
+                node: node.clone(),
+                outcome: outcome.clone(),
+                summary: "post-fork".into(),
+            }),
+            VersionedEventPayload::new(EventPayload::StageCompleted { node, outcome }),
+        ];
+        writer.append_events(fixed_events.clone()).await.unwrap();
         // Release the writer slot so `fork` can append `ForkCreated`.
         writer.close().await.unwrap();
 
@@ -801,22 +825,40 @@ mod tests {
 
         // Child must hold exactly the 3-event prefix.
         let cevents = read_all(&storage, child).await;
-        assert_eq!(cevents.len(), 3, "child must have exactly 3 copied events");
+        assert_fixed_child_prefix(&cevents, &fixed_events[..3]);
 
         // Child state == parent state at seq 3 (the fork invariant).
         let pevents = read_all(&storage, parent).await;
         let preader = storage.open_run_reader(parent).await.unwrap();
         let creader = storage.open_run_reader(child).await.unwrap();
-        let parent_at_3 = execution_state::load(&preader, StatePosition::AtSeq(3))
+        assert_eq!(*preader.run_id(), parent);
+        assert_eq!(*creader.run_id(), child);
+        let mut parent_at_3 = execution_state::load(&preader, StatePosition::AtSeq(3))
             .await
             .unwrap();
         let child_state = execution_state::load(&creader, StatePosition::AtSeq(3))
             .await
             .unwrap();
         drop((preader, creader));
+        // Independent expected envelopes use the original fixed fixture payloads,
+        // never a replay of the child rows being checked.
+        let expected_parent_guard = fixed_prefix_guard(parent, &fixed_events[..3]);
+        let expected_child_guard = fixed_prefix_guard(child, &fixed_events[..3]);
+        assert_ne!(expected_parent_guard, expected_child_guard);
+        assert_eq!(
+            parent_at_3.memory.semantic_startup_guard,
+            expected_parent_guard
+        );
+        assert_eq!(
+            child_state.memory.semantic_startup_guard,
+            expected_child_guard
+        );
+        // Semantic state is equal; the retained raw prefix must name its own run.
+        // Change only the independently expected namespace, never the actual child.
+        parent_at_3.memory.semantic_startup_guard = expected_child_guard;
         assert_eq!(
             child_state, parent_at_3,
-            "child state must equal parent state at seq 3"
+            "child semantic state must equal the fixed parent prefix in the child namespace"
         );
 
         // Parent recorded ForkCreated lineage.
@@ -1161,6 +1203,11 @@ mod tests {
             .put(parent, "spec", b"original specification")
             .await
             .unwrap();
+        assert_eq!(
+            artifact.produced_at_seq, None,
+            "byte handle is not a parent production occurrence"
+        );
+        assert!(artifact.recorded_position().is_err());
         let writer = storage.open_run_writer(parent).await.unwrap();
         writer
             .append_events(vec![VersionedEventPayload::new(

@@ -121,7 +121,8 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v22:** adds [`EventPayload::PullRequestOpened`] (the PR carrying a run's
 /// work, #127). A v21 reader would not see which PR the merge gate must
 /// resolve, so it rejects v22.
-pub const MAX_SUPPORTED_VERSION: u32 = 22;
+/// **v23:** adds the public continuation seed binding marker.
+pub const MAX_SUPPORTED_VERSION: u32 = 23;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -495,6 +496,20 @@ impl Migration for IdentityV22 {
     }
 }
 
+/// Identity decoder for continuation seed binding records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV23;
+impl Migration for IdentityV23 {
+    fn version(&self) -> u32 {
+        23
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v23 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -533,6 +548,7 @@ impl MigrationChain {
                 Box::new(IdentityV20),
                 Box::new(IdentityV21),
                 Box::new(IdentityV22),
+                Box::new(IdentityV23),
             ],
         }
     }

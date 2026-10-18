@@ -292,7 +292,8 @@ fn classify(payload: &EventPayload) -> EventClass {
         | EventPayload::BudgetWarningRaised { .. }
         | EventPayload::BudgetExceeded { .. }
         | EventPayload::NotifyDelivered { .. }
-        | EventPayload::EscalationRequested { .. } => EventClass::Bookkeeping,
+        | EventPayload::EscalationRequested { .. }
+        | EventPayload::ContinuationSeedBound { .. } => EventClass::Bookkeeping,
     }
 }
 

@@ -208,7 +208,10 @@ async fn reentered_stage_prompt_carries_the_verifier_findings() {
                 path: stored.path,
                 name: "verification-report".into(),
                 produced_by: verify.clone(),
-                produced_at_seq: 10,
+                produced_at_seq: Some(
+                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(10)
+                        .unwrap(),
+                ),
             }],
         );
         memory.outcomes.insert(
@@ -216,14 +219,17 @@ async fn reentered_stage_prompt_carries_the_verifier_findings() {
             vec![OutcomeRecord {
                 outcome: OutcomeKey::from_str("failed").unwrap(),
                 summary: "Login criterion unmet.".into(),
-                seq: 11,
+                seq: surge_core::execution_recovery::semantic_position::SemanticPosition::local(11)
+                    .unwrap(),
             }],
         );
         memory.backtrack_feedback.insert(
             node.clone(),
             BacktrackFeedback {
                 from: verify,
-                edge_seq: 12,
+                edge_seq:
+                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(12)
+                        .unwrap(),
             },
         );
 

@@ -8,6 +8,9 @@ use thiserror::Error;
 /// Errors that can be returned by `Engine` methods.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// Semantic journal preflight or fold refused execution.
+    #[error(transparent)]
+    Fold(#[from] surge_core::run_state::FoldError),
     /// A task command was definitively refused; an admitted operation is never mapped here.
     #[error("task operation rejected: {0}")]
     WorkItemRejected(String),

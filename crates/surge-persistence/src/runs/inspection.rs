@@ -881,7 +881,9 @@ fn read_folded_with_gate_receipt(
     let mut receipt = None;
     let mut connection = crate::runs::connection::RetainedConnection::read_only(path)?;
     let transaction = connection.transaction()?;
-    let mut state = surge_core::RunState::NotStarted;
+    let mut state = surge_core::RunState::not_started();
+    let mut semantic_guard =
+        surge_core::execution_recovery::seed_guard::SeedStartupGuard::default();
     let mut startup = Vec::new();
     let mut sequence = 0;
     let mut bindings = 0;
@@ -925,6 +927,15 @@ fn read_folded_with_gate_receipt(
             let time = chrono::DateTime::from_timestamp_millis(timestamp).ok_or_else(|| {
                 StorageError::MigrationFailed("owned event timestamp is invalid".into())
             })?;
+            semantic_guard
+                .observe(&surge_core::RunEvent {
+                    run_id,
+                    seq,
+                    timestamp: time,
+                    payload: payload.clone(),
+                })
+                .and_then(|()| semantic_guard.finish())
+                .map_err(surge_core::run_state::FoldError::from)?;
             if let E::RunStarted { config, .. } = &payload {
                 bootstrap_edit_cap = config.bootstrap_edit_loop_cap;
             }
@@ -1191,8 +1202,7 @@ fn read_folded_with_gate_receipt(
                     timestamp: time,
                     payload,
                 },
-            )
-            .map_err(|error| StorageError::MigrationFailed(error.to_string()))?;
+            )?;
             if let (Some((node, request)), surge_core::RunState::Pipeline { memory, .. }) =
                 (&target, &state)
             {

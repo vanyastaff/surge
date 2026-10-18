@@ -120,6 +120,14 @@ fn print_ready_table(out: &mut impl std::io::Write, records: &[TaskLedgerIndexRe
             r.discovered_from.as_deref().unwrap_or("-"),
             r.run_id,
         );
+        if let Some(origin) = r.inherited_provenance {
+            let _ = writeln!(
+                out,
+                "  inherited from {} at source event {}",
+                origin.source().run(),
+                origin.source().seq()
+            );
+        }
     }
     let _ = writeln!(out, "\n{} task(s).", records.len());
 }
@@ -142,8 +150,34 @@ mod tests {
 
     use std::path::PathBuf;
 
+    #[test]
+    fn ready_table_keeps_inherited_origin_distinct_from_successor_event_index() {
+        use surge_core::execution_recovery::semantic_position::{
+            ContinuationSeedId, InheritedProvenance, SourceEventRef,
+        };
+        let source = RunId::new();
+        let mut row = record("m1-t1", RoadmapStatus::Pending, false);
+        row.updated_seq = 0;
+        row.inherited_provenance = Some(InheritedProvenance::new(
+            ContinuationSeedId::new(surge_core::ContentHash::compute(b"ready-seed")),
+            SourceEventRef::new(source, 87).unwrap(),
+        ));
+        let mut out = Vec::new();
+        print_ready_table(&mut out, &[row]);
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains(&format!("inherited from {source} at source event 87")),
+            "{out}"
+        );
+        assert!(
+            !out.contains("local event 87"),
+            "source event is not successor navigation"
+        );
+    }
+
     fn record(task_id: &str, status: RoadmapStatus, verified: bool) -> TaskLedgerIndexRecord {
         TaskLedgerIndexRecord {
+            inherited_provenance: None,
             run_id: RunId::new(),
             task_id: task_id.to_owned(),
             project_path: PathBuf::from("/proj"),

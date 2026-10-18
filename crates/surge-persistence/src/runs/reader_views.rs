@@ -51,11 +51,9 @@ pub fn stage_executions(
 }
 
 /// Read all rows of the `artifacts` view ordered by `produced_at_seq`.
-pub fn artifacts(
-    conn: &PooledConnection<SqliteConnectionManager>,
-) -> Result<Vec<ArtifactRecord>, StorageError> {
+pub fn artifacts(conn: &rusqlite::Connection) -> Result<Vec<ArtifactRecord>, StorageError> {
     let mut stmt = conn.prepare(
-        "SELECT id, produced_by_node, produced_at_seq, name, path, size_bytes, content_hash
+        "SELECT id, produced_by_node, produced_at_seq, name, path, size_bytes, content_hash, inherited_provenance_json
          FROM artifacts ORDER BY produced_at_seq",
     )?;
     let iter = stmt.query_map([], |row| {
@@ -85,6 +83,7 @@ pub fn artifacts(
             path: PathBuf::from(row.get::<_, String>(4)?),
             size_bytes: row.get::<_, i64>(5)? as u64,
             content_hash,
+            inherited_provenance: super::provenance::read(row, 7)?,
         })
     })?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -181,7 +180,7 @@ pub fn roadmap_patches(
 pub fn task_ledger(conn: &rusqlite::Connection) -> Result<Vec<TaskLedgerRow>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT task_id, status, verified, discovered_from, last_authority_node, updated_seq,
-                accepted_by_human, requirement_revised
+                accepted_by_human, requirement_revised, inherited_provenance_json
          FROM task_ledger ORDER BY updated_seq, task_id",
     )?;
     let iter = stmt.query_map([], |row| {
@@ -202,6 +201,7 @@ pub fn task_ledger(conn: &rusqlite::Connection) -> Result<Vec<TaskLedgerRow>, St
             updated_seq: EventSeq(row.get::<_, i64>(5)? as u64),
             accepted_by_human: row.get::<_, i64>(6)? != 0,
             requirement_revised: row.get::<_, i64>(7)? != 0,
+            inherited_provenance: super::provenance::read(row, 8)?,
         })
     })?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)

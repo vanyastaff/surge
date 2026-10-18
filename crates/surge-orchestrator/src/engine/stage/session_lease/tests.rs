@@ -6,7 +6,7 @@ use super::*;
 
 #[path = "../../../../tests/fixtures/mock_bridge.rs"]
 #[allow(dead_code)]
-mod mock_bridge;
+pub(crate) mod mock_bridge;
 
 use std::collections::BTreeMap;
 use std::time::Duration;

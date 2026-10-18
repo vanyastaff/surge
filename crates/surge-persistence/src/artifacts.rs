@@ -138,7 +138,7 @@ impl ArtifactStore {
             path: target,
             name: name.to_owned(),
             produced_by,
-            produced_at_seq: 0,
+            produced_at_seq: None,
         })
     }
 
@@ -441,6 +441,8 @@ mod tests {
 
         assert_eq!(bytes, b"bootstrap description");
         assert_eq!(artifact.name, "description");
+        assert_eq!(artifact.produced_at_seq, None);
+        assert!(artifact.recorded_position().is_err());
         assert_eq!(
             artifact.path.file_name().unwrap(),
             artifact.hash.to_hex().as_str()
@@ -564,7 +566,10 @@ mod tests {
             path: PathBuf::from("description.md"),
             name: "description".into(),
             produced_by: NodeKey::try_from("description_author").unwrap(),
-            produced_at_seq: 4,
+            produced_at_seq: Some(
+                surge_core::execution_recovery::semantic_position::SemanticPosition::local(4)
+                    .unwrap(),
+            ),
         };
 
         let bytes = store.open_ref(run_id, &artifact, tmp.path()).await.unwrap();
@@ -590,7 +595,10 @@ mod tests {
             path: PathBuf::from("../secret.md"),
             name: "secret".into(),
             produced_by: NodeKey::try_from("description_author").unwrap(),
-            produced_at_seq: 4,
+            produced_at_seq: Some(
+                surge_core::execution_recovery::semantic_position::SemanticPosition::local(4)
+                    .unwrap(),
+            ),
         };
 
         let err = store
@@ -617,7 +625,10 @@ mod tests {
             path: secret,
             name: "secret".into(),
             produced_by: NodeKey::try_from("description_author").unwrap(),
-            produced_at_seq: 4,
+            produced_at_seq: Some(
+                surge_core::execution_recovery::semantic_position::SemanticPosition::local(4)
+                    .unwrap(),
+            ),
         };
 
         let err = store

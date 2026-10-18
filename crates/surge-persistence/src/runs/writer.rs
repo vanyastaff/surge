@@ -386,16 +386,17 @@ async fn handle_command(
 
                 if exists {
                     tracing::debug!(hash = %hash, "artifact dedup: skipping FS write");
-                    let row: (String, String) = tx.query_row(
-                        "SELECT path, name FROM artifacts WHERE id = ? LIMIT 1",
+                    let row = tx.query_row(
+                        "SELECT path, name, inherited_provenance_json FROM artifacts WHERE id = ? LIMIT 1",
                         params![hash.to_string()],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, super::provenance::read(row, 2)?)),
                     )?;
                     tx.commit()?;
                     return Ok(ArtifactRecord {
                         id: hash,
                         produced_by_node: produced_by,
                         produced_at_seq,
+                        inherited_provenance: row.2,
                         name: row.1,
                         path: dir.join(row.0),
                         size_bytes: size,
@@ -429,6 +430,7 @@ async fn handle_command(
                     id: hash,
                     produced_by_node: produced_by,
                     produced_at_seq,
+                    inherited_provenance: None,
                     name,
                     path: target,
                     size_bytes: size,

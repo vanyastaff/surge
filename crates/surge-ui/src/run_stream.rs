@@ -209,6 +209,12 @@ pub struct RunStreamState {
     display_state: Option<surge_core::RunState>,
     recovery_observer: surge_core::recovery_observation::RecoveryObserver,
     display_seq: u64,
+    semantic_guard: surge_core::execution_recovery::seed_guard::SeedStartupGuard,
+    semantic_unavailable: bool,
+    semantic_observed_seq: u64,
+    semantic_contiguous: bool,
+    semantic_refusal_boundary: Option<(u64, surge_core::ContentHash)>,
+    semantic_terminal: surge_core::run_verdict::TerminalHistory,
     prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
     recorded_prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
     trusted_work_item: Option<surge_core::id::WorkItemId>,
@@ -274,9 +280,15 @@ impl RunStreamState {
         status: Option<surge_core::RunStatus>,
     ) {
         self.display_run_id = Some(run_id);
-        self.display_state = Some(surge_core::RunState::NotStarted);
+        self.display_state = Some(surge_core::RunState::not_started());
         self.recovery_observer = Default::default();
         self.display_seq = 0;
+        self.semantic_guard = Default::default();
+        self.semantic_unavailable = false;
+        self.semantic_observed_seq = 0;
+        self.semantic_contiguous = true;
+        self.semantic_refusal_boundary = None;
+        self.semantic_terminal = Default::default();
         self.prefix_evidence.clear();
         self.recorded_prefix_evidence.clear();
         self.sessions.clear();
@@ -336,8 +348,18 @@ impl RunStreamState {
 
     /// Reject a stale prefix before mutating any published fold or decisions.
     pub(crate) fn publish_candidate(&mut self, mut candidate: Self) -> Result<(), &'static str> {
-        if candidate.display_seq < self.display_seq.max(self.pending_watermark) {
+        if candidate.semantic_observed_seq
+            < self
+                .semantic_observed_seq
+                .max(self.display_seq)
+                .max(self.pending_watermark)
+        {
             return Err("older prefix");
+        }
+        if self.semantic_refusal_boundary.is_some()
+            && candidate.semantic_refusal_boundary != self.semantic_refusal_boundary
+        {
+            return Err("conflicting semantic refusal boundary");
         }
         if let Some((seq, digest)) = self.prefix_evidence.back()
             && candidate
@@ -361,14 +383,21 @@ impl RunStreamState {
         {
             return Err("conflicting recorded prefix");
         }
-        if !candidate.session_history_confirmed() || !candidate.recovery().is_complete() {
+        if !candidate.semantic_unavailable
+            && (!candidate.session_history_confirmed() || !candidate.recovery().is_complete())
+        {
             return Err("unconfirmed history");
         }
         candidate.registry_status = self.registry_status;
         candidate.live = self.live;
-        candidate.observation_error = self.observation_error.clone();
-        candidate.observation_revision = self.observation_revision;
-        candidate.observation_error_from_read = self.observation_error_from_read;
+        if candidate.semantic_unavailable {
+            candidate.observation_revision = self.observation_revision.saturating_add(1);
+            candidate.observation_error_from_read = false;
+        } else {
+            candidate.observation_error = self.observation_error.clone();
+            candidate.observation_revision = self.observation_revision;
+            candidate.observation_error_from_read = self.observation_error_from_read;
+        }
         candidate.pending_watermark = candidate.pending_watermark.max(self.pending_watermark);
         *self = candidate;
         Ok(())
@@ -493,6 +522,26 @@ impl RunStreamState {
 
     /// Canonical display projection; existing pending decisions remain independent.
     pub fn display(&self) -> surge_core::run_display::RunDisplayState {
+        if self.semantic_unavailable {
+            return match self.semantic_terminal.verdict() {
+                surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
+                    use surge_core::run_verdict::TerminalOutcome;
+                    let kind = match &claim.outcome {
+                        TerminalOutcome::Completed { .. } => {
+                            surge_core::run_state::TerminalReason::Completed
+                        },
+                        TerminalOutcome::Failed { .. } => {
+                            surge_core::run_state::TerminalReason::Failed
+                        },
+                        TerminalOutcome::Aborted { .. } => {
+                            surge_core::run_state::TerminalReason::Aborted
+                        },
+                    };
+                    surge_core::run_display::RunDisplayState::Done(kind)
+                },
+                _ => surge_core::run_display::RunDisplayState::Unknown,
+            };
+        }
         if self.observation_error.is_some()
             && !matches!(
                 self.display_state,
@@ -540,7 +589,7 @@ impl RunStreamState {
         let (Some(run_id), Some(state)) = (self.display_run_id, self.display_state.take()) else {
             return;
         };
-        self.display_state = surge_core::run_state::apply(
+        let next_state = surge_core::run_state::apply(
             state,
             &surge_core::RunEvent {
                 run_id,
@@ -548,8 +597,18 @@ impl RunStreamState {
                 timestamp: chrono::Utc::now(),
                 payload: payload.as_ref().clone(),
             },
-        )
-        .ok();
+        );
+        self.display_state = match next_state {
+            Ok(state) => Some(state),
+            Err(error) => {
+                self.record_observation_error(
+                    &error.to_string(),
+                    chrono::Local::now().format("%H:%M:%S").to_string(),
+                );
+                self.session_history_valid = false;
+                None
+            },
+        };
         if self.display_state.is_some() {
             match payload.as_ref() {
                 EventPayload::SessionOpened {
@@ -620,18 +679,89 @@ impl RunStreamState {
     /// Fold one wire event into the view state: log row, stage
     /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
-        self.apply_at(event, chrono::Utc::now());
+        self.apply_at(event, chrono::Utc::now(), false);
     }
 
     /// Fold durable history using its recorded time rather than replay time.
     pub fn apply_recorded(&mut self, event: &EngineRunEvent, timestamp_ms: i64) {
-        if let EngineRunEvent::Persisted { seq, payload } = event {
+        match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+            Some(at) => self.apply_at(event, at, true),
+            None => {
+                self.invalidate_display();
+                self.apply_at(event, chrono::Utc::now(), false);
+            },
+        }
+    }
+
+    fn semantic_preflight(
+        &mut self,
+        event: &EngineRunEvent,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let (Some(run_id), EngineRunEvent::Persisted { seq, payload }) =
+            (self.display_run_id, event)
+        else {
+            return true;
+        };
+        if *seq <= self.semantic_observed_seq {
+            return !self.semantic_unavailable;
+        }
+        let contiguous = *seq == self.semantic_observed_seq.saturating_add(1);
+        let observed = surge_core::RunEvent {
+            run_id,
+            seq: *seq,
+            timestamp: at,
+            payload: payload.as_ref().clone(),
+        };
+        let result = self
+            .semantic_guard
+            .observe(&observed)
+            .and_then(|()| self.semantic_guard.finish());
+        self.semantic_observed_seq = *seq;
+        self.semantic_contiguous &= contiguous;
+        if self.semantic_contiguous {
+            self.semantic_terminal.observe(*seq, payload);
+        }
+        if let Err(error) = result {
+            if self.semantic_refusal_boundary.is_none() {
+                match serde_json::to_vec(&(seq, payload)) {
+                    Ok(bytes) => {
+                        self.semantic_refusal_boundary =
+                            Some((*seq, surge_core::ContentHash::compute(&bytes)))
+                    },
+                    Err(encoding) => {
+                        self.record_observation_error(
+                            &encoding.to_string(),
+                            at.format("%H:%M:%S").to_string(),
+                        );
+                        self.invalidate_display();
+                        return false;
+                    },
+                }
+            }
+            self.semantic_unavailable = true;
+            self.record_observation_error(&error.to_string(), at.format("%H:%M:%S").to_string());
+            self.invalidate_display();
+        }
+        !self.semantic_unavailable
+    }
+
+    fn apply_at(
+        &mut self,
+        event: &EngineRunEvent,
+        at: chrono::DateTime<chrono::Utc>,
+        recorded: bool,
+    ) {
+        if !self.semantic_preflight(event, at) {
+            return;
+        }
+        if recorded && let EngineRunEvent::Persisted { seq, payload } = event {
             let previous = self.recorded_prefix_evidence.back().copied();
             if *seq == previous.map_or(1, |(seq, _)| seq.saturating_add(1)) {
                 let Ok(bytes) = serde_json::to_vec(&(
                     previous.map(|(_, hash)| hash),
                     seq,
-                    timestamp_ms,
+                    at.timestamp_millis(),
                     payload,
                 )) else {
                     self.invalidate_display();
@@ -644,17 +774,6 @@ impl RunStreamState {
                 }
             }
         }
-        match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-            Some(at) => self.apply_at(event, at),
-            None => {
-                // An unreadable durable time cannot date a decision.
-                self.invalidate_display();
-                self.apply_at(event, chrono::Utc::now());
-            },
-        }
-    }
-
-    fn apply_at(&mut self, event: &EngineRunEvent, at: chrono::DateTime<chrono::Utc>) {
         let now = at
             .with_timezone(&chrono::Local)
             .format("%H:%M:%S")
@@ -741,6 +860,7 @@ impl RunStreamState {
                         message: format!("resource settlement failed: {failures:?}"),
                     },
                     at,
+                    false,
                 );
             },
             EngineRunEvent::Terminal { outcome } => {
@@ -1089,6 +1209,196 @@ mod tests {
     use surge_orchestrator::engine::handle::EngineRunEvent;
 
     use super::*;
+
+    mod seed_fixture {
+        use surge_core as domain;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/test-support/continuation_seed.rs"
+        ));
+    }
+    #[test]
+    fn semantic_marker_live_and_recorded_invalidate_before_prefix_or_ownership_mutation() {
+        for recorded in [false, true] {
+            let run = surge_core::RunId::new();
+            let (startup, manifest) = seed_fixture::startup(run);
+            let mut stream = RunStreamState::default();
+            stream.begin_display_history(run, None);
+            for event in &startup {
+                let wire = persisted(event.seq, event.payload.clone());
+                if recorded {
+                    stream.apply_recorded(&wire, event.timestamp.timestamp_millis());
+                } else {
+                    stream.apply(&wire);
+                }
+            }
+            stream.finish_display_history(3);
+            assert!(
+                stream.trusted_work_item().is_some(),
+                "ordinary positive ownership control"
+            );
+            let prefix = stream.prefix_evidence.clone();
+            let through = stream.display_seq;
+            let marker = EventPayload::ContinuationSeedBound {
+                manifest: Box::new(manifest),
+            };
+            if recorded {
+                stream.apply_recorded(&persisted(4, marker.clone()), 1_760_000_000_004);
+            } else {
+                stream.apply(&persisted(4, marker.clone()));
+            }
+            assert_eq!(
+                stream.prefix_evidence, prefix,
+                "unhydrated marker must not enter trusted prefix"
+            );
+            assert_eq!(stream.display_seq, through);
+            assert_eq!(stream.trusted_work_item(), None);
+            assert!(!stream.task_ownership_confirmed());
+            assert!(!stream.session_history_confirmed());
+            assert!(stream.pending.is_empty());
+            assert!(
+                stream
+                    .observation_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("semantic history unavailable"))
+            );
+            stream.apply(&persisted(5, marker));
+            assert!(
+                stream
+                    .observation_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("duplicate"))
+            );
+            stream.apply(&persisted(
+                6,
+                EventPayload::RunCompleted {
+                    terminal_node: node("end"),
+                },
+            ));
+            assert_eq!(
+                stream.display(),
+                surge_core::run_display::RunDisplayState::Done(
+                    surge_core::run_state::TerminalReason::Completed
+                ),
+                "true local terminal claim remains independently visible"
+            );
+            assert!(stream.pending.is_empty());
+            assert_eq!(stream.trusted_work_item(), None);
+        }
+    }
+    #[test]
+    fn semantic_marker_cold_candidate_publication_stays_unavailable_and_keeps_terminal_fact() {
+        let run = surge_core::RunId::new();
+        let (startup, manifest) = seed_fixture::startup(run);
+        let mut events = startup.clone();
+        events.push(seed_fixture::event(
+            run,
+            4,
+            EventPayload::ContinuationSeedBound {
+                manifest: Box::new(manifest),
+            },
+        ));
+        events.extend(seed_fixture::positive_tail(run, 4));
+        let rows = events
+            .iter()
+            .map(|event| surge_persistence::runs::ReadEvent {
+                seq: surge_persistence::runs::EventSeq(event.seq),
+                timestamp_ms: event.timestamp.timestamp_millis(),
+                kind: event.payload.discriminant_str().into(),
+                payload: surge_core::VersionedEventPayload::new(event.payload.clone()),
+            })
+            .collect::<Vec<_>>();
+        let candidate = RunStreamState::replay_candidate(run, &rows);
+        assert_eq!(
+            candidate.display(),
+            surge_core::run_display::RunDisplayState::Done(
+                surge_core::run_state::TerminalReason::Completed
+            )
+        );
+        assert!(!candidate.session_history_confirmed());
+        assert!(!candidate.task_ownership_confirmed());
+        assert!(candidate.pending.is_empty());
+        let mut published = RunStreamState::default();
+        published.begin_display_history(run, None);
+        for event in startup {
+            published.apply_recorded(
+                &persisted(event.seq, event.payload),
+                event.timestamp.timestamp_millis(),
+            );
+        }
+        published.finish_display_history(3);
+        published.publish_candidate(candidate).unwrap();
+        let (mut erased, _) = seed_fixture::startup(run);
+        erased.push(seed_fixture::event(
+            run,
+            4,
+            EventPayload::OutcomeReported {
+                node: NodeKey::try_from("verify").unwrap(),
+                outcome: surge_core::OutcomeKey::try_from("passed").unwrap(),
+                summary: "Different ordinary history at the same final sequence".into(),
+            },
+        ));
+        erased.extend(seed_fixture::positive_tail(run, 4));
+        let erased_rows: Vec<_> = erased
+            .into_iter()
+            .map(|event| surge_persistence::runs::ReadEvent {
+                seq: surge_persistence::runs::EventSeq(event.seq),
+                timestamp_ms: event.timestamp.timestamp_millis(),
+                kind: event.payload.discriminant_str().into(),
+                payload: surge_core::VersionedEventPayload::new(event.payload),
+            })
+            .collect();
+        let erased_candidate = RunStreamState::replay_candidate(run, &erased_rows);
+        assert!(
+            erased_candidate.session_history_confirmed(),
+            "ordinary candidate must be otherwise publishable"
+        );
+        assert!(
+            published.publish_candidate(erased_candidate).is_err(),
+            "same-length replacement must not erase a recorded seed refusal boundary"
+        );
+        assert_eq!(
+            published.display(),
+            surge_core::run_display::RunDisplayState::Done(
+                surge_core::run_state::TerminalReason::Completed
+            )
+        );
+        assert!(published.observation_error.is_some());
+        assert!(published.pending.is_empty());
+        assert_eq!(published.trusted_work_item(), None);
+    }
+    #[test]
+    fn semantic_marker_after_stage_is_diagnosed_as_late_before_next_decision() {
+        let run = surge_core::RunId::new();
+        let (startup, manifest) = seed_fixture::startup(run);
+        let mut stream = RunStreamState::default();
+        stream.begin_display_history(run, None);
+        for event in startup {
+            stream.apply(&persisted(event.seq, event.payload));
+        }
+        stream.apply(&persisted(
+            4,
+            EventPayload::StageEntered {
+                node: node("verify"),
+                attempt: 1,
+            },
+        ));
+        stream.apply(&persisted(
+            5,
+            EventPayload::ContinuationSeedBound {
+                manifest: Box::new(manifest),
+            },
+        ));
+        assert!(
+            stream
+                .observation_error
+                .as_deref()
+                .is_some_and(|error| error.contains("after executable"))
+        );
+        stream.apply(&persisted(6, human_input("verify", None)));
+        assert!(stream.pending.is_empty());
+        assert_eq!(stream.trusted_work_item(), None);
+    }
 
     #[test]
     fn display_replays_capacity_keeps_parked_terminal_and_invalidates_gaps() {

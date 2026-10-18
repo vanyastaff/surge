@@ -32,6 +32,12 @@ pub async fn compile_trace(
 pub async fn compile_report(storage: &Arc<Storage>, run: &str) -> Result<RunReport, OperatorError> {
     let (run_id, events) = load_events(storage, run).await?;
     let mut report = RunReport::compile(run_id, &events);
+    if matches!(
+        report.semantic_history,
+        surge_core::run_report::SemanticHistory::Unavailable { .. }
+    ) {
+        return Ok(report);
+    }
     use surge_core::verification_evidence::ProofFreshness;
     let current = super::verification::current_proofs(storage, run_id);
     report.freshness = match current {
@@ -72,4 +78,72 @@ async fn load_events(
         .map_err(|source| OperatorError::OpenRun { run_id, source })?;
     let events = read_run_events(&reader).await?;
     Ok((run_id, events))
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    mod fixture {
+        use surge_core as domain;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/test-support/continuation_seed.rs"
+        ));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_operator_report_keeps_unavailable_semantics_and_terminal_fact() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let run = surge_core::RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let (mut events, manifest) = fixture::startup(run);
+        events.push(fixture::event(
+            run,
+            4,
+            surge_core::EventPayload::ContinuationSeedBound {
+                manifest: Box::new(manifest),
+            },
+        ));
+        events.extend(fixture::positive_tail(run, 4));
+        writer
+            .append_events(
+                events
+                    .into_iter()
+                    .map(|event| surge_core::VersionedEventPayload::new(event.payload))
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        let report = compile_report(&storage, &run.to_string()).await.unwrap();
+        assert!(matches!(
+            report.completion,
+            surge_core::run_report::RunCompletion::Completed { .. }
+        ));
+        assert!(matches!(
+            report.semantic_history,
+            surge_core::run_report::SemanticHistory::Unavailable { .. }
+        ));
+        assert_eq!(report.evidence_backed, None);
+        assert_eq!(
+            report.freshness,
+            surge_core::verification_evidence::ProofFreshness::Unknown
+        );
+        assert!(report.verdicts.is_empty());
+        assert!(report.task_execution.is_none());
+        let reader = storage.open_run_reader(run).await.unwrap();
+        assert_eq!(
+            reader
+                .read_events(
+                    surge_persistence::runs::EventSeq(1)..surge_persistence::runs::EventSeq(11)
+                )
+                .await
+                .unwrap()
+                .len(),
+            10
+        );
+        drop(reader);
+        drop(storage);
+        home.close().unwrap();
+    }
 }

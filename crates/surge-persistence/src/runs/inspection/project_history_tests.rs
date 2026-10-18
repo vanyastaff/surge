@@ -308,7 +308,10 @@ async fn readonly_operation_inspection_preserves_every_older_continuation_refere
                 path: home.path().join(format!("{index}-{name}")),
                 name: name.into(),
                 produced_by: "planner".parse().unwrap(),
-                produced_at_seq: 7,
+                produced_at_seq: Some(
+                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(7)
+                        .unwrap(),
+                ),
             });
             let child = BootstrapContinuation::new(
                 capture.fields().planning_run,

@@ -1,4 +1,10 @@
 //! Real ACP subprocess adapter; only launch arguments are controlled by the fixture.
+mod mock_acp_binary {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/mock_acp_binary.rs"
+    ));
+}
 use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use std::path::PathBuf;
 use surge_acp::bridge::error::{
@@ -50,10 +56,7 @@ system = "Report done using the supplied stage outcome tool."
 "#,
         )
         .unwrap();
-        let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../target/debug/mock_acp_agent{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+        let binary = mock_acp_binary::path();
         let agent = serde_json::from_value(serde_json::json!({
             "command": binary, "args": self.flags
         }))
@@ -73,8 +76,27 @@ system = "Report done using the supplied stage outcome tool."
 impl BridgeFacade for WireBridge {
     async fn open_session(
         &self,
-        config: SessionConfig,
+        mut config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
+        // This isolated fixture wraps only the real transient MCP helper. Its
+        // name, authentication environment and preallocated session stay intact.
+        if let Some(proxy) = std::env::var_os("SURGE_TEST_CONTINUATION_MCP_PROXY") {
+            let python = std::env::var("SURGE_TEST_CONTINUATION_PYTHON").unwrap();
+            let script = std::env::var("SURGE_TEST_CONTINUATION_SCRIPT").unwrap();
+            let stage = config
+                .stage_mcp
+                .as_mut()
+                .expect("actual stage MCP descriptor");
+            let mut args = vec![
+                PathBuf::from(proxy).display().to_string(),
+                script,
+                stage.session.to_string(),
+                stage.server.command.display().to_string(),
+            ];
+            args.append(&mut stage.server.args);
+            stage.server.command = python.into();
+            stage.server.args = args;
+        }
         self.bridge.open_session(config).await
     }
     async fn send_message(

@@ -900,3 +900,22 @@ requirements. V1 completed-work refusal remains truthful and tested but OPEN as
 a limitation for general continuation. Never label the full project tool complete
 while that requirement, existing-project acceptance, useful app delivery or
 current Windows evidence remains missing.
+
+
+## Current implementation handoff after Home closure
+
+Home/Inbox is locally closed at commit `39673ff5172adbb391691d68487cf0352c060180`
+with independent 5a ACCEPTABLE and generic/domain/security 5b COMPLETE, fresh
+388 UI + 5 integration and strict both/workspace/fmt/diff gates. Results and
+witness are independently closed earlier. Their historical queue text above is
+superseded by this actual prerequisite receipt; no Home budget reset occurs.
+
+Initial feature stage 0 is dispatched to a fresh Rust author context: executable
+outer RED through the real daemon/Bootstrap/ACP fixture, daemon tests only, no
+production implementation before that RED is independently checked. Baseline is
+the current Home commit; the accepted continuation design remains body SHA
+`f4cb0605fc46606d43c1d296cae75beb69cd618f2ede886c4d7eafb0c0db84c9`.
+Full prior plan bytes and current handoff receipt are retained under
+`.rust-studio/evidence/bootstrap-owned-continuation/stage0/`. Feature repair count
+remains 0/3 across all stages and both review phases. Native same-habit/all-eight
+acceptance is still open. No retained runtime/provider action, push or merge.

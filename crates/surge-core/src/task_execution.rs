@@ -239,6 +239,8 @@ impl std::fmt::Display for ExecutionCaveat {
 /// Invalid journal envelope; callers must present unavailability explicitly.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TaskExecutionError {
+    #[error(transparent)]
+    Fold(#[from] crate::run_state::FoldError),
     /// Every supplied envelope must belong to the requested run.
     #[error("event {seq} belongs to another run")]
     ForeignRun { seq: u64 },

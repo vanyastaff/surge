@@ -65,7 +65,7 @@ impl RunDisplayState {
         if registry == Some(RunStatus::Crashed) {
             return Self::Waiting(WaitingReason::RecoveryRequired);
         }
-        if matches!(state, None | Some(RunState::NotStarted)) {
+        if matches!(state, None | Some(RunState::NotStarted { .. })) {
             return Self::Unknown;
         }
         let observation = match state {

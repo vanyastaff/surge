@@ -245,14 +245,14 @@ fn recovery_exact_once_parity_across_bootstrap_materialization_and_nested_memory
         EventPayload::StageEntered { node, attempt: 2 },
         recovery(0, "later lower generation"),
     ];
-    let mut state = RunState::NotStarted;
+    let mut state = RunState::not_started();
     let mut memory = RunMemory::default();
     let mut observer = RecoveryObserver::default();
     let mut log = Vec::new();
     for (i, payload) in payloads.into_iter().enumerate() {
         let event = event(i as u64 + 1, payload);
         state = crate::run_state::apply(state, &event).unwrap();
-        memory.apply_event(&event);
+        memory.apply_event(&event).unwrap();
         observer.observe(&event);
         log.push(event);
         let projected = TaskExecutionView::compile(run(), &log).unwrap();
@@ -444,12 +444,13 @@ fn recovery_disposition_roundtrips_and_rejects_unknown_or_null_leaf() {
 
 #[test]
 fn recovery_display_unknown_prefix_and_terminal_precedence_are_independent() {
-    let partial = crate::run_state::apply(RunState::NotStarted, &event(2, start())).unwrap();
+    let partial = crate::run_state::apply(RunState::not_started(), &event(2, start())).unwrap();
     assert_eq!(
         crate::run_display::RunDisplayState::from_state(Some(&partial), None),
         crate::run_display::RunDisplayState::Unknown
     );
     let terminal = RunState::Terminal {
+        semantic_startup_guard: Default::default(),
         kind: crate::run_state::TerminalReason::Completed,
         reason: String::new(),
     };
@@ -522,7 +523,7 @@ fn recovery_recorded_progress_without_current_observation_is_unknown() {
 #[test]
 fn recovery_current_observation_cannot_override_missing_coverage_refusal_or_terminal() {
     use crate::run_display::{RunDisplayState as Display, WaitingReason};
-    let mut state = crate::run_state::apply(RunState::NotStarted, &event(1, start())).unwrap();
+    let mut state = crate::run_state::apply(RunState::not_started(), &event(1, start())).unwrap();
     assert_eq!(Display::from_state(Some(&state), None), Display::Unknown);
     assert_eq!(
         Display::from_state_with_observation(Some(&state), None, true),
@@ -535,7 +536,7 @@ fn recovery_current_observation_cannot_override_missing_coverage_refusal_or_term
             Display::Waiting(WaitingReason::RecoveryRequired)
         );
     }
-    let partial = crate::run_state::apply(RunState::NotStarted, &event(2, start())).unwrap();
+    let partial = crate::run_state::apply(RunState::not_started(), &event(2, start())).unwrap();
     assert_eq!(
         Display::from_state_with_observation(Some(&partial), None, true),
         Display::Unknown

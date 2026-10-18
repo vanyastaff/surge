@@ -133,10 +133,10 @@ mod tests {
             timestamp: chrono::Utc::now(),
             payload,
         };
-        assert_eq!(
-            apply(RunState::NotStarted, &event).unwrap(),
-            RunState::NotStarted
-        );
+        assert!(matches!(
+            apply(RunState::not_started(), &event).unwrap(),
+            RunState::NotStarted { .. }
+        ));
         let old =
             br#"{"schema_version":8,"payload":{"type":"run_aborted","reason":"old history"}}"#;
         assert_eq!(

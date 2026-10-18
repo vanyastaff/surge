@@ -126,6 +126,9 @@ async fn resolve_iterable(
                 StageError::Internal(format!("artifact '{name}' not in RunMemory"))
             })?;
 
+            artifact
+                .recorded_position()?
+                .validate(memory.semantic_lineage.as_ref())?;
             let path = worktree.join(&artifact.path);
             let bytes = tokio::fs::read(&path).await.map_err(|e| {
                 StageError::Internal(format!("read artifact {}: {e}", artifact.path.display()))
@@ -801,7 +804,10 @@ tasks = ["task1", "task2", "task3"]
                 path: artifact_path,
                 name: "plan.toml".into(),
                 produced_by: NodeKey::try_from("planner").unwrap(),
-                produced_at_seq: 1,
+                produced_at_seq: Some(
+                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(1)
+                        .unwrap(),
+                ),
             },
         );
 
@@ -952,5 +958,171 @@ tasks = ["task1", "task2", "task3"]
             matches!(err, StageError::Internal(ref message) if message.contains("out of range")),
             "expected stale inner frame to produce an index error, got {err:?}"
         );
+    }
+
+    struct ArtifactPositionCase {
+        label: &'static str,
+        position: Option<surge_core::execution_recovery::semantic_position::SemanticPosition>,
+        error: Option<surge_core::execution_recovery::semantic_position::PositionError>,
+    }
+
+    fn artifact_position_cases() -> (
+        surge_core::execution_recovery::semantic_position::SeedLineage,
+        Vec<ArtifactPositionCase>,
+    ) {
+        use surge_core::execution_recovery::semantic_position::{
+            ContinuationSeedId, PositionError, SeedLineage, SemanticPosition, SourceEventRef,
+        };
+        let source = surge_core::RunId::new();
+        let seed = ContinuationSeedId::new(surge_core::ContentHash::compute(b"selected seed"));
+        let selected = SeedLineage::new(seed, SourceEventRef::new(source, 100).unwrap());
+        let inherited = |seed, run, seq| {
+            Some(SemanticPosition::inherited(
+                seed,
+                SourceEventRef::new(run, seq).unwrap(),
+            ))
+        };
+        let positions = [
+            ("local", Some(SemanticPosition::local(7).unwrap()), None),
+            ("inherited", inherited(seed, source, 87), None),
+            ("unrecorded", None, Some(PositionError::Unrecorded)),
+            (
+                "foreign seed",
+                inherited(
+                    ContinuationSeedId::new(surge_core::ContentHash::compute(b"foreign seed")),
+                    source,
+                    87,
+                ),
+                Some(PositionError::ForeignLineage),
+            ),
+            (
+                "foreign run",
+                inherited(seed, surge_core::RunId::new(), 87),
+                Some(PositionError::ForeignLineage),
+            ),
+            (
+                "beyond boundary",
+                inherited(seed, source, 101),
+                Some(PositionError::ForeignLineage),
+            ),
+        ];
+        (
+            selected,
+            positions
+                .into_iter()
+                .map(|(label, position, error)| ArtifactPositionCase {
+                    label,
+                    position,
+                    error,
+                })
+                .collect(),
+        )
+    }
+
+    async fn check_iterable_provenance(run_artifact: bool, positives: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "tasks = [7, 11]\n";
+        let path = dir.path().join("data.toml");
+        std::fs::write(&path, content).unwrap();
+        let (lineage, cases) = artifact_position_cases();
+        let source = if run_artifact {
+            IterableSource::RunArtifact {
+                name: "data.toml".into(),
+                jsonpath: "tasks".into(),
+            }
+        } else {
+            IterableSource::Artifact {
+                node: NodeKey::try_from("producer").unwrap(),
+                name: "data.toml".into(),
+                jsonpath: "tasks".into(),
+            }
+        };
+        let mut mismatches = Vec::new();
+        for case in cases
+            .into_iter()
+            .filter(|case| case.error.is_none() == positives)
+        {
+            let mut memory = RunMemory {
+                semantic_lineage: Some(lineage),
+                ..RunMemory::default()
+            };
+            memory.artifacts.insert(
+                "data.toml".into(),
+                surge_core::run_state::ArtifactRef {
+                    hash: surge_core::ContentHash::compute(content.as_bytes()),
+                    path: path.clone(),
+                    name: "data.toml".into(),
+                    produced_by: NodeKey::try_from("producer").unwrap(),
+                    produced_at_seq: case.position,
+                },
+            );
+            let result = resolve_iterable(&source, &memory, &[], dir.path()).await;
+            match (result, case.error) {
+                (Ok(items), None)
+                    if items == vec![toml::Value::Integer(7), toml::Value::Integer(11)] => {},
+                (Err(StageError::SemanticPosition(actual)), Some(expected))
+                    if actual == expected => {},
+                (actual, expected) => mismatches.push(format!(
+                    "{}: expected {expected:?}, got {actual:?}",
+                    case.label
+                )),
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
+    #[tokio::test]
+    async fn artifact_iterable_provenance_refuses_unrecorded_and_foreign() {
+        check_iterable_provenance(false, false).await;
+    }
+    #[tokio::test]
+    async fn run_artifact_iterable_provenance_refuses_unrecorded_and_foreign() {
+        check_iterable_provenance(true, false).await;
+    }
+    #[tokio::test]
+    async fn artifact_iterable_provenance_accepts_local_and_inherited() {
+        check_iterable_provenance(false, true).await;
+    }
+    #[tokio::test]
+    async fn run_artifact_iterable_provenance_accepts_local_and_inherited() {
+        check_iterable_provenance(true, true).await;
+    }
+
+    #[tokio::test]
+    async fn iterable_provenance_refusal_precedes_file_read() {
+        use surge_core::execution_recovery::semantic_position::PositionError;
+        let dir = tempfile::tempdir().unwrap();
+        let mut memory = RunMemory::default();
+        memory.artifacts.insert(
+            "missing.toml".into(),
+            surge_core::run_state::ArtifactRef {
+                hash: surge_core::ContentHash::compute(b"tasks = [7, 11]\n"),
+                path: dir.path().join("missing.toml"),
+                name: "missing.toml".into(),
+                produced_by: NodeKey::try_from("producer").unwrap(),
+                produced_at_seq: None,
+            },
+        );
+        let sources = [
+            IterableSource::Artifact {
+                node: NodeKey::try_from("producer").unwrap(),
+                name: "missing.toml".into(),
+                jsonpath: "tasks".into(),
+            },
+            IterableSource::RunArtifact {
+                name: "missing.toml".into(),
+                jsonpath: "tasks".into(),
+            },
+        ];
+        let mut mismatches = Vec::new();
+        for source in sources {
+            match resolve_iterable(&source, &memory, &[], dir.path()).await {
+                Err(StageError::SemanticPosition(PositionError::Unrecorded)) => {},
+                actual => mismatches.push(format!(
+                    "{source:?}: expected Unrecorded before read, got {actual:?}"
+                )),
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 }

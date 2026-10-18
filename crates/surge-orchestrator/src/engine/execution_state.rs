@@ -122,6 +122,9 @@ pub struct ExecutionState {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ExecutionStateError {
+    /// Semantic journal preflight or fold refused this prefix.
+    #[error(transparent)]
+    Fold(#[from] surge_core::run_state::FoldError),
     /// Reading the run's log or checkpoints failed.
     #[error("storage error: {0}")]
     Storage(String),
@@ -427,9 +430,11 @@ fn fold(
     events: &[ReadEvent],
 ) -> Result<RunMemory, ExecutionStateError> {
     let mut memory = RunMemory::default();
-    for event in events {
-        memory.apply_event(&event.to_run_event(run_id)?);
-    }
+    let converted = events
+        .iter()
+        .map(|event| event.to_run_event(run_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    memory.apply_events(&converted)?;
     Ok(memory)
 }
 

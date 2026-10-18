@@ -445,7 +445,10 @@ fn child_intent(parent: RunId) -> BootstrapContinuation {
                 path: name.into(),
                 name: name.into(),
                 produced_by: surge_core::keys::NodeKey::try_new("generator").unwrap(),
-                produced_at_seq: 5,
+                produced_at_seq: Some(
+                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(5)
+                        .unwrap(),
+                ),
             })
             .collect(),
         BudgetGuard {
