@@ -14,6 +14,7 @@ from bridge_portability import read_junit, revision_errors, run_command
 CASES = (
     ('surge-daemon::quota_recovery_route_test', 'actual_429_after_declared_source_change_is_audit_only_and_primary_is_attempted_again'),
     ('surge-daemon::owned_flow_mcp_recovery', 'explicit_empty_survives_real_cold_wake_and_changed_global_defaults'),
+    ('surge-daemon::owned_flow_mcp_recovery', 'populated_cold_valid_twin_keeps_original_transport_and_writer_history'),
     ('surge-daemon::work_item_route_test', 'cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context'),
     ('surge-daemon::work_item_route_test', 'task_split_recovery::accepted_split_recovers_children_once_with_fresh_retry_budget'),
     ('surge-orchestrator', 'engine::ipc::windows_address_tests::public_resolver_aliases_reach_same_actual_listener_with_ping'),
@@ -35,8 +36,8 @@ def inventory_errors(document):
             if case['ignored']:
                 errors.append('selected test is ignored: ' + repr(key))
             binaries[suite['binary-id']] = suite['binary-path']
-    if len(selected) != 5 or set(selected) != set(CASES):
-        errors.append('selected binary/test identities must be exactly the fixed five')
+    if len(selected) != 6 or set(selected) != set(CASES):
+        errors.append('selected binary/test identities must be exactly the fixed six')
     return errors, binaries
 
 
@@ -49,10 +50,10 @@ def junit_errors(path):
             identities.append((suite.get('name'), case.get('name')))
             if case.get('classname') != suite.get('name'):
                 errors.append('JUnit testcase classname differs from its binary suite')
-    if len(identities) != 5 or set(identities) != set(CASES):
-        errors.append('JUnit executed identities must be exactly the fixed five')
-    if summary['passed'] != 5 or summary['failed'] or summary['skipped']:
-        errors.append('all five actual JUnit executions must pass without skips')
+    if len(identities) != 6 or set(identities) != set(CASES):
+        errors.append('JUnit executed identities must be exactly the fixed six')
+    if summary['passed'] != 6 or summary['failed'] or summary['skipped']:
+        errors.append('all six actual JUnit executions must pass without skips')
     if summary['required_not_passed']:
         errors.append('JUnit required passing executions missing')
     return errors, summary

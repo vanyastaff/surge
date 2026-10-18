@@ -20,7 +20,10 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use surge_core::{
@@ -47,6 +50,8 @@ use tracing_subscriber::prelude::*;
 struct CatalogBridge {
     inner: Arc<dyn surge_acp::bridge::BridgeFacade>,
     capture: PathBuf,
+    calls: [AtomicUsize; 3],
+    started: std::time::Instant,
 }
 
 #[async_trait::async_trait]
@@ -64,14 +69,37 @@ impl surge_acp::bridge::BridgeFacade for CatalogBridge {
             .open(&self.capture)
             .unwrap();
         writeln!(file, "{}", json!({"tools":tools})).unwrap();
-        self.inner.open_session(config).await
+        drop(file);
+        let call = self.calls[0].fetch_add(1, Ordering::SeqCst) + 1;
+        eprintln!(
+            "WG7_OBS phase=catalog-open-start result=pending elapsed_ms={} call={call}",
+            self.started.elapsed().as_millis()
+        );
+        let result = self.inner.open_session(config).await;
+        eprintln!(
+            "WG7_OBS phase=catalog-open-end result={} elapsed_ms={} call={call}",
+            if result.is_ok() { "ok" } else { "error" },
+            self.started.elapsed().as_millis()
+        );
+        result
     }
     async fn send_message(
         &self,
         session: surge_core::SessionId,
         content: surge_acp::bridge::MessageContent,
     ) -> Result<(), surge_acp::bridge::SendMessageError> {
-        self.inner.send_message(session, content).await
+        let call = self.calls[1].fetch_add(1, Ordering::SeqCst) + 1;
+        eprintln!(
+            "WG7_OBS phase=catalog-send-start result=pending elapsed_ms={} call={call}",
+            self.started.elapsed().as_millis()
+        );
+        let result = self.inner.send_message(session, content).await;
+        eprintln!(
+            "WG7_OBS phase=catalog-send-end result={} elapsed_ms={} call={call}",
+            if result.is_ok() { "ok" } else { "error" },
+            self.started.elapsed().as_millis()
+        );
+        result
     }
     async fn session_state(
         &self,
@@ -83,7 +111,18 @@ impl surge_acp::bridge::BridgeFacade for CatalogBridge {
         &self,
         session: surge_core::SessionId,
     ) -> Result<(), surge_acp::bridge::CloseSessionError> {
-        self.inner.close_session(session).await
+        let call = self.calls[2].fetch_add(1, Ordering::SeqCst) + 1;
+        eprintln!(
+            "WG7_OBS phase=catalog-close-start result=pending elapsed_ms={} call={call}",
+            self.started.elapsed().as_millis()
+        );
+        let result = self.inner.close_session(session).await;
+        eprintln!(
+            "WG7_OBS phase=catalog-close-end result={} elapsed_ms={} call={call}",
+            if result.is_ok() { "ok" } else { "error" },
+            self.started.elapsed().as_millis()
+        );
+        result
     }
     async fn reply_to_tool(
         &self,
@@ -127,6 +166,7 @@ for line in sys.stdin:
     elif method=='ping': result={}
     else: result={'content':[{'type':'text','text':'controlled functional result'}]}
     print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
+    record({'kind':'response','method':method,'response_kind':'result'})
 record({'kind':'eof','pid':os.getpid()})
 "#;
 
@@ -338,6 +378,107 @@ fn records(path: &Path) -> Vec<Value> {
         .filter(|line| line.ends_with('\n'))
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+fn observed_suspension_cleanup(event: &surge_persistence::runs::ReadEvent) -> Option<bool> {
+    match &event.payload.payload {
+        EventPayload::RunSuspended { fence } => Some(fence.cleanup_confirmed),
+        _ => None,
+    }
+}
+
+fn observe_wire_counts(root: &Path, home: &Path, elapsed: Duration) {
+    use std::io::Read;
+    const LIMIT: usize = 256 * 1024;
+    for (source, path) in [
+        root.join("original.jsonl"),
+        root.join("denied.jsonl"),
+        home.join("quota-a-wire.jsonl"),
+        home.join("quota-b-wire.jsonl"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut counts = [0usize; 8];
+        let bytes = std::fs::File::open(path).and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(LIMIT as u64)
+                .read_to_end(&mut bytes)
+                .map(|_| bytes)
+        });
+        let unavailable = bytes.is_err();
+        let bytes = bytes.as_deref().unwrap_or_default();
+        // Hitting the cap is conservatively marked truncated, including exact-cap files.
+        let truncated = bytes.len() == LIMIT;
+        let partial_record = !bytes.is_empty() && bytes.last() != Some(&b'\n');
+        for line in String::from_utf8_lossy(bytes)
+            .split_inclusive('\n')
+            .filter(|line| line.ends_with('\n'))
+        {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                counts[7] += 1;
+                continue;
+            };
+            let method = row["method"].as_str().or_else(|| row["operation"].as_str());
+            if row["kind"] == "response" && row["response_kind"] == "result" {
+                counts[4] += 1;
+            } else if let Some(index) = match method {
+                Some("initialize") => Some(0),
+                Some("tools/list") => Some(1),
+                Some("ping") => Some(2),
+                Some("tools/call") => Some(3),
+                Some("new_session") => Some(5),
+                Some("prompt") => Some(6),
+                _ => None,
+            } {
+                counts[index] += 1;
+            }
+        }
+        eprintln!(
+            "WG7_OBS phase=mcp-wire result=observed elapsed_ms={} source={source} response_observer={} initialize={} tools_list={} ping={} tool_call={} responses={} new_session={} prompt={} malformed={} sampled=true truncated={truncated} partial_record={partial_record} unavailable={unavailable}",
+            elapsed.as_millis(),
+            source < 2,
+            counts[0],
+            counts[1],
+            counts[2],
+            counts[3],
+            counts[4],
+            counts[5],
+            counts[6],
+            counts[7]
+        );
+    }
+}
+
+fn observe_park_state(
+    storage: &Storage,
+    run: RunId,
+    root: &Path,
+    home: &Path,
+    elapsed: Duration,
+    event_count: usize,
+) {
+    let store = storage.work_items();
+    let cycles = store.due_recovery_wakes_for_run(run, i64::MAX, 10);
+    let mut read_errors = usize::from(cycles.is_err());
+    let mut reservations = 0;
+    for cycle in cycles.as_deref().unwrap_or_default() {
+        match store.recovery_reservations(run, &cycle.invocation, cycle.generation) {
+            Ok(rows) => reservations += rows.len(),
+            Err(_) => read_errors += 1,
+        }
+    }
+    let control = store.execution_control(run);
+    let attempt = store.for_run(run);
+    read_errors += usize::from(control.is_err()) + usize::from(attempt.is_err());
+    eprintln!(
+        "WG7_OBS phase=mcp-park-timeout result=observed elapsed_ms={} cycles={} reservations={reservations} events={event_count} control={} attempt={} read_errors={read_errors}",
+        elapsed.as_millis(),
+        cycles.as_ref().map_or(0, Vec::len),
+        control.ok().flatten().is_some(),
+        attempt.ok().flatten().is_some()
+    );
+    observe_wire_counts(root, home, elapsed);
 }
 
 #[test]
@@ -579,6 +720,8 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         Arc::new(CatalogBridge {
             inner: Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
             capture: root.join(format!("{phase}-stage-catalog.jsonl")),
+            calls: std::array::from_fn(|_| AtomicUsize::new(0)),
+            started: std::time::Instant::now(),
         }),
         storage.clone(),
         Arc::new(
@@ -626,6 +769,7 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
     })
     .await
     .unwrap();
+    let mut park_failure = None;
     if phase.ends_with("-resume") {
         let run: RunId =
             serde_json::from_slice(&std::fs::read(root.join("legacy-run.json")).unwrap()).unwrap();
@@ -776,6 +920,7 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         let receipt: OwnedFlowReceipt =
             serde_json::from_value(response["receipt"].clone()).unwrap();
         let park_started = std::time::Instant::now();
+        eprintln!("WG7_OBS phase=mcp-park-start result=pending elapsed_ms=0");
         let mut last_observed = (0, Vec::new());
         let cycle = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
@@ -800,16 +945,24 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
                     },
                     Err(error) => panic!("unexpected initial journal inspection error: {error:?}"),
                 };
-                last_observed = (cycles.len(), match &history.database {
-                    RunDatabaseInspection::Present { events } => events.iter().rev().take(32).map(|event| {
-                        let cleanup = match &event.payload.payload {
-                            EventPayload::RunSuspended { fence } => Some(fence.cleanup_confirmed),
-                            _ => None,
-                        };
-                        (event.seq, event.kind.clone(), cleanup)
-                    }).collect(),
-                    RunDatabaseInspection::Absent => Vec::new(),
-                });
+                last_observed = (
+                    cycles.len(),
+                    match &history.database {
+                        RunDatabaseInspection::Present { events } => events
+                            .iter()
+                            .rev()
+                            .take(32)
+                            .map(|event| {
+                                (
+                                    event.seq,
+                                    event.kind.clone(),
+                                    observed_suspension_cleanup(event),
+                                )
+                            })
+                            .collect(),
+                        RunDatabaseInspection::Absent => Vec::new(),
+                    },
+                );
                 if let RunDatabaseInspection::Present { events } = history.database
                     && initial_mcp_evidence_ready(
                         phase,
@@ -826,26 +979,49 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await
-        .unwrap_or_else(|error| panic!(
-            "WG7 park deadline phase={phase} elapsed={:?} error={error}; last(cycles,journal(seq,kind,cleanup))={last_observed:?}; attempt={:?}; control={:?}",
-            park_started.elapsed(),
-            storage.work_items().for_run(receipt.run).map(|row| row.map(|row| row.state)),
-            storage.work_items().execution_control(receipt.run).map(|row| row.map(|row| (row.state,row.generation))),
-        ));
-        publish(
-            &root.join("park.ready"),
-            &json!({"receipt":receipt,
+        .await;
+        let cycle = match cycle {
+            Ok(cycle) => Some(cycle),
+            Err(error) => {
+                observe_park_state(
+                    &storage,
+                    receipt.run,
+                    root,
+                    home,
+                    park_started.elapsed(),
+                    last_observed.1.len(),
+                );
+                park_failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| panic!(
+                    "WG7 park deadline phase={phase} elapsed={:?} error={error}; last(cycles,journal(seq,kind,cleanup))={last_observed:?}; attempt={:?}; control={:?}",
+                    park_started.elapsed(),
+                    storage.work_items().for_run(receipt.run).map(|row| row.map(|row| row.state)),
+                    storage.work_items().execution_control(receipt.run).map(|row| row.map(|row| (row.state,row.generation))),
+                ))).err();
+                None
+            },
+        };
+        if let Some(cycle) = cycle {
+            publish(
+                &root.join("park.ready"),
+                &json!({"receipt":receipt,
             "attempt":storage.work_items().for_run(receipt.run).unwrap().unwrap(),
             "control":storage.work_items().execution_control(receipt.run).unwrap(),
             "workspace":storage.work_items().show(receipt.item).unwrap().item.workspace,
             "manifest":storage.work_items().owned_flow_manifest(receipt.run).unwrap().unwrap(),
             "due":cycle.map_or(i64::MAX, |cycle| cycle.wake.unwrap().due_at_ms())}),
-        );
-        wait_file(&root.join("park.release")).await;
+            );
+            wait_file(&root.join("park.release")).await;
+        }
     }
     cancel.cancel();
-    task.await.unwrap().unwrap();
+    let settled = task.await;
+    if let Some(failure) = park_failure {
+        if !matches!(&settled, Ok(Ok(()))) {
+            eprintln!("WG7 park cleanup server-result=error; preserving original assertion");
+        }
+        std::panic::resume_unwind(failure);
+    }
+    settled.unwrap().unwrap();
 }
 
 struct RetainedFixture {

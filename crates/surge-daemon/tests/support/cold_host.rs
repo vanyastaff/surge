@@ -8,6 +8,67 @@ use std::{
     time::Duration,
 };
 
+// Only fixed test-producer phases and scalar observations may cross the child boundary.
+fn safe_recovery_observation(line: &str) -> bool {
+    let Some(fields) = line.strip_prefix("WG7_OBS ") else {
+        return false;
+    };
+    if fields.len() > 512 {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for field in fields.split_ascii_whitespace() {
+        let Some((key, value)) = field.split_once('=') else {
+            return false;
+        };
+        if !seen.insert(key) {
+            return false;
+        }
+        let valid = match key {
+            "phase" => matches!(
+                value,
+                "catalog-open-start"
+                    | "catalog-open-end"
+                    | "catalog-send-start"
+                    | "catalog-send-end"
+                    | "catalog-close-start"
+                    | "catalog-close-end"
+                    | "quota-open-start"
+                    | "quota-open-end"
+                    | "quota-primary-assigned"
+                    | "quota-primary-notify"
+                    | "quota-send-start"
+                    | "quota-send-end"
+                    | "quota-ready-before"
+                    | "quota-ready-after"
+                    | "quota-fixture-start"
+                    | "quota-server-ready"
+                    | "quota-start-response"
+                    | "mcp-park-start"
+                    | "mcp-park-timeout"
+                    | "mcp-wire"
+            ),
+            "result" => matches!(value, "pending" | "ok" | "error" | "observed"),
+            "primary" | "control" | "attempt" | "response_observer" | "sampled" | "truncated"
+            | "partial_record" | "unavailable" => {
+                matches!(value, "true" | "false")
+            },
+            "elapsed_ms" | "call" | "cycles" | "reservations" | "events" | "initialize"
+            | "tools_list" | "ping" | "tool_call" | "responses" | "new_session" | "prompt"
+            | "malformed" | "read_errors" | "source" => {
+                !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+            },
+            _ => false,
+        };
+        if !valid {
+            return false;
+        }
+    }
+    ["phase", "result", "elapsed_ms"]
+        .iter()
+        .all(|key| seen.contains(key))
+}
+
 pub struct ColdHost {
     child: Option<Child>,
     ready_file: PathBuf,
@@ -125,7 +186,11 @@ impl ColdHost {
             if line.contains(" panicked at ") {
                 panic_lines = PANIC_CONTEXT + 1;
             }
-            if panic_lines > 0 || line.contains(" WARN ") || line.contains(" ERROR ") {
+            if panic_lines > 0
+                || line.contains(" WARN ")
+                || line.contains(" ERROR ")
+                || safe_recovery_observation(line)
+            {
                 excerpt.push(line);
             }
             panic_lines = panic_lines.saturating_sub(1);
@@ -286,6 +351,24 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn recovery_observation_whitelist_rejects_content_and_unknown_fields() {
+        let safe = "WG7_OBS phase=catalog-open-end result=ok elapsed_ms=12 call=1";
+        assert!(super::safe_recovery_observation(safe));
+        for unsafe_line in [
+            "WG7 arbitrary configuration=secret",
+            "WG7_OBS phase=unknown result=ok elapsed_ms=12",
+            "WG7_OBS phase=catalog-open-end result=secret elapsed_ms=12",
+            "WG7_OBS phase=catalog-open-end result=ok elapsed_ms=12 prompt=secret",
+            "WG7_OBS phase=catalog-open-end result=ok elapsed_ms=12 args=secret",
+            "WG7_OBS phase=catalog-open-end result=ok elapsed_ms=12 source=secret",
+            "WG7_OBS phase=catalog-open-end result=ok elapsed_ms=12 call=1 call=2",
+            "WG7_OBS phase=catalog-open-end result=ok",
+        ] {
+            assert!(!super::safe_recovery_observation(unsafe_line));
+        }
+    }
+
     #[test]
     fn owned_child_probe() {
         let Some(ready) = std::env::var_os("SURGE_COLD_HELPER_READY") else {

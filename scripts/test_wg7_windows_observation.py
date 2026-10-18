@@ -17,9 +17,14 @@ def inventory():
 
 
 class ObservationTests(unittest.TestCase):
-    def test_inventory_requires_exact_five_nonignored_selected_identities(self):
+    def test_inventory_requires_exact_six_nonignored_selected_identities(self):
         original = inventory()
+        self.assertEqual(len(observation.CASES), 6)
         self.assertEqual(observation.inventory_errors(original)[0], [])
+        original_five = copy.deepcopy(original)
+        del original_five['rust-suites']['surge-daemon::owned_flow_mcp_recovery']['testcases'][
+            'populated_cold_valid_twin_keeps_original_transport_and_writer_history']
+        self.assertTrue(observation.inventory_errors(original_five)[0])
         for kind in ('zero', 'missing', 'extra', 'ignored', 'wrong-binary', 'duplicate'):
             with self.subTest(kind=kind):
                 value = copy.deepcopy(original)
@@ -62,8 +67,8 @@ class ObservationTests(unittest.TestCase):
     def test_junit_counts_actual_nodes_and_exact_binary_identity(self):
         errors, summary = self.check_xml()
         self.assertEqual(errors, [])
-        self.assertEqual(summary['total'], 5)
-        self.assertEqual(summary['passed'], 5)
+        self.assertEqual(summary['total'], 6)
+        self.assertEqual(summary['passed'], 6)
         for tag in ('skipped', 'failure', 'error'):
             with self.subTest(tag=tag):
                 errors, _ = self.check_xml(lambda root: ET.SubElement(root[0][0], tag))

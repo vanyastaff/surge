@@ -48,6 +48,7 @@ use tokio_util::sync::CancellationToken;
 const NORMAL_START_COMPLETION_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct ObservedBridge {
+    observed_started: std::time::Instant,
     bridge: AcpBridge,
     quota_errors: AtomicUsize,
     primary_session: tokio::sync::Mutex<Option<SessionId>>,
@@ -74,14 +75,16 @@ impl BridgeFacade for ObservedBridge {
         let secondary = config.runtime == "quota-b";
         let warmup = config.runtime == "quota-c";
         eprintln!(
-            "WG7 quota phase=open-session-before primary={primary} at={:?}",
-            std::time::Instant::now()
+            "WG7_OBS phase=quota-open-start result=pending elapsed_ms={} primary={primary}",
+            self.observed_started.elapsed().as_millis()
         );
-        let opened = self.bridge.open_session(config).await?;
+        let result = self.bridge.open_session(config).await;
         eprintln!(
-            "WG7 quota phase=open-session-return primary={primary} at={:?}",
-            std::time::Instant::now()
+            "WG7_OBS phase=quota-open-end result={} elapsed_ms={} primary={primary}",
+            if result.is_ok() { "ok" } else { "error" },
+            self.observed_started.elapsed().as_millis()
         );
+        let opened = result?;
         if secondary {
             self.b_sessions.lock().await.insert(opened.session);
         }
@@ -91,8 +94,8 @@ impl BridgeFacade for ObservedBridge {
         if primary {
             *self.primary_session.lock().await = Some(opened.session);
             eprintln!(
-                "WG7 quota phase=primary-session-assigned at={:?}",
-                std::time::Instant::now()
+                "WG7_OBS phase=quota-primary-assigned result=ok elapsed_ms={}",
+                self.observed_started.elapsed().as_millis()
             );
         }
         Ok(opened)
@@ -113,17 +116,22 @@ impl BridgeFacade for ObservedBridge {
         };
         if first_primary {
             eprintln!(
-                "WG7 quota phase=primary-ready-before-notify at={:?}",
-                std::time::Instant::now()
+                "WG7_OBS phase=quota-primary-notify result=pending elapsed_ms={}",
+                self.observed_started.elapsed().as_millis()
             );
             self.primary_ready.notify_one();
             self.primary_continue.notified().await;
         }
         eprintln!(
-            "WG7 quota phase=send-message-forward at={:?}",
-            std::time::Instant::now()
+            "WG7_OBS phase=quota-send-start result=pending elapsed_ms={}",
+            self.observed_started.elapsed().as_millis()
         );
         let result = self.bridge.send_message(id, content).await;
+        eprintln!(
+            "WG7_OBS phase=quota-send-end result={} elapsed_ms={}",
+            if result.is_ok() { "ok" } else { "error" },
+            self.observed_started.elapsed().as_millis()
+        );
         if matches!(&result, Err(SendMessageError::RateLimited { .. })) {
             self.quota_errors.fetch_add(1, Ordering::SeqCst);
         }
@@ -649,7 +657,9 @@ async fn quota_dispatch_in_home(
     }
     let storage = Storage::open(home).await.unwrap();
     let cancel = CancellationToken::new();
+    eprintln!("WG7_OBS phase=quota-fixture-start result=ok elapsed_ms=0");
     let bridge = Arc::new(ObservedBridge {
+        observed_started: std::time::Instant::now(),
         bridge: AcpBridge::with_defaults().unwrap(),
         quota_errors: AtomicUsize::new(0),
         primary_session: tokio::sync::Mutex::new(None),
@@ -707,6 +717,10 @@ async fn quota_dispatch_in_home(
     })
     .await
     .unwrap();
+    eprintln!(
+        "WG7_OBS phase=quota-server-ready result=ok elapsed_ms={}",
+        bridge.observed_started.elapsed().as_millis()
+    );
     let requirements = WorkItemRequirements::new(
         "Preserve quota task".into(),
         vec!["Same task and workspace after fallback".into()],
@@ -949,6 +963,10 @@ async fn quota_dispatch_in_home(
     let WorkItemResult::Attempt(attempt) = result else {
         panic!("actual start must return attempt")
     };
+    eprintln!(
+        "WG7_OBS phase=quota-start-response result=ok elapsed_ms={}",
+        bridge.observed_started.elapsed().as_millis()
+    );
     let host_config: Value = serde_json::from_str(&attempt.config).unwrap();
     let frozen_policy: surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy =
         serde_json::from_value(host_config["quota_recovery"].clone()).unwrap();
@@ -1457,8 +1475,13 @@ async fn quota_dispatch_in_home(
                 let ready =
                     std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_PARK_READY").unwrap());
                 let temporary = ready.with_extension("publishing");
+                observe_quota_ready(&storage, next.run, &bridge, journal_tail.len());
                 std::fs::write(&temporary,serde_json::to_vec(&json!({"home":home,"project":project,"item":next_item,"run":next.run,"attempt":parked,"control":before_control,"due":due,"workspace":parked_workspace,"a_count":before_a,"b_count":before_b})).unwrap()).unwrap();
                 std::fs::rename(temporary, ready).unwrap();
+                eprintln!(
+                    "WG7_OBS phase=quota-ready-after result=ok elapsed_ms={}",
+                    bridge.observed_started.elapsed().as_millis()
+                );
                 std::future::pending::<()>().await;
             }
             bridge.primary_continue.notify_one();
@@ -3857,6 +3880,34 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
         2
     );
     drop(storage);
+}
+
+fn observe_quota_ready(
+    storage: &Storage,
+    run: surge_core::RunId,
+    bridge: &ObservedBridge,
+    events: usize,
+) {
+    let store = storage.work_items();
+    let cycles = store.due_recovery_wakes_for_run(run, i64::MAX, 10);
+    let mut read_errors = usize::from(cycles.is_err());
+    let mut reservations = 0;
+    for cycle in cycles.as_deref().unwrap_or_default() {
+        match store.recovery_reservations(run, &cycle.invocation, cycle.generation) {
+            Ok(rows) => reservations += rows.len(),
+            Err(_) => read_errors += 1,
+        }
+    }
+    let control = store.execution_control(run);
+    let attempt = store.for_run(run);
+    read_errors += usize::from(control.is_err()) + usize::from(attempt.is_err());
+    eprintln!(
+        "WG7_OBS phase=quota-ready-before result=observed elapsed_ms={} cycles={} reservations={reservations} events={events} control={} attempt={} read_errors={read_errors}",
+        bridge.observed_started.elapsed().as_millis(),
+        cycles.as_ref().map_or(0, Vec::len),
+        control.ok().flatten().is_some(),
+        attempt.ok().flatten().is_some()
+    );
 }
 
 /// Keep refusal evidence bounded and avoid printing the frozen provider configuration.

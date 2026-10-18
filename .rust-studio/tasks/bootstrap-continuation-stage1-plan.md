@@ -1265,3 +1265,73 @@ reviewable checkpoint required; actual native GREEN remains pending publication.
 Current full Windows same-SHA suite must finish for discriminator comparison;
 root holds remote push until then. No recovery production/scheduling change yet.
 Same ongoing7/7, no repair reset, no UI/provider/user-history actions.
+
+### Remaining WG7 recovery observations — pre-code plan, authoring held
+
+Full Windows run39172594448 executed4547:4534PASS/13FAIL; readonly8 and all48
+standard-user executions PASS. Exact source/binaries remained unchanged across
+serial and full runs. The four selected recovery controls PASS in BOTH schedules;
+this supplies no basis for changing their scheduling or runtime semantics. IPC
+planB plus approved UI harness fixes are published as665cb261. Native after-fix
+validation is pending; bootstrap readiness/IPC failures are not yet called fixed.
+
+Six original WG7 caller failures need narrower evidence. Owning read-only analysis
+finds four populated-MCP cases cut INITIAL parking at20s, before corruption/replay:
+cycles0, Launched, no control; real provider/session progression is still observed.
+Empty-MCP success omits populated catalog startup and is not an equivalent budget
+control. Quota killed-host case cuts the FIRST readiness wait12s, before kill/wake;
+ColdHost stderr filtering discards existing safe quota phase lines. Legacy-cap
+case cuts VERSION12 prompt progression at3s after VERSION13 Attention succeeded;
+its listener is already connected. None is proven caused by IPC or private-auth
+classification. Teardown errors after assertion do not establish the cause.
+
+Proposed diagnostic-only closure, pending independent critic/security acceptance:
+- Existing owned_flow_mcp_recovery test fixture: bounded timestamp/result-kind
+  observations around CatalogBridge open/send/close and fixed mock MCP/provider
+  request/response-kind counters. Capture current reservation/cycle/control and
+  bounded journal-kind tails before original assertion and orderly settlement.
+  No message/prompt, private MCP argument, token, environment or object payloads.
+- Existing ColdHost test support: retain only explicitly whitelisted WG7-safe
+  phase lines in its already bounded stderr excerpt; preserve existing filters
+  and bounds. Quota fixture records readiness phase/timestamps and existing safe
+  retained-state summary before actual durable ready publication. Do not change
+  readiness, actual owner settlement or12s wait.
+- Existing legacy-cap test: add version/run and bounded retained journal/control/
+  active-run/bridge-state/socket-method diagnostics at the unchanged3s cut before
+  cleanup. Record the already-live corruption connection without inventing cause.
+  Keep13→Attention and12→real prompt, all counts and assertions.
+- Keep every original fixed-five native case, and extend the SAME fixed checker
+  mechanism to exactly six by adding the existing healthy populated cold twin.
+  This corrects the now-demonstrated empty/populated observation gap. Exact binary/
+  testcase inventory/JUnit identities and nonzero/pass/skip checks must require
+  all SIX, with tested missing/extra/duplicate/failure branches. Same profile,
+  serial execution, unchanged deadlines/retries, source/binary identity fences,
+  early artifact, unchanged full-suite command and final actual-outcome gate.
+  No dispatch input, second workflow, general framework or reduced full gate.
+
+Source lease remains HELD until this refinement passes independent pre-code review.
+No production recovery, scheduling, timeout, expected outcome or writer/namespace
+change is proposed. This remains the same ongoing7/7 WG7-RECOVERY attempt, not a
+new post-repair finding queue or budget reset. Root owns Git/CI; user runtime,
+habit history, all8 tasks and exact provider/model remain untouched during gates.
+
+### WG7 recovery diagnostic refinement accepted — sole-builder release
+
+Owning attribution, independent harsh critic and security/domain accept the above
+bounded observation refinement. Same ongoing repair 7/7; no counter reset and no
+production correction authorized. Root now releases only the four existing daemon
+test/support files and existing fixed-checker script/unit test plus the workflow
+step's five→six description. Keep the existing profile and all gate commands.
+
+Counters mark actual invocation and completion after the actual await; absent
+completion means pending/unknown, never failed/settled. No diagnostic guard across
+await, new observer task, await point, retry or authority. Capture bounded state
+before actual cleanup, preserve cleanup ordering and original assertion/failure if
+observation itself fails. Whitelist fixed producer markers AND fields; no generic
+WG7 substring forwarding Debug, configuration, mock params or environment. Fixed
+mock counters expose method/response kinds only. Extend cardinality and malformed
+inventory/JUnit self-tests together for six exact cases and zero skips. Preserve
+original twelve/twenty/three-second waits and all readiness/corruption/transport/
+prompt/Attention assertions. Root owns Git/remote; builder freezes complete source
+and publication closure with appropriate local gates before independent diagnostic
+review. Current native CI665 continues; publication timing remains root-owned.

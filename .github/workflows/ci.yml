@@ -116,7 +116,7 @@ jobs:
         continue-on-error: true
         run: python -m unittest discover -s scripts -p 'test_wg7_windows_observation.py' -v
 
-      - name: Observe five Windows cases before the full suite
+      - name: Observe six Windows cases before the full suite
         id: wg7_focused
         if: matrix.os == 'windows-latest'
         continue-on-error: true
