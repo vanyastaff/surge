@@ -356,4 +356,4 @@ pub(super) fn user_profile_path() -> NativeResult<std::path::PathBuf> {
 }
 
 #[cfg(test)]
-pub(crate) use namespace::snapshot_observe;
+pub(crate) use namespace::SnapshotRoot;

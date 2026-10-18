@@ -72,6 +72,8 @@ fn collect(root: &Path) -> Result<Snapshot, String> {
     if !root.exists() {
         return Ok(snapshot);
     }
+    #[cfg(windows)]
+    let anchor = crate::state_home::SnapshotRoot::capture(root)?;
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
         if snapshot.entries.len() + pending.len() >= 4096 {
@@ -83,7 +85,7 @@ fn collect(root: &Path) -> Result<Snapshot, String> {
         }
         let directory = meta.is_dir();
         let shm = coordination_shm(root, &path);
-        let (identity, (length, hash, header)) = native_observe(&path, directory, |file| {
+        let read = |file: &File| {
             let length = file.metadata()?.len();
             if directory || shm {
                 return Ok((length, None, vec![]));
@@ -113,7 +115,11 @@ fn collect(root: &Path) -> Result<Snapshot, String> {
                 return Err(std::io::Error::other("snapshot length changed"));
             }
             Ok((length, Some(hash), header))
-        })?;
+        };
+        #[cfg(windows)]
+        let (identity, (length, hash, header)) = anchor.observe(&path, directory, read)?;
+        #[cfg(unix)]
+        let (identity, (length, hash, header)) = native_observe(&path, directory, read)?;
         if directory {
             for entry in std::fs::read_dir(&path).map_err(|e| e.to_string())? {
                 pending.push(entry.map_err(|e| e.to_string())?.path());
@@ -149,14 +155,6 @@ fn coordination_shm(root: &Path, path: &Path) -> bool {
             .next()
             .is_some_and(|part| part.as_os_str() == "events.sqlite-shm")
         && components.next().is_none()
-}
-#[cfg(windows)]
-fn native_observe<T>(
-    path: &Path,
-    directory: bool,
-    read: impl FnOnce(&File) -> std::io::Result<T>,
-) -> Result<(Vec<u8>, T), String> {
-    crate::state_home::snapshot_observe(path, directory, read).map_err(|e| e.to_string())
 }
 #[cfg(unix)]
 fn native_observe<T>(

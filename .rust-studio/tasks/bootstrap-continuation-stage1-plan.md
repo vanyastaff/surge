@@ -874,3 +874,40 @@ lint suppression. Same ongoingrepair6 includes these compilation failures;
 count6/6 unchanged. Re-freeze and independent diagnostic-checkpoint review before
 newcommit/push SAMEbranch/dispatch. No production read-admission fix before actual
 WindowsbehavioralRED. No PR/merge/newworkflow/UI/habit/provider action.
+
+
+### Repair6 diagnostic v2 — native compile advanced to strict lints
+
+Compile-only e048e90a published SAMEbranch, workflow39149740756. WindowsClippy
+117740971447 advanced past priorrustcerrors; fourstrictlints nowfail: Windows
+_namespace usedbinding, WindowsUTF16 %2/chunks_exact, native testmodule before
+newproductionitems. Rawlogci-windows-clippy-diagnostic-v2 retained. This is still
+SETUP/strictgatefailure, NOTbehavioralRED. WindowsTestSuite117740971470 continues
+independently; root will not cancel/re-publish solely for these lints before its
+behavioral result. Bounded mechanicallease only: cfgcorrect namespacefieldname,
+existing UTF16 evenlength validation preserved via exactchunks/remainder, move
+unchanged testmodule afterproductionitems. No lintallow/newAPI/securitychange or
+readgetterfix. Sameongoinground6/6; sourcefreeze/reviewrequired before anypublication.
+
+
+### Repair6 native v2 target tests — observer SETUP, root-anchor correction
+
+WindowsTestSuite117740971470 on e048e90a completed4540run/4486PASS/54FAIL/53skip;
+rawlogci-windows-tests-diagnostic-v2.log preserved. Sevennewtargettests compiled;
+reparsePASS, other6fail beforetargetassertions in snapshot_worker owner validation.
+This is SETUP, NOTbehavioralRED; productionreadgetter remainsHELD. Other54failures
+are not automatically scope-authorized. Source-bound diagnosis confirmed bybuilder
+andsecurity: collect firstobserves statehome, but helper classifies outertempfile
+parentasProtected. Realproducer protectsONLYstate; actualproduction outerisAncestor.
+Rawlog lacks path/SID; exactnativebasename/owner is not claimedobserved.
+Rootmaintainer ACCEPTABLE +independentsecurity ACCEPTABLE bounded cfg(test) fix:
+captureNamespace::existing_parent(home) ONCE, holdoriginalprotectedhome throughcollect,
+rootfactsfromSAMEhandle, descendantsnormalrelativecomponentsONLY/existing_childONLY,
+retainoriginalroot+parent verification before/after, existing leafnofollow/type/nlink/
+ACL/owner/nameID and existingSqliteSidefilepolicyUNCHANGED. No newAdmin/defaultowner
+exception, no arbitrarypath/parentescape/productionguard/API/Unixchange. Add bounded
+path/phase errors only(noSIDs/privatecontent). Existingnative targetassertions remain.
+ReleaseSOLEbuilder testobserver-only correction, localchecks/fullderivedmanifest,
+independentdiagnosticreview before SAMEbranchpublish+existingWindowsCI. Reviewed
+unpublished3lintfixes e93b21… maysharecheckpoint. No actualgetterfix untilgenuine
+WindowsbehaviorRED. Ongoingrepair6/6 includesrequiredtestsetup, no reset/repair7.

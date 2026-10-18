@@ -137,13 +137,11 @@ fn decoded(bytes: &[u8]) -> Result<PathBuf, OpenError> {
     #[cfg(windows)]
     let path = {
         use std::os::windows::ffi::OsStringExt;
-        if bytes.len() % 2 != 0 {
+        let (chunks, remainder) = bytes.as_chunks::<2>();
+        if !remainder.is_empty() {
             return Err(invalid());
         }
-        let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
+        let units: Vec<u16> = chunks.iter().copied().map(u16::from_le_bytes).collect();
         if units.contains(&0) {
             return Err(invalid());
         }

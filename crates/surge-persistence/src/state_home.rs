@@ -506,4 +506,4 @@ impl RuntimeImmutableFiles {
 }
 
 #[cfg(test)]
-pub(crate) use windows::snapshot_observe;
+pub(crate) use windows::SnapshotRoot;

@@ -1018,144 +1018,6 @@ pub(super) fn file_identity(file: &File, directory: bool) -> NativeResult<Vec<u8
     .concat())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::component;
-    use std::ffi::OsStr;
-    #[test]
-    fn sidefile_observation_cooperates_with_delete_access_but_rejects_aliases() {
-        use super::{Namespace, relative, relative_access_with_sharing};
-        use crate::state_home::windows::native::NativeError;
-        use windows::Win32::{
-            Foundation::STATUS_SHARING_VIOLATION,
-            Storage::FileSystem::{
-                DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-                READ_CONTROL, SYNCHRONIZE,
-            },
-        };
-
-        let temporary = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let root = temporary.path().join("sidefile-observation");
-        let namespace = Namespace::protected_parent(&root).unwrap();
-        let parent = namespace.files.last().unwrap();
-        let name = OsStr::new("events.sqlite-wal");
-        let creation = namespace.owner.creation(false).unwrap();
-        drop(relative(parent, name, false, Some(&creation), true).unwrap());
-        let deleting = relative_access_with_sharing(
-            parent,
-            name,
-            false,
-            None,
-            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            false,
-        )
-        .unwrap();
-        assert!(
-            matches!(
-                relative(parent, name, false, None, false),
-                Err(NativeError::Open(STATUS_SHARING_VIOLATION))
-            ),
-            "the former observer must conflict with actual DELETE access"
-        );
-        namespace
-            .verify_sidefiles(OsStr::new("events.sqlite"))
-            .unwrap();
-        drop(deleting);
-        let alias = root.join("wal-alias");
-        std::fs::hard_link(root.join(name), &alias).unwrap();
-        assert!(
-            matches!(
-                namespace.verify_sidefiles(OsStr::new("events.sqlite")),
-                Err(NativeError::Sidefile { name: observed, source })
-                    if observed == name && matches!(*source, NativeError::Security(_))
-            ),
-            "sharing cooperation must retain single-link identity validation"
-        );
-        std::fs::remove_file(alias).unwrap();
-        std::fs::remove_file(root.join(name)).unwrap();
-        let target = root.join("junction-target");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("sentinel"), b"unchanged target").unwrap();
-        let junction = std::process::Command::new("cmd")
-            .args(["/d", "/c", "mklink", "/J"])
-            .arg(root.join(name))
-            .arg(&target)
-            .output()
-            .unwrap();
-        assert!(junction.status.success(), "junction setup: {junction:?}");
-        use std::os::windows::fs::MetadataExt;
-        assert_ne!(
-            std::fs::symlink_metadata(root.join(name))
-                .unwrap()
-                .file_attributes()
-                & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT.0,
-            0,
-            "independent fixture must install a real reparse point"
-        );
-        let refused = namespace.verify_sidefiles(OsStr::new("events.sqlite"));
-        assert!(
-            matches!(
-                &refused,
-                Err(NativeError::Sidefile { name: observed, source })
-                    if observed == name && matches!(source.as_ref(),
-                        NativeError::Security(_)
-                        | NativeError::Open(windows::Win32::Foundation::STATUS_REPARSE_POINT_ENCOUNTERED
-                            | windows::Win32::Foundation::STATUS_FILE_IS_A_DIRECTORY))
-            ),
-            "actual reparse sidefile must fail identity/type validation: {refused:?}"
-        );
-        assert_eq!(
-            std::fs::read(target.join("sentinel")).unwrap(),
-            b"unchanged target"
-        );
-        std::fs::remove_dir(root.join(name)).unwrap();
-        drop(namespace);
-        temporary.close().unwrap();
-        super::sidefiles::retirement_oracles();
-    }
-
-    #[test]
-    fn win32_aliases_are_rejected_before_native_open() {
-        for name in [
-            "state.",
-            "state ",
-            "CON",
-            "con.txt",
-            "NUL.sqlite",
-            "COM1",
-            "LPT9.log",
-            "COM¹.txt",
-            "LPT²",
-            "COM³",
-            "CONIN$",
-            "CONOUT$",
-            "CLOCK$",
-            "AUX .db",
-            "a:b",
-            "a?b",
-        ] {
-            assert!(
-                component(OsStr::new(name)).is_err(),
-                "accepted alias {name}"
-            );
-        }
-        for name in [
-            "state",
-            "registry.sqlite",
-            "COM10",
-            "company",
-            "long path",
-            "проект",
-        ] {
-            assert!(
-                component(OsStr::new(name)).is_ok(),
-                "rejected ordinary component {name}"
-            );
-        }
-    }
-}
-
 /// Permanent outside-run native control, compatible with all shared run users.
 pub(crate) struct NativeRunControl {
     home: Namespace,
@@ -1450,64 +1312,307 @@ impl DeletionNamespace {
     }
 }
 
-/// Test-only no-SQL observation through existing native security and named-object checks.
+/// Test-only existing protected home retained for the complete no-SQL observation.
 #[cfg(test)]
-pub(crate) fn snapshot_observe<T>(
-    path: &Path,
-    directory: bool,
-    read: impl FnOnce(&File) -> std::io::Result<T>,
-) -> NativeResult<(Vec<u8>, T)> {
-    let parent =
-        Namespace::existing_parent(path.parent().ok_or_else(|| refusal("snapshot parent"))?)?;
-    let name = path.file_name().ok_or_else(|| refusal("snapshot name"))?;
-    let held_parent = parent
-        .files
-        .last()
-        .ok_or_else(|| refusal("snapshot parent handle"))?;
-    let access = FILE_READ_ATTRIBUTES
-        | READ_CONTROL
-        | SYNCHRONIZE
-        | if directory {
-            FILE_TRAVERSE
-        } else {
-            FILE_READ_DATA
-        };
-    let file = relative_access_with_sharing(
-        held_parent,
-        name,
-        directory,
-        None,
-        access,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
-        false,
-    )?;
-    let validate = |file: &File| {
-        parent.owner.validate_directory(
-            file,
-            if directory {
-                DirectoryPolicy::Protected { inheritable: true }
-            } else {
-                DirectoryPolicy::SqliteSidefile
-            },
-        )
-    };
-    validate(&file)?;
-    let identity = file_identity(&file, directory)?;
-    let value = read(&file)?;
-    parent.verify()?;
-    validate(&file)?;
-    let named = relative_access_with_sharing(
-        held_parent,
-        name,
-        directory,
-        None,
-        access,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
-        false,
-    )?;
-    if file_identity(&file, directory)? != identity || file_identity(&named, directory)? != identity
-    {
-        return Err(refusal("snapshot named identity changed"));
+pub(crate) struct SnapshotRoot {
+    path: PathBuf,
+    namespace: Namespace,
+}
+#[cfg(test)]
+fn snapshot_error(path: &Path, phase: &str, error: impl std::fmt::Display) -> String {
+    let path: String = path.to_string_lossy().chars().take(512).collect();
+    let cause: String = error.to_string().chars().take(512).collect();
+    format!("snapshot path={path:?} phase={phase}: {cause}")
+}
+#[cfg(test)]
+impl SnapshotRoot {
+    pub(crate) fn capture(home: &Path) -> Result<Self, String> {
+        let namespace = Namespace::existing_parent(home)
+            .map_err(|error| snapshot_error(home, "root-capture", error))?;
+        Ok(Self {
+            path: home.to_path_buf(),
+            namespace,
+        })
     }
-    Ok((identity, value))
+    fn parent(&self, path: &Path) -> Result<(Namespace, OsString), String> {
+        let relative = path
+            .strip_prefix(&self.path)
+            .map_err(|error| snapshot_error(path, "relative-path", error))?;
+        let mut components = relative.components().peekable();
+        let mut parent = self
+            .namespace
+            .retained_clone()
+            .map_err(|error| snapshot_error(path, "root-clone", error))?;
+        loop {
+            let Some(Component::Normal(name)) = components.next() else {
+                return Err(snapshot_error(
+                    path,
+                    "relative-component",
+                    "normal child required",
+                ));
+            };
+            if components.peek().is_none() {
+                return Ok((parent, name.to_os_string()));
+            }
+            parent = parent
+                .existing_child(name, true)
+                .map_err(|error| snapshot_error(path, "parent-open", error))?;
+        }
+    }
+    fn root_fact<T>(
+        &self,
+        read: impl FnOnce(&File) -> std::io::Result<T>,
+    ) -> Result<(Vec<u8>, T), String> {
+        self.namespace
+            .verify()
+            .map_err(|error| snapshot_error(&self.path, "root-pre", error))?;
+        let file =
+            self.namespace.files.last().ok_or_else(|| {
+                snapshot_error(&self.path, "root-handle", "missing original root")
+            })?;
+        let identity = file_identity(file, true)
+            .map_err(|error| snapshot_error(&self.path, "root-identity", error))?;
+        let value = read(file).map_err(|error| snapshot_error(&self.path, "root-read", error))?;
+        self.namespace
+            .verify()
+            .map_err(|error| snapshot_error(&self.path, "root-post", error))?;
+        if file_identity(file, true)
+            .map_err(|error| snapshot_error(&self.path, "root-identity-post", error))?
+            != identity
+        {
+            return Err(snapshot_error(
+                &self.path,
+                "root-identity-post",
+                "original root changed",
+            ));
+        }
+        Ok((identity, value))
+    }
+    fn open_leaf(
+        parent: &File,
+        name: &OsStr,
+        path: &Path,
+        directory: bool,
+        phase: &str,
+    ) -> Result<File, String> {
+        let access = FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE
+            | if directory {
+                FILE_TRAVERSE
+            } else {
+                FILE_READ_DATA
+            };
+        relative_access_with_sharing(
+            parent,
+            name,
+            directory,
+            None,
+            access,
+            FILE_SHARE_READ
+                | FILE_SHARE_WRITE
+                | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+            false,
+        )
+        .map_err(|error| snapshot_error(path, phase, error))
+    }
+    pub(crate) fn observe<T>(
+        &self,
+        path: &Path,
+        directory: bool,
+        read: impl FnOnce(&File) -> std::io::Result<T>,
+    ) -> Result<(Vec<u8>, T), String> {
+        self.namespace
+            .verify()
+            .map_err(|error| snapshot_error(path, "anchor-pre", error))?;
+        if path == self.path {
+            if !directory {
+                return Err(snapshot_error(path, "root-type", "root must be directory"));
+            }
+            return self.root_fact(read);
+        }
+        let (parent, name) = self.parent(path)?;
+        parent
+            .verify()
+            .map_err(|error| snapshot_error(path, "parent-pre", error))?;
+        let held_parent = parent
+            .files
+            .last()
+            .ok_or_else(|| snapshot_error(path, "parent-handle", "missing original parent"))?;
+        let file = Self::open_leaf(held_parent, &name, path, directory, "leaf-open")?;
+        let validate = |file: &File| {
+            parent.owner.validate_directory(
+                file,
+                if directory {
+                    DirectoryPolicy::Protected { inheritable: true }
+                } else {
+                    DirectoryPolicy::SqliteSidefile
+                },
+            )
+        };
+        validate(&file).map_err(|error| snapshot_error(path, "leaf-security-pre", error))?;
+        let identity = file_identity(&file, directory)
+            .map_err(|error| snapshot_error(path, "leaf-identity", error))?;
+        let value = read(&file).map_err(|error| snapshot_error(path, "leaf-read", error))?;
+        parent
+            .verify()
+            .map_err(|error| snapshot_error(path, "parent-post", error))?;
+        self.namespace
+            .verify()
+            .map_err(|error| snapshot_error(path, "anchor-post", error))?;
+        validate(&file).map_err(|error| snapshot_error(path, "leaf-security-post", error))?;
+        let named = Self::open_leaf(held_parent, &name, path, directory, "leaf-reopen")?;
+        if file_identity(&file, directory)
+            .map_err(|error| snapshot_error(path, "held-identity-post", error))?
+            != identity
+            || file_identity(&named, directory)
+                .map_err(|error| snapshot_error(path, "named-identity-post", error))?
+                != identity
+        {
+            return Err(snapshot_error(
+                path,
+                "leaf-identity-post",
+                "snapshot named identity changed",
+            ));
+        }
+        Ok((identity, value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::component;
+    use std::ffi::OsStr;
+    #[test]
+    fn sidefile_observation_cooperates_with_delete_access_but_rejects_aliases() {
+        use super::{Namespace, relative, relative_access_with_sharing};
+        use crate::state_home::windows::native::NativeError;
+        use windows::Win32::{
+            Foundation::STATUS_SHARING_VIOLATION,
+            Storage::FileSystem::{
+                DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                READ_CONTROL, SYNCHRONIZE,
+            },
+        };
+
+        let temporary = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let root = temporary.path().join("sidefile-observation");
+        let namespace = Namespace::protected_parent(&root).unwrap();
+        let parent = namespace.files.last().unwrap();
+        let name = OsStr::new("events.sqlite-wal");
+        let creation = namespace.owner.creation(false).unwrap();
+        drop(relative(parent, name, false, Some(&creation), true).unwrap());
+        let deleting = relative_access_with_sharing(
+            parent,
+            name,
+            false,
+            None,
+            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            false,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                relative(parent, name, false, None, false),
+                Err(NativeError::Open(STATUS_SHARING_VIOLATION))
+            ),
+            "the former observer must conflict with actual DELETE access"
+        );
+        namespace
+            .verify_sidefiles(OsStr::new("events.sqlite"))
+            .unwrap();
+        drop(deleting);
+        let alias = root.join("wal-alias");
+        std::fs::hard_link(root.join(name), &alias).unwrap();
+        assert!(
+            matches!(
+                namespace.verify_sidefiles(OsStr::new("events.sqlite")),
+                Err(NativeError::Sidefile { name: observed, source })
+                    if observed == name && matches!(*source, NativeError::Security(_))
+            ),
+            "sharing cooperation must retain single-link identity validation"
+        );
+        std::fs::remove_file(alias).unwrap();
+        std::fs::remove_file(root.join(name)).unwrap();
+        let target = root.join("junction-target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"unchanged target").unwrap();
+        let junction = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(root.join(name))
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(junction.status.success(), "junction setup: {junction:?}");
+        use std::os::windows::fs::MetadataExt;
+        assert_ne!(
+            std::fs::symlink_metadata(root.join(name))
+                .unwrap()
+                .file_attributes()
+                & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT.0,
+            0,
+            "independent fixture must install a real reparse point"
+        );
+        let refused = namespace.verify_sidefiles(OsStr::new("events.sqlite"));
+        assert!(
+            matches!(
+                &refused,
+                Err(NativeError::Sidefile { name: observed, source })
+                    if observed == name && matches!(source.as_ref(),
+                        NativeError::Security(_)
+                        | NativeError::Open(windows::Win32::Foundation::STATUS_REPARSE_POINT_ENCOUNTERED
+                            | windows::Win32::Foundation::STATUS_FILE_IS_A_DIRECTORY))
+            ),
+            "actual reparse sidefile must fail identity/type validation: {refused:?}"
+        );
+        assert_eq!(
+            std::fs::read(target.join("sentinel")).unwrap(),
+            b"unchanged target"
+        );
+        std::fs::remove_dir(root.join(name)).unwrap();
+        drop(namespace);
+        temporary.close().unwrap();
+        super::sidefiles::retirement_oracles();
+    }
+
+    #[test]
+    fn win32_aliases_are_rejected_before_native_open() {
+        for name in [
+            "state.",
+            "state ",
+            "CON",
+            "con.txt",
+            "NUL.sqlite",
+            "COM1",
+            "LPT9.log",
+            "COM¹.txt",
+            "LPT²",
+            "COM³",
+            "CONIN$",
+            "CONOUT$",
+            "CLOCK$",
+            "AUX .db",
+            "a:b",
+            "a?b",
+        ] {
+            assert!(
+                component(OsStr::new(name)).is_err(),
+                "accepted alias {name}"
+            );
+        }
+        for name in [
+            "state",
+            "registry.sqlite",
+            "COM10",
+            "company",
+            "long path",
+            "проект",
+        ] {
+            assert!(
+                component(OsStr::new(name)).is_ok(),
+                "rejected ordinary component {name}"
+            );
+        }
+    }
 }

@@ -8,17 +8,14 @@ use std::{ops::Deref, path::Path};
 pub struct RetainedConnection {
     connection: Option<Connection>,
     #[cfg(windows)]
-    _namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
+    namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
     // Last field: native namespace handles close before shared outside use releases.
     run_owner: Option<std::sync::Arc<super::host_settlement::control::RunDatabaseOwner>>,
 }
 impl RetainedConnection {
     #[cfg(all(windows, any(test, feature = "test-support")))]
     pub(crate) fn settlement_marker(&self) -> Option<std::sync::Weak<()>> {
-        let Self {
-            _namespace: namespace,
-            ..
-        } = self;
+        let Self { namespace, .. } = self;
         namespace.as_ref().map(|owner| owner.settlement_marker())
     }
 
@@ -31,7 +28,7 @@ impl RetainedConnection {
     #[cfg(windows)]
     pub(crate) fn verify_namespace(&self) -> rusqlite::Result<()> {
         #[cfg(windows)]
-        if let Some(namespace) = &self._namespace {
+        if let Some(namespace) = &self.namespace {
             namespace.verify().map_err(native_error)?;
         }
         Ok(())
@@ -122,7 +119,7 @@ impl RetainedConnection {
         Self {
             connection: Some(connection),
             run_owner: None,
-            _namespace: namespace,
+            namespace,
         }
     }
     pub(crate) fn open_owned(
