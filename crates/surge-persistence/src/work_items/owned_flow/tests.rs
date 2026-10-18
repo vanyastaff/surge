@@ -39,14 +39,26 @@ pub(super) fn accepted(
     home: &Path,
     operation: WorkItemOperationId,
 ) -> (OwnedFlowReceipt, crate::work_items::WorkItemLaunchClaim) {
+    accepted_with_servers(store, home, operation, &[])
+}
+pub(super) fn accepted_with_servers(
+    store: &WorkItemStore,
+    home: &Path,
+    operation: WorkItemOperationId,
+    servers: &[surge_core::mcp_config::McpServerRef],
+) -> (OwnedFlowReceipt, crate::work_items::WorkItemLaunchClaim) {
     let mut preparation = begin(store, operation, b"original body");
     let source = source(home, &preparation);
     preparation.freeze_source(&source, None).unwrap();
     preparation
         .freeze_startup(
             r#"{"mcp_servers":[]}"#,
-            OwnedFlowMcpSelection::Explicit,
-            &[],
+            if servers.is_empty() {
+                OwnedFlowMcpSelection::Explicit
+            } else {
+                OwnedFlowMcpSelection::HostDefault
+            },
+            servers,
         )
         .unwrap();
     preparation.retain_launch_ownership().unwrap();
@@ -270,6 +282,47 @@ async fn started_effect_authority_follows_the_real_latest_control_and_assignment
     }
 }
 
+fn publish_launch_observation(home: &Path, value: &str) {
+    assert!(matches!(value, "busy" | "held"));
+    let observed = home.join("lease-child-observed");
+    let pending = home.join("lease-child-observed.pending");
+    assert!(!observed.exists() && !pending.exists());
+    std::fs::write(&pending, value).unwrap();
+    std::fs::rename(pending, observed).unwrap();
+}
+fn complete_launch_observation(observed: &Path) -> Option<String> {
+    match std::fs::read_to_string(observed) {
+        Ok(value) => {
+            assert!(
+                matches!(value.as_str(), "busy" | "held"),
+                "unexpected complete child observation: {value:?}"
+            );
+            Some(value)
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("child observation read failed: {error}"),
+    }
+}
+async fn wait_for_launch_observation(child: &mut std::process::Child, observed: &Path) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if complete_launch_observation(observed).is_some() {
+                break;
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                // Publication can complete between the absent read and child exit.
+                assert!(
+                    complete_launch_observation(observed).is_some(),
+                    "child exited before a complete observation: {status}"
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("complete child observation within original deadline");
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owned_launch_child() {
     let Some(home) = std::env::var_os("SURGE_OWNED_FLOW_LEASE_HOME") else {
@@ -283,10 +336,10 @@ async fn owned_launch_child() {
     let store = storage.work_items();
     match store.claim(run) {
         Err(WorkItemError::Busy) => {
-            std::fs::write(Path::new(&home).join("lease-child-observed"), "busy").unwrap();
+            publish_launch_observation(Path::new(&home), "busy");
         },
         Ok(claim) => {
-            std::fs::write(Path::new(&home).join("lease-child-observed"), "held").unwrap();
+            publish_launch_observation(Path::new(&home), "held");
             let _claim = claim;
             std::future::pending::<()>().await;
         },
@@ -325,14 +378,7 @@ async fn launch_owner_handoff_excludes_a_real_process_and_death_reacquires_origi
         };
         let observed = home.path().join("lease-child-observed");
         let mut child = spawn();
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while !observed.exists() {
-                assert!(child.0.try_wait().unwrap().is_none());
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_launch_observation(&mut child.0, &observed).await;
         assert_eq!(std::fs::read_to_string(&observed).unwrap(), "busy");
         assert!(child.0.wait().unwrap().success());
         let engine_owner = claim.clone();
@@ -341,14 +387,7 @@ async fn launch_owner_handoff_excludes_a_real_process_and_death_reacquires_origi
         drop(engine_owner);
         std::fs::remove_file(&observed).unwrap();
         let mut child = spawn();
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while !observed.exists() {
-                assert!(child.0.try_wait().unwrap().is_none());
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_launch_observation(&mut child.0, &observed).await;
         assert_eq!(std::fs::read_to_string(&observed).unwrap(), "held");
         assert!(matches!(store.claim(receipt.run), Err(WorkItemError::Busy)));
         child.0.kill().unwrap();
@@ -466,7 +505,7 @@ async fn owned_flow_reconciliation_claim_preserves_new_manual_control() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn accepted_public_flow_replay_precedes_unavailable_private_storage() {
+async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_changing_facts() {
     let home = FixtureHome::new().unwrap();
     {
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
@@ -520,7 +559,7 @@ async fn accepted_public_flow_replay_precedes_unavailable_private_storage() {
         ));
 
         preparation.retain_launch_ownership().unwrap();
-        let (receipt, claim) = preparation.finalize(2).unwrap().into_parts();
+        let (_receipt, claim) = preparation.finalize(2).unwrap().into_parts();
         assert_eq!(
             store
                 .hydrate_owned_flow_inputs(&claim)
@@ -549,19 +588,14 @@ async fn accepted_public_flow_replay_precedes_unavailable_private_storage() {
         // Any accidental authentication/object lookup now encounters a file,
         // rather than a directory, and cannot silently recreate the namespace.
         assert!(std::fs::read(namespace.join("host-key-v1")).is_err());
-        assert_eq!(
-            store
-                .replay_owned_flow(operation, b"public HostDefault body", false)
-                .unwrap(),
-            Some(receipt.clone()),
-        );
-        let OwnedFlowPreparationResult::Replay(replayed) = store
-            .begin_owned_flow(operation, b"public HostDefault body", false, 99)
-            .unwrap()
-        else {
-            panic!("receipt replay issued new preparation authority");
-        };
-        assert_eq!(replayed, receipt);
+        assert!(matches!(
+            store.replay_owned_flow(operation, b"public HostDefault body", false),
+            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
+        ));
+        assert!(matches!(
+            store.begin_owned_flow(operation, b"public HostDefault body", false, 99),
+            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
+        ));
         assert_eq!(
             audit(),
             before,
@@ -576,4 +610,216 @@ async fn accepted_public_flow_replay_precedes_unavailable_private_storage() {
         std::fs::rename(displaced, namespace).unwrap();
     }
     home.close().unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn private_namespace_bytes(home: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = std::fs::read_dir(home.join("work-items/private-flow-inputs"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().into_string().unwrap(),
+                std::fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+async fn accepted_private_replay_control(
+    home: &Path,
+    operation: WorkItemOperationId,
+    private_request: bool,
+) -> (OwnedFlowReceipt, String) {
+    let storage = crate::runs::Storage::open(home).await.unwrap();
+    let store = storage.work_items();
+    let OwnedFlowPreparationResult::Preparing(mut preparation) = store
+        .begin_owned_flow(operation, b"fixed private-backed body", private_request, 1)
+        .unwrap()
+    else {
+        panic!("new preparation required")
+    };
+    preparation
+        .freeze_source(&source(home, &preparation), None)
+        .unwrap();
+    let server = surge_core::mcp_config::McpServerRef::new(
+        "fixed-private-server".into(),
+        surge_core::mcp_config::McpTransportConfig::stdio(
+            "fixed-command".into(),
+            vec![],
+            Default::default(),
+        ),
+        None,
+        std::time::Duration::from_secs(7),
+        false,
+    );
+    preparation
+        .freeze_startup(
+            r#"{"mcp_servers":[]}"#,
+            OwnedFlowMcpSelection::HostDefault,
+            &[server],
+        )
+        .unwrap();
+    preparation.retain_launch_ownership().unwrap();
+    let (receipt, claim) = preparation.finalize(2).unwrap().into_parts();
+    assert_eq!(
+        store
+            .hydrate_owned_flow_inputs(&claim)
+            .unwrap()
+            .unwrap()
+            .servers()
+            .len(),
+        1
+    );
+    drop(claim);
+    assert_eq!(
+        store
+            .replay_owned_flow(operation, b"fixed private-backed body", private_request)
+            .unwrap(),
+        Some(receipt.clone())
+    );
+    let row: String = store.pool.get().unwrap().query_row(
+        "SELECT json_object('identity',request_identity,'item',item,'run',run,'owner',workspace_owner,'source',source_snapshot,'config',config_snapshot,'inputs',inputs_manifest,'receipt',receipt,'state',state) FROM owned_flow_operations WHERE operation=?",
+        [operation.to_string()], |r| r.get(0),
+    ).unwrap();
+    (receipt, row)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+async fn private_replay_replacement_case(private_request: bool) {
+    let home = FixtureHome::new().unwrap();
+    let operation = WorkItemOperationId::new();
+    let (receipt, original_rows) =
+        accepted_private_replay_control(home.path(), operation, private_request).await;
+    let bytes = private_namespace_bytes(home.path());
+    let root = home.path().join("work-items/private-flow-inputs");
+    std::fs::rename(
+        &root,
+        home.path().join("retired-original-private-namespace"),
+    )
+    .unwrap();
+    {
+        let replacement = super::private_files::PrivateFiles::open(home.path(), true).unwrap();
+        for (name, value) in &bytes {
+            assert!(replacement.publish(name, value).unwrap());
+        }
+    }
+    assert_eq!(
+        private_namespace_bytes(home.path()),
+        bytes,
+        "replacement is fully valid byte-for-byte, not corrupt material"
+    );
+    let facts = {
+        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+        let store = storage.work_items();
+        let replay =
+            store.replay_owned_flow(operation, b"fixed private-backed body", private_request);
+        let begin =
+            store.begin_owned_flow(operation, b"fixed private-backed body", private_request, 99);
+        let refused = matches!(replay, Err(WorkItemError::PrivateInputsRecoveryRequired))
+            && matches!(begin, Err(WorkItemError::PrivateInputsRecoveryRequired));
+        let row: String = store.pool.get().unwrap().query_row(
+            "SELECT json_object('identity',request_identity,'item',item,'run',run,'owner',workspace_owner,'source',source_snapshot,'config',config_snapshot,'inputs',inputs_manifest,'receipt',receipt,'state',state) FROM owned_flow_operations WHERE operation=?",
+            [operation.to_string()], |r| r.get(0),
+        ).unwrap();
+        let count: i64 = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM owned_flow_operations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        (
+            refused,
+            row == original_rows,
+            count == 1,
+            private_namespace_bytes(home.path()) == bytes,
+            matches!(replay, Ok(Some(actual)) if actual == receipt),
+        )
+    };
+    home.close().unwrap();
+    assert!(
+        facts.0 && facts.1 && facts.2 && facts.3,
+        "cold native replacement accepted: refused={}, rows_unchanged={}, one_operation={}, bytes_unchanged={}, original_receipt_returned={}",
+        facts.0,
+        facts.1,
+        facts.2,
+        facts.3,
+        facts.4
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn established_private_request_cold_replay_refuses_valid_native_replacement() {
+    private_replay_replacement_case(true).await;
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn established_public_request_private_mcp_cold_replay_refuses_valid_native_replacement() {
+    private_replay_replacement_case(false).await;
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn established_healthy_original_private_namespace_cold_replay_control() {
+    for private_request in [false, true] {
+        let home = FixtureHome::new().unwrap();
+        let operation = WorkItemOperationId::new();
+        let (receipt, _) =
+            accepted_private_replay_control(home.path(), operation, private_request).await;
+        let facts = {
+            let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+            let store = storage.work_items();
+            let replay = store
+                .replay_owned_flow(operation, b"fixed private-backed body", private_request)
+                .unwrap();
+            let claim = store.claim(receipt.run).unwrap();
+            let inputs = store.hydrate_owned_flow_inputs(&claim).unwrap().unwrap();
+            (replay == Some(receipt), inputs.servers().len() == 1)
+        };
+        home.close().unwrap();
+        assert!(
+            facts.0 && facts.1,
+            "healthy original cold owner/inputs changed"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn established_true_public_empty_mcp_cold_receipt_needs_no_private_namespace() {
+    let home = FixtureHome::new().unwrap();
+    let operation = WorkItemOperationId::new();
+    let receipt = {
+        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+        let store = storage.work_items();
+        let (receipt, claim) = accepted(&store, home.path(), operation);
+        drop(claim);
+        receipt
+    };
+    let facts = {
+        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+        let store = storage.work_items();
+        let replay = store
+            .replay_owned_flow(operation, b"original body", false)
+            .unwrap();
+        (
+            replay == Some(receipt),
+            !home.path().join("work-items/private-flow-inputs").exists(),
+        )
+    };
+    home.close().unwrap();
+    assert!(
+        facts.0 && facts.1,
+        "true public empty replay acquired a private dependency"
+    );
+}
+
+pub(super) fn operation_snapshot(store: &WorkItemStore, operation: WorkItemOperationId) -> String {
+    store.pool.get().unwrap().query_row("SELECT json_object('state',state,'identity',request_identity,'source',source_snapshot,'config',config_snapshot,'manifest',inputs_manifest,'receipt',receipt,'intent',intent_state) FROM owned_flow_operations WHERE operation=?", [operation.to_string()],|row|row.get(0)).unwrap()
 }

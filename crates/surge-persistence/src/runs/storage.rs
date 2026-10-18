@@ -1271,3 +1271,153 @@ mod windows_ownership_tests;
 #[cfg(test)]
 #[path = "storage/stage_a_tests.rs"]
 mod stage_a_tests;
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod deletion_identity_characterization {
+    use super::*;
+    use rusqlite::params;
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+
+    fn native_inventory(root: &Path, current: &Path) -> Vec<(Vec<u8>, Vec<u8>)> {
+        use std::os::unix::ffi::OsStrExt;
+        let mut entries: Vec<_> = std::fs::read_dir(current)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        let mut rows = Vec::new();
+        for path in entries {
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            assert!(!meta.file_type().is_symlink());
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .as_os_str()
+                .as_bytes()
+                .to_vec();
+            let encoded = serde_json::to_vec(&serde_json::json!({
+                "test_inventory_version": 1, "relative": relative,
+                "device": meta.dev(), "inode": meta.ino(), "directory": meta.is_dir(),
+                "length": meta.len(), "content_sha256": if meta.is_file() {
+                    Some(hex::encode(Sha256::digest(std::fs::read(&path).unwrap())))
+                } else { None },
+            }))
+            .unwrap();
+            rows.push((relative, encoded));
+            if meta.is_dir() {
+                rows.extend(native_inventory(root, &path));
+            }
+        }
+        assert!(rows.len() < 100, "bounded real fixture inventory");
+        rows
+    }
+
+    fn record_real_fixture_intent(storage: &Storage, run: RunId) -> String {
+        let mut conn = storage.registry_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let (opening, route, database): (String, Vec<u8>, Vec<u8>) = tx.query_row(
+            "SELECT opening_id,route_identity,database_identity FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",
+            [run.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+        ).unwrap();
+        let journal = [route, database].concat();
+        assert_eq!(journal.len(), 65, "actual Unix framed journal identity");
+        let root = storage.run_dir(&run);
+        let parent = std::fs::File::open(root.parent().unwrap()).unwrap();
+        let meta = parent.metadata().unwrap();
+        let outside_parent = [meta.dev().to_le_bytes(), meta.ino().to_le_bytes()].concat();
+        let rows = native_inventory(&root, &root);
+        let inventory: Vec<_> = rows
+            .iter()
+            .flat_map(|(path, bytes)| [path.as_slice(), bytes.as_slice()].concat())
+            .collect();
+        let deletion = "independently-recorded-original-fixture-delete".to_string();
+        tx.execute("INSERT INTO run_host_tombstones(run_id,deletion_id,original_opening,journal_identity,provenance,inventory_version,inventory_count,inventory_bytes,inventory_digest,outside_parent,state) VALUES(?,?,?,?,'ExplicitStorageDelete',1,?,?,?,?,'DeletePending')",
+            params![run.to_string(),deletion,opening,journal,rows.len(),inventory.len(),Sha256::digest(&inventory).as_slice(),outside_parent]).unwrap();
+        for (path, bytes) in rows {
+            tx.execute("INSERT INTO run_host_deletion_inventory(deletion_id,relative_path,encoded_entry) VALUES(?,?,?)",params![deletion,path,bytes]).unwrap();
+        }
+        tx.commit().unwrap();
+        deletion
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preexisting_real_deletion_intent_never_removes_replacement_namespace() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let facts = {
+            let storage = Storage::open(home.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage
+                .create_run(run, "/fixed-project", None)
+                .await
+                .unwrap();
+            let root = storage.run_dir(&run);
+            std::fs::write(root.join("artifacts/original-marker"), b"original artifact").unwrap();
+            writer.close().await.unwrap();
+            let deletion = record_real_fixture_intent(&storage, run);
+            let original = home.path().join("original-run-retained");
+            std::fs::rename(&root, &original).unwrap();
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(root.join("replacement-marker"), b"replacement must survive").unwrap();
+            let result = storage.delete_run(&run).await;
+            let replacement_preserved = std::fs::read(root.join("replacement-marker"))
+                .ok()
+                .as_deref()
+                == Some(b"replacement must survive");
+            let intent: (String, String) = storage
+                .registry_pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT deletion_id,state FROM run_host_tombstones WHERE run_id=?",
+                    [run.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            (
+                matches!(
+                    result,
+                    Err(crate::runs::error::StorageError::OperationRejected(_))
+                ),
+                replacement_preserved,
+                std::fs::read(original.join("artifacts/original-marker")).unwrap()
+                    == b"original artifact",
+                intent == (deletion, "DeletePending".into()),
+            )
+        };
+        home.close().unwrap();
+        assert!(
+            facts.0 && facts.1 && facts.2 && facts.3,
+            "existing deletion intent ignored original identity: refused={}, replacement_preserved={}, original_preserved={}, intent_unchanged={}",
+            facts.0,
+            facts.1,
+            facts.2,
+            facts.3
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ordinary_unpinned_delete_and_repeat_preserve_compatibility() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let facts = {
+            let storage = Storage::open(home.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage
+                .create_run(run, "/fixed-project", None)
+                .await
+                .unwrap();
+            let root = storage.run_dir(&run);
+            std::fs::write(root.join("artifacts/original-marker"), b"original artifact").unwrap();
+            writer.close().await.unwrap();
+            let first = storage.delete_run(&run).await;
+            let second = storage.delete_run(&run).await;
+            (
+                first.is_ok(),
+                second.is_ok(),
+                !root.exists(),
+                storage.get_run(&run).await.unwrap().is_none(),
+            )
+        };
+        home.close().unwrap();
+        assert_eq!(facts, (true, true, true, true));
+    }
+}

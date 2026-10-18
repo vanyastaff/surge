@@ -153,6 +153,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "0034_inherited_provenance",
         include_str!("migrations/registry/0034_inherited_provenance.sql"),
     ),
+    (
+        "registry-0035-owned-flow-private-establishment",
+        include_str!("migrations/registry/0035_owned_flow_private_establishment.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

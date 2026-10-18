@@ -1,5 +1,6 @@
 //! Immutable provisional operation identity and the short atomic acceptance boundary.
 use super::{
+    private_establishment::PrivateOwner,
     private_inputs::{self, InputBinding},
     source_snapshot,
 };
@@ -57,6 +58,7 @@ pub struct OwnedFlowPreparation {
     launch_lock: Option<Arc<PreparationLock>>,
     token: String,
     consumed: bool,
+    private_owner: Option<Arc<PrivateOwner>>,
 }
 struct Operation {
     identity: OwnedFlowRequestIdentity,
@@ -80,8 +82,35 @@ fn read(conn: &Connection, operation: WorkItemOperationId) -> Result<Option<Oper
         Ok(Operation { identity:work_items::json(r.get(0)?)?,item:id(1)?.parse().map_err(|e|parse_error(1,Box::new(e)))?,run:id(2)?.parse().map_err(|e|parse_error(2,Box::new(e)))?,workspace_owner:id(3)?.parse().map_err(|e|parse_error(3,Box::new(e)))?,operation_lock_identity:r.get(4)?,launch_lock_identity:r.get(5)?,source:source.map(work_items::json).transpose()?,config:r.get(7)?,inputs:inputs.map(work_items::json).transpose()?,receipt:receipt.map(work_items::json).transpose()? })
     }).optional().map_err(WorkItemError::from)
 }
+fn register_project(conn: &Connection, workspace: &WorkItemWorkspace) -> Result<WorkItemProjectId> {
+    let repository = workspace.repository.to_string_lossy();
+    let project: Option<String> = conn
+        .query_row(
+            "SELECT id FROM work_item_projects WHERE repository=?",
+            [repository.as_ref()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let project = project.map_or_else(
+        || Ok(WorkItemProjectId::new()),
+        |id| {
+            id.parse()
+                .map_err(|_| WorkItemError::Invalid("invalid project identity".into()))
+        },
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO work_item_projects(id,repository,checkout) VALUES(?,?,?)",
+        params![
+            project.to_string(),
+            repository.as_ref(),
+            workspace.checkout.to_string_lossy()
+        ],
+    )?;
+    Ok(project)
+}
 impl WorkItemStore {
     /// Inspect exact replay before configuration, locator or discovery I/O.
+    /// Private-backed receipts still require the original established native storage.
     ///
     /// # Errors
     /// Refuses reused bodies and missing/corrupt existing host authentication keys.
@@ -100,7 +129,17 @@ impl WorkItemStore {
                 "owned Flow operation body changed".into(),
             ));
         }
-        private_inputs::verify_request(&self.home, canonical_body, &value.identity)?;
+        let owner = private_inputs::verify_request(
+            self,
+            operation,
+            canonical_body,
+            &value.identity,
+            value.inputs.as_ref(),
+            None,
+        )?;
+        if let Some(owner) = owner {
+            owner.verify()?;
+        }
         Ok(value.receipt)
     }
     /// Claim the original operation before resolving sources or provisioning Git.
@@ -135,7 +174,7 @@ impl WorkItemStore {
         };
         let lock_identity = operation_lock.identity()?;
         let existing = read(&*self.pool.get()?, operation)?;
-        let identity = if let Some(existing) = &existing {
+        let (identity, private_owner) = if let Some(existing) = &existing {
             if existing.operation_lock_identity != lock_identity
                 || matches!(existing.identity, OwnedFlowRequestIdentity::Hmac { .. })
                     != explicit_private
@@ -144,16 +183,17 @@ impl WorkItemStore {
                     "owned Flow operation ownership changed".into(),
                 ));
             }
-            private_inputs::verify_request(&self.home, canonical_body, &existing.identity)?;
-            existing.identity.clone()
-        } else {
-            let allow_new = self.private_key_creation_allowed()?;
-            private_inputs::request_identity(
-                &self.home,
+            let owner = private_inputs::verify_request(
+                self,
+                operation,
                 canonical_body,
-                explicit_private,
-                allow_new,
-            )?
+                &existing.identity,
+                existing.inputs.as_ref(),
+                Some(&operation_lock),
+            )?;
+            (existing.identity.clone(), owner)
+        } else {
+            private_inputs::request_identity(self, canonical_body, explicit_private)?
         };
         let token = RunId::new().to_string();
         let mut conn = self.pool.get()?;
@@ -186,6 +226,9 @@ impl WorkItemStore {
             value
         };
         tx.commit()?;
+        if let Some(owner) = &private_owner {
+            owner.verify_in(&conn)?;
+        }
         Ok(OwnedFlowPreparationResult::Preparing(Box::new(
             OwnedFlowPreparation {
                 store: self.clone(),
@@ -198,13 +241,9 @@ impl WorkItemStore {
                 launch_lock: None,
                 token,
                 consumed: false,
+                private_owner,
             },
         )))
-    }
-    fn private_key_creation_allowed(&self) -> Result<bool> {
-        let conn = self.pool.get()?;
-        let references:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM owned_flow_operations WHERE json_extract(request_identity,'$.kind')='hmac' OR json_extract(inputs_manifest,'$.mcp.kind')='private')",[],|r|r.get(0))?;
-        Ok(!references)
     }
 }
 impl OwnedFlowPreparation {
@@ -225,6 +264,9 @@ impl OwnedFlowPreparation {
     }
     fn verify(&self, conn: &Connection) -> Result<Operation> {
         self.operation_lock.verify()?;
+        if let Some(owner) = &self.private_owner {
+            owner.verify_in(conn)?;
+        }
         let value = read(conn, self.operation)?.ok_or(WorkItemError::NotFound)?;
         let owned:bool=conn.query_row("SELECT token=? AND state='preparing' AND receipt IS NULL FROM owned_flow_operations WHERE operation=?",params![self.token,self.operation.to_string()],|r|r.get(0))?;
         if !owned
@@ -319,6 +361,10 @@ impl OwnedFlowPreparation {
                     "owned Flow startup snapshot changed".into(),
                 ));
             }
+            let (_, owner) = private_inputs::hydrate(&self.store, &inputs)?;
+            if let Some(owner) = owner {
+                self.private_owner = Some(owner);
+            }
             return Ok(inputs);
         }
         let config: serde_json::Value = serde_json::from_str(public_config)
@@ -348,13 +394,7 @@ impl OwnedFlowPreparation {
             self.workspace_owner,
             source.workspace,
         );
-        let inputs = private_inputs::freeze(
-            &self.store.home,
-            &context,
-            selection,
-            servers,
-            self.store.private_key_creation_allowed()?,
-        )?;
+        let (inputs, owner) = private_inputs::freeze(&self.store, &context, selection, servers)?;
         let mut conn = self.store.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = self.verify(&tx)?;
@@ -365,6 +405,10 @@ impl OwnedFlowPreparation {
         }
         tx.execute("UPDATE owned_flow_operations SET config_snapshot=?,inputs_manifest=? WHERE operation=? AND token=?",params![public_config,serde_json::to_string(&inputs)?,self.operation.to_string(),self.token])?;
         tx.commit()?;
+        if let Some(owner) = owner {
+            owner.verify_in(&conn)?;
+            self.private_owner = Some(owner);
+        }
         Ok(inputs)
     }
     /// Capture and retain the original launch object's identity before acceptance.
@@ -422,29 +466,7 @@ impl OwnedFlowPreparation {
         let inputs = value
             .inputs
             .ok_or_else(|| WorkItemError::Invalid("owned Flow inputs missing".into()))?;
-        let repository = source.workspace.repository.to_string_lossy();
-        let project: Option<String> = tx
-            .query_row(
-                "SELECT id FROM work_item_projects WHERE repository=?",
-                [repository.as_ref()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let project = project.map_or_else(
-            || Ok(WorkItemProjectId::new()),
-            |id| {
-                id.parse()
-                    .map_err(|_| WorkItemError::Invalid("invalid project identity".into()))
-            },
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO work_item_projects(id,repository,checkout) VALUES(?,?,?)",
-            params![
-                project.to_string(),
-                repository.as_ref(),
-                source.workspace.checkout.to_string_lossy()
-            ],
-        )?;
+        let project = register_project(&tx, &source.workspace)?;
         let title = &source.contract.graph().metadata.name;
         if title.trim().is_empty() || title.len() > 1024 {
             return Err(WorkItemError::Invalid("invalid Flow title".into()));
@@ -499,11 +521,15 @@ impl OwnedFlowPreparation {
                 guard: Arc::clone(launch),
                 operation: self.operation,
                 identity: launch.identity()?,
+                private_owner: self.private_owner.clone(),
             },
             run: self.run,
             token,
             binding: receipt.binding.clone(),
         };
+        if let Some(owner) = &self.private_owner {
+            owner.verify_in(&conn)?;
+        }
         self.consumed = true;
         Ok(OwnedFlowAcceptance { receipt, claim })
     }

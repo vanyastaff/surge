@@ -1,13 +1,18 @@
 //! Authentication of frozen private MCP inputs. Only the host coordinator uses this.
+use super::private_establishment::{self, LegacyProof, PrivateOwner};
 use super::private_files::PrivateFiles;
+use crate::work_items::WorkItemStore;
+use crate::work_items::start_preparation::secure_lock::PreparationLock;
 use crate::work_items::{Result, WorkItemError};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 use std::path::Path;
+use std::sync::Arc;
 use surge_core::{RunId, id::WorkItemOperationId, mcp_config::McpServerRef, work_item::*};
 const KEY_NAME: &str = "host-key-v1";
-const KEY_MARKER: &str = "host-key-established-v1";
+pub(super) const KEY_MARKER: &str = "host-key-established-v1";
 const KEY_MAGIC: &[u8] = b"surge-owned-flow-host-key-v1\0";
 const REQUEST_DOMAIN: &[u8] = b"surge/owned-flow/request/v1\0";
 const SERVER_DOMAIN: &[u8] = b"surge/owned-flow/mcp-server/v1\0";
@@ -123,7 +128,7 @@ fn decode_key(bytes: &[u8]) -> Result<[u8; 32]> {
         .try_into()
         .map_err(|_| WorkItemError::PrivateInputsRecoveryRequired)
 }
-fn host_key(files: &PrivateFiles, allow_new: bool) -> Result<[u8; 32]> {
+pub(super) fn host_key(files: &PrivateFiles, allow_new: bool) -> Result<[u8; 32]> {
     let bytes = match files.read(KEY_NAME) {
         Ok(bytes) => bytes,
         Err(WorkItemError::PrivateInputsRecoveryRequired) if allow_new => {
@@ -153,56 +158,114 @@ fn host_key(files: &PrivateFiles, allow_new: bool) -> Result<[u8; 32]> {
     Ok(key)
 }
 pub(super) fn request_identity(
-    home: &Path,
+    store: &WorkItemStore,
     canonical_body: &[u8],
     explicit_private: bool,
-    allow_new_key: bool,
-) -> Result<OwnedFlowRequestIdentity> {
+) -> Result<(OwnedFlowRequestIdentity, Option<Arc<PrivateOwner>>)> {
     if !explicit_private {
-        return Ok(OwnedFlowRequestIdentity::PlainPublic {
-            digest: surge_core::ContentHash::compute(canonical_body),
-        });
+        return Ok((
+            OwnedFlowRequestIdentity::PlainPublic {
+                digest: surge_core::ContentHash::compute(canonical_body),
+            },
+            None,
+        ));
     }
-    let files = PrivateFiles::open(home, allow_new_key)?;
-    let key = host_key(&files, allow_new_key)?;
-    Ok(OwnedFlowRequestIdentity::Hmac {
-        tag: authentication(&key, REQUEST_DOMAIN, canonical_body)?,
-    })
+    let owner = private_establishment::open(store, None, None)?;
+    let identity = OwnedFlowRequestIdentity::Hmac {
+        tag: authentication(owner.key(), REQUEST_DOMAIN, canonical_body)?,
+    };
+    owner.verify()?;
+    Ok((identity, Some(owner)))
 }
 pub(super) fn verify_request(
-    home: &Path,
+    store: &WorkItemStore,
+    operation: WorkItemOperationId,
     canonical_body: &[u8],
     identity: &OwnedFlowRequestIdentity,
-) -> Result<()> {
+    manifest: Option<&OwnedFlowInputsManifest>,
+    operation_lock: Option<&PreparationLock>,
+) -> Result<Option<Arc<PrivateOwner>>> {
+    if let OwnedFlowRequestIdentity::PlainPublic { digest } = identity
+        && *digest != surge_core::ContentHash::compute(canonical_body)
+    {
+        return Err(WorkItemError::Conflict(
+            "owned Flow operation body changed".into(),
+        ));
+    }
+    let private = matches!(identity, OwnedFlowRequestIdentity::Hmac { .. })
+        || manifest.is_some_and(|value| matches!(value.mcp(), FrozenOwnedFlowMcp::Private { .. }));
+    let owner = if private {
+        Some(private_establishment::open(
+            store,
+            Some(LegacyProof {
+                operation,
+                body: Some(canonical_body),
+                manifest,
+            }),
+            operation_lock,
+        )?)
+    } else {
+        None
+    };
     match identity {
         OwnedFlowRequestIdentity::PlainPublic { digest }
-            if *digest == surge_core::ContentHash::compute(canonical_body) =>
-        {
-            Ok(())
+            if *digest == surge_core::ContentHash::compute(canonical_body) => {},
+        OwnedFlowRequestIdentity::PlainPublic { .. } => {
+            return Err(WorkItemError::Conflict(
+                "owned Flow operation body changed".into(),
+            ));
         },
-        OwnedFlowRequestIdentity::PlainPublic { .. } => Err(WorkItemError::Conflict(
-            "owned Flow operation body changed".into(),
-        )),
         OwnedFlowRequestIdentity::Hmac { tag } => {
-            let files = PrivateFiles::open(home, false)?;
-            let key = host_key(&files, false)?;
-            verify(&key, REQUEST_DOMAIN, canonical_body, tag)
-                .map_err(|_| WorkItemError::Conflict("owned Flow operation body changed".into()))
+            let owner = owner
+                .as_ref()
+                .ok_or(WorkItemError::PrivateInputsRecoveryRequired)?;
+            verify(owner.key(), REQUEST_DOMAIN, canonical_body, tag)
+                .map_err(|_| WorkItemError::Conflict("owned Flow operation body changed".into()))?;
         },
     }
+    if let (Some(owner), Some(manifest)) = (&owner, manifest) {
+        hydrate_with_key(owner.files(), owner.key(), manifest)?;
+        owner.verify()?;
+    }
+    if let Some(owner) = &owner {
+        owner.verify()?;
+    }
+    Ok(owner)
+}
+
+pub(super) fn authenticate_legacy(
+    files: &PrivateFiles,
+    key: &[u8; 32],
+    body: Option<&[u8]>,
+    identity: &OwnedFlowRequestIdentity,
+    manifest: Option<&OwnedFlowInputsManifest>,
+) -> Result<()> {
+    if let (Some(body), OwnedFlowRequestIdentity::Hmac { tag }) = (body, identity) {
+        verify(key, REQUEST_DOMAIN, body, tag)
+            .map_err(|_| WorkItemError::Conflict("owned Flow operation body changed".into()))?;
+        return Ok(());
+    }
+    let manifest = manifest
+        .filter(|value| matches!(value.mcp(), FrozenOwnedFlowMcp::Private { .. }))
+        .ok_or(WorkItemError::PrivateInputsRecoveryRequired)?;
+    hydrate_with_key(files, key, manifest)?;
+    Ok(())
 }
 pub(super) fn freeze(
-    home: &Path,
+    store: &WorkItemStore,
     binding: &InputBinding,
     selection: OwnedFlowMcpSelection,
     servers: &[McpServerRef],
-    allow_new_key: bool,
-) -> Result<OwnedFlowInputsManifest> {
+) -> Result<(OwnedFlowInputsManifest, Option<Arc<PrivateOwner>>)> {
     if servers.is_empty() {
-        return binding.manifest(FrozenOwnedFlowMcp::empty(selection));
+        return Ok((
+            binding.manifest(FrozenOwnedFlowMcp::empty(selection))?,
+            None,
+        ));
     }
-    let files = PrivateFiles::open(home, true)?;
-    let key = host_key(&files, allow_new_key)?;
+    let owner = private_establishment::open(store, None, None)?;
+    let files = owner.files();
+    let key = owner.key();
     let mut entries = Vec::with_capacity(servers.len());
     for (index, server) in servers.iter().enumerate() {
         let index = u32::try_from(index).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
@@ -215,7 +278,7 @@ pub(super) fn freeze(
             server: server.clone(),
         };
         let bytes = canonical(&object)?;
-        let tag = authentication(&key, SERVER_DOMAIN, &bytes)?;
+        let tag = authentication(key, SERVER_DOMAIN, &bytes)?;
         let entry = OwnedFlowMcpManifestEntry::new(index, server, reference.clone(), tag)
             .map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
         if !files.publish(&object_name(&reference), &bytes)? {
@@ -232,18 +295,46 @@ pub(super) fn freeze(
         envelope_ref: reference.clone(),
     };
     let bytes = canonical(&envelope)?;
-    let tag = authentication(&key, ENVELOPE_DOMAIN, &bytes)?;
+    let tag = authentication(key, ENVELOPE_DOMAIN, &bytes)?;
     if !files.publish(&object_name(&reference), &bytes)? {
         return Err(WorkItemError::PrivateInputsCorrupt);
     }
     let snapshot = FrozenOwnedFlowMcp::private(selection, entries, reference, tag)
         .map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
-    binding.manifest(snapshot)
+    let manifest = binding.manifest(snapshot)?;
+    owner.verify()?;
+    Ok((manifest, Some(owner)))
 }
 /// This only verifies private payloads. It grants no claim/effect authority; the
 /// coordinator must validate actual accepted SQL and startup before minting one.
 pub(super) fn hydrate(
-    home: &Path,
+    store: &WorkItemStore,
+    manifest: &OwnedFlowInputsManifest,
+) -> Result<(Vec<McpServerRef>, Option<Arc<PrivateOwner>>)> {
+    if !matches!(manifest.mcp(), FrozenOwnedFlowMcp::Private { .. })
+        && !matches!(
+            manifest.request_identity(),
+            OwnedFlowRequestIdentity::Hmac { .. }
+        )
+    {
+        return Ok((Vec::new(), None));
+    }
+    let owner = private_establishment::open(
+        store,
+        Some(LegacyProof {
+            operation: manifest.operation(),
+            body: None,
+            manifest: Some(manifest),
+        }),
+        None,
+    )?;
+    let servers = hydrate_with_key(owner.files(), owner.key(), manifest)?;
+    owner.verify()?;
+    Ok((servers, Some(owner)))
+}
+fn hydrate_with_key(
+    files: &PrivateFiles,
+    key: &[u8; 32],
     manifest: &OwnedFlowInputsManifest,
 ) -> Result<Vec<McpServerRef>> {
     let FrozenOwnedFlowMcp::Private {
@@ -255,8 +346,6 @@ pub(super) fn hydrate(
     else {
         return Ok(Vec::new());
     };
-    let files = PrivateFiles::open(home, false)?;
-    let key = host_key(&files, false)?;
     let binding = InputBinding::from_manifest(manifest);
     let expected = EnvelopeObject {
         schema_version: 1,
@@ -266,7 +355,7 @@ pub(super) fn hydrate(
         envelope_ref: envelope_ref.clone(),
     };
     let envelope_bytes = files.read(&object_name(envelope_ref))?;
-    verify(&key, ENVELOPE_DOMAIN, &envelope_bytes, envelope_auth_tag)?;
+    verify(key, ENVELOPE_DOMAIN, &envelope_bytes, envelope_auth_tag)?;
     let envelope: EnvelopeObject =
         serde_json::from_slice(&envelope_bytes).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
     if envelope != expected || canonical(&envelope)? != envelope_bytes {
@@ -275,7 +364,7 @@ pub(super) fn hydrate(
     let mut servers = Vec::with_capacity(entries.len());
     for entry in entries {
         let bytes = files.read(&object_name(entry.object_ref()))?;
-        verify(&key, SERVER_DOMAIN, &bytes, entry.object_auth_tag())?;
+        verify(key, SERVER_DOMAIN, &bytes, entry.object_auth_tag())?;
         let object: ServerObject =
             serde_json::from_slice(&bytes).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
         if object.schema_version != 1
@@ -305,6 +394,15 @@ pub(super) fn hydrate(
 mod tests {
     use super::*;
     use surge_core::{ContentHash, id::WorkItemId};
+    fn test_store(home: &Path) -> WorkItemStore {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async { crate::runs::Storage::open(home).await.unwrap().work_items() })
+    }
+
     fn binding(identity: OwnedFlowRequestIdentity) -> InputBinding {
         let checkout = if cfg!(windows) {
             std::path::PathBuf::from(r"C:\repo")
@@ -353,15 +451,25 @@ mod tests {
     #[test]
     fn empty_snapshots_never_open_private_namespace_and_keep_selection() {
         let home = tempfile::tempdir().unwrap();
-        let identity = request_identity(home.path(), b"public body", false, false).unwrap();
+        let store = test_store(home.path());
+        let identity = request_identity(&store, b"public body", false)
+            .map(|(value, _owner)| value)
+            .unwrap();
         let context = binding(identity);
         for selection in [
             OwnedFlowMcpSelection::Explicit,
             OwnedFlowMcpSelection::HostDefault,
         ] {
-            let manifest = freeze(home.path(), &context, selection, &[], false).unwrap();
+            let manifest = freeze(&store, &context, selection, &[])
+                .map(|(value, _owner)| value)
+                .unwrap();
             assert_eq!(manifest.mcp().selection(), selection);
-            assert!(hydrate(home.path(), &manifest).unwrap().is_empty());
+            assert!(
+                hydrate(&store, &manifest)
+                    .map(|(value, _owner)| value)
+                    .unwrap()
+                    .is_empty()
+            );
         }
         assert!(!home.path().join("work-items").exists());
     }
@@ -369,10 +477,32 @@ mod tests {
     #[test]
     fn private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque() {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let identity =
-            request_identity(home.path(), b"explicit private request", true, true).unwrap();
-        verify_request(home.path(), b"explicit private request", &identity).unwrap();
-        assert!(verify_request(home.path(), b"changed private request", &identity).is_err());
+        let store = test_store(home.path());
+        let identity = request_identity(&store, b"explicit private request", true)
+            .map(|(value, _owner)| value)
+            .unwrap();
+        verify_request(
+            &store,
+            WorkItemOperationId::new(),
+            b"explicit private request",
+            &identity,
+            None,
+            None,
+        )
+        .map(|_owner| ())
+        .unwrap();
+        assert!(
+            verify_request(
+                &store,
+                WorkItemOperationId::new(),
+                b"changed private request",
+                &identity,
+                None,
+                None
+            )
+            .map(|_owner| ())
+            .is_err()
+        );
         let context = binding(identity);
         // One legacy-shaped entry (no startup deadline) and one explicit one:
         // both must survive the authenticated freeze/hydrate round trip.
@@ -380,15 +510,15 @@ mod tests {
             server("first"),
             server("second").with_startup_timeout(Some(std::time::Duration::from_secs(20))),
         ];
-        let manifest = freeze(
-            home.path(),
-            &context,
-            OwnedFlowMcpSelection::Explicit,
-            &servers,
-            false,
-        )
-        .unwrap();
-        assert_eq!(hydrate(home.path(), &manifest).unwrap(), servers);
+        let manifest = freeze(&store, &context, OwnedFlowMcpSelection::Explicit, &servers)
+            .map(|(value, _owner)| value)
+            .unwrap();
+        assert_eq!(
+            hydrate(&store, &manifest)
+                .map(|(value, _owner)| value)
+                .unwrap(),
+            servers
+        );
         let projected = serde_json::to_value(&manifest).unwrap();
         assert!(
             projected["mcp"]["entries"][0]
@@ -399,7 +529,11 @@ mod tests {
         let mut widened = projected.clone();
         widened["mcp"]["entries"][1]["startup_timeout"] = serde_json::json!("10m");
         let widened: OwnedFlowInputsManifest = serde_json::from_value(widened).unwrap();
-        assert!(hydrate(home.path(), &widened).is_err());
+        assert!(
+            hydrate(&store, &widened)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
         let public = serde_json::to_string(&manifest).unwrap();
         for sentinel in [
             "PRIVATE-COMMAND-SENTINEL",
@@ -411,7 +545,11 @@ mod tests {
         let mut foreign = serde_json::to_value(&manifest).unwrap();
         foreign["run"] = serde_json::to_value(RunId::new()).unwrap();
         let foreign: OwnedFlowInputsManifest = serde_json::from_value(foreign).unwrap();
-        assert!(hydrate(home.path(), &foreign).is_err());
+        assert!(
+            hydrate(&store, &foreign)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
         let mut reordered = serde_json::to_value(&manifest).unwrap();
         reordered["mcp"]["entries"]
             .as_array_mut()
@@ -422,30 +560,45 @@ mod tests {
             .path()
             .join("work-items/private-flow-inputs/host-key-v1");
         std::fs::remove_file(&key_path).unwrap();
-        assert!(hydrate(home.path(), &manifest).is_err());
-        assert!(request_identity(home.path(), b"new body", true, true).is_err());
+        assert!(
+            hydrate(&store, &manifest)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
+        assert!(
+            request_identity(&store, b"new body", true)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
         assert!(!key_path.exists());
+        drop(store);
         home.close().unwrap();
     }
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn partial_list_and_object_transplants_fail_whole_envelope_authentication() {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let identity =
-            request_identity(home.path(), b"public host defaults", false, false).unwrap();
+        let store = test_store(home.path());
+        let identity = request_identity(&store, b"public host defaults", false)
+            .map(|(value, _owner)| value)
+            .unwrap();
         let context = binding(identity);
         let manifest = freeze(
-            home.path(),
+            &store,
             &context,
             OwnedFlowMcpSelection::HostDefault,
             &[server("one"), server("two")],
-            true,
         )
+        .map(|(value, _owner)| value)
         .unwrap();
         let mut value = serde_json::to_value(&manifest).unwrap();
         value["mcp"]["entries"].as_array_mut().unwrap().pop();
         let partial: OwnedFlowInputsManifest = serde_json::from_value(value).unwrap();
-        assert!(hydrate(home.path(), &partial).is_err());
+        assert!(
+            hydrate(&store, &partial)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
         let FrozenOwnedFlowMcp::Private { entries, .. } = manifest.mcp() else {
             panic!("private expected")
         };
@@ -453,29 +606,52 @@ mod tests {
         let first = parent.join(object_name(entries[0].object_ref()));
         let second = parent.join(object_name(entries[1].object_ref()));
         std::fs::write(&second, std::fs::read(first).unwrap()).unwrap();
-        assert!(hydrate(home.path(), &manifest).is_err());
+        assert!(
+            hydrate(&store, &manifest)
+                .map(|(value, _owner)| value)
+                .is_err()
+        );
+        drop(store);
         home.close().unwrap();
     }
     #[cfg(windows)]
     #[test]
     fn established_corrupt_host_key_never_regenerates_or_authenticates() {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let original = request_identity(home.path(), b"private request", true, true).unwrap();
+        let store = test_store(home.path());
+        let original = request_identity(&store, b"private request", true)
+            .map(|(value, _owner)| value)
+            .unwrap();
         let root = home.path().join("work-items/private-flow-inputs");
         let marker = std::fs::read(root.join(KEY_MARKER)).unwrap();
         std::fs::write(root.join(KEY_NAME), b"corrupt established key").unwrap();
-        for allow_new in [false, true] {
-            assert!(matches!(
-                request_identity(home.path(), b"private request", true, allow_new),
-                Err(WorkItemError::PrivateInputsRecoveryRequired)
-            ));
+        for attempt in 0..2 {
+            assert!(
+                matches!(
+                    request_identity(&store, b"private request", true).map(|(value, _owner)| value),
+                    Err(WorkItemError::PrivateInputsRecoveryRequired)
+                ),
+                "retry {attempt} recreated a corrupt established key"
+            );
             assert_eq!(
                 std::fs::read(root.join(KEY_NAME)).unwrap(),
                 b"corrupt established key"
             );
             assert_eq!(std::fs::read(root.join(KEY_MARKER)).unwrap(), marker);
         }
-        assert!(verify_request(home.path(), b"private request", &original).is_err());
+        assert!(
+            verify_request(
+                &store,
+                WorkItemOperationId::new(),
+                b"private request",
+                &original,
+                None,
+                None
+            )
+            .map(|_owner| ())
+            .is_err()
+        );
+        drop(store);
         home.close().unwrap();
     }
 
@@ -486,6 +662,7 @@ mod tests {
         const FILTER: &str = "work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed";
         if let Some(home) = std::env::var_os("SURGE_PRIVATE_CRASH_HOME") {
             let selected = std::env::var("SURGE_PRIVATE_CRASH_PHASE").unwrap();
+            let store = test_store(Path::new(&home));
             let root = std::path::PathBuf::from(&home).join("work-items/private-flow-inputs");
             let mut publication = 0;
             let hook = observation::register(move |phase, _| {
@@ -496,6 +673,7 @@ mod tests {
                     "before-marker-write" => phase == Phase::BeforeWrite,
                     "after-marker-rename" => phase == Phase::Published,
                     "after-marker-parent-flush" => phase == Phase::AfterParentFlush,
+                    "after-established-commit" => phase == Phase::PrivateEstablishmentCommitted,
                     _ => panic!("unknown marker boundary"),
                 };
                 if publication == 2 && matches {
@@ -505,7 +683,9 @@ mod tests {
                 }
                 Ok(())
             });
-            request_identity(Path::new(&home), b"private crash request", true, true).unwrap();
+            request_identity(&store, b"private crash request", true)
+                .map(|(value, _owner)| value)
+                .unwrap();
             drop(hook);
             panic!("marker death boundary not reached");
         }
@@ -513,14 +693,17 @@ mod tests {
             "before-marker-write",
             "after-marker-rename",
             "after-marker-parent-flush",
+            "after-established-commit",
         ] {
             let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let store = test_store(home.path());
             observation::crash_child(home.path(), FILTER, phase);
             let root = home.path().join("work-items/private-flow-inputs");
             let before = std::fs::read(root.join(KEY_NAME)).unwrap();
             let original_key = decode_key(&before).unwrap();
-            let identity = request_identity(home.path(), b"private crash request", true, false);
-            if phase == "before-marker-write" {
+            let identity = request_identity(&store, b"private crash request", true)
+                .map(|(value, _owner)| value);
+            if phase != "after-established-commit" {
                 assert!(matches!(
                     identity,
                     Err(WorkItemError::PrivateInputsRecoveryRequired)
@@ -531,10 +714,81 @@ mod tests {
                         .unwrap(),
                 };
                 assert_eq!(identity.unwrap(), expected);
-                verify_request(home.path(), b"private crash request", &expected).unwrap();
+                verify_request(
+                    &store,
+                    WorkItemOperationId::new(),
+                    b"private crash request",
+                    &expected,
+                    None,
+                    None,
+                )
+                .map(|_owner| ())
+                .unwrap();
             }
             assert_eq!(std::fs::read(root.join(KEY_NAME)).unwrap(), before);
+            drop(store);
             home.close().unwrap();
         }
     }
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn establishment_before_operation_survives_whole_namespace_loss_without_rekey() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let facts = {
+            let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+            let store = storage.work_items();
+            let original = request_identity(&store, b"unexposed original", true)
+                .map(|(value, _owner)| value)
+                .unwrap();
+            let root = home.path().join("work-items/private-flow-inputs");
+            let old_key = std::fs::read(root.join(KEY_NAME)).unwrap();
+            verify_request(
+                &store,
+                WorkItemOperationId::new(),
+                b"unexposed original",
+                &original,
+                None,
+                None,
+            )
+            .map(|_owner| ())
+            .unwrap();
+            let operations: i64 = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM owned_flow_operations", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let retired = home.path().join("original-private-namespace");
+            std::fs::rename(&root, &retired).unwrap();
+            let result = request_identity(&store, b"second private request", true)
+                .map(|(value, _owner)| value);
+            let refused = matches!(result, Err(WorkItemError::PrivateInputsRecoveryRequired));
+            let new_namespace_created = root.exists();
+            let original_untouched = std::fs::read(retired.join(KEY_NAME)).unwrap() == old_key;
+            (
+                operations,
+                refused,
+                new_namespace_created,
+                original_untouched,
+            )
+        };
+        home.close().unwrap();
+        assert_eq!(
+            facts.0, 0,
+            "request identity must precede any operation exposure"
+        );
+        assert!(
+            facts.1 && !facts.2 && facts.3,
+            "establishment vanished with whole namespace: refused={}, recreated={}, original_untouched={}",
+            facts.1,
+            facts.2,
+            facts.3
+        );
+    }
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
+#[path = "private_inputs_establishment_tests.rs"]
+mod establishment_tests;

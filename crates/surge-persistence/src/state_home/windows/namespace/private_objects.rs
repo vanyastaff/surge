@@ -136,6 +136,29 @@ impl PrivateFiles {
         namespace.verify()?;
         Ok(Self { namespace })
     }
+    pub(crate) fn verify(&self) -> NativeResult<()> {
+        self.namespace.verify()
+    }
+    pub(crate) fn identity(&self) -> NativeResult<Vec<Vec<u8>>> {
+        self.namespace.verify()?;
+        self.namespace
+            .files
+            .iter()
+            .map(|file| file_identity(file, true))
+            .collect()
+    }
+    pub(crate) fn retain(&self, name: &str) -> NativeResult<File> {
+        self.namespace.verify()?;
+        let file = self.opened(OsStr::new(name))?;
+        self.validate(&file)?;
+        self.namespace.verify()?;
+        Ok(file)
+    }
+    pub(crate) fn retained_identity(&self, file: &File) -> NativeResult<Vec<u8>> {
+        self.namespace.verify()?;
+        self.validate(file)?;
+        file_identity(file, false)
+    }
     pub(crate) fn read_optional(&self, name: &str) -> NativeResult<Option<Vec<u8>>> {
         self.namespace.verify()?;
         let name = OsStr::new(name);
@@ -488,6 +511,7 @@ pub(crate) mod observation {
         PreparationFileBarrier,
         PreparationParentBarrier,
         PrivateDirectoryBarrier,
+        PrivateEstablishmentCommitted,
     }
     type Callback = Box<dyn FnMut(Phase, &File) -> NativeResult<()>>;
     thread_local! { static OBSERVER: RefCell<Option<Callback>> = const { RefCell::new(None) }; }

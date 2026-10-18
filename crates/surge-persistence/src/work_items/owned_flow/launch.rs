@@ -1,5 +1,5 @@
 //! Real stable launch ownership and host-only runtime hydration capability.
-use super::{OwnedFlowSourceSnapshot, private_inputs};
+use super::{OwnedFlowSourceSnapshot, private_inputs, private_unavailable, refusal};
 use crate::work_items::start_preparation::secure_lock::{PreparationLock, PreparationLockKey};
 use crate::work_items::{
     self, LaunchLock, ReconciliationObservation, Result, WorkItemError, WorkItemLaunchClaim,
@@ -14,6 +14,7 @@ use surge_core::{RunId, id::WorkItemOperationId, mcp_config::McpServerRef, work_
 pub struct AuthenticatedOwnedFlowInputs {
     manifest: OwnedFlowInputsManifest,
     servers: Vec<McpServerRef>,
+    private_owner: Option<Arc<super::PrivateOwner>>,
 }
 impl std::fmt::Debug for AuthenticatedOwnedFlowInputs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +42,9 @@ impl AuthenticatedOwnedFlowInputs {
         binding: &WorkItemBinding,
         workspace: &Path,
     ) -> Result<()> {
+        if let Some(owner) = &self.private_owner {
+            owner.verify()?;
+        }
         if self.manifest.run() != run
             || self.manifest.binding() != binding
             || self.manifest.workspace().path != workspace
@@ -88,6 +92,7 @@ pub(super) fn independent_binding(
     }
     Ok(attempt)
 }
+#[derive(PartialEq)]
 struct StoredLaunch {
     operation: WorkItemOperationId,
     identity: String,
@@ -174,6 +179,91 @@ fn confirmed_continuation(
         && prior.state == ExecutionControlState::Suspended
         && prior.fence.as_ref() == Some(fence))
 }
+#[cfg(all(test, unix))]
+static CLAIM_GATES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<RunId, Arc<super::refusal_owner::ReadyGate>>>,
+> = std::sync::OnceLock::new();
+#[cfg(all(test, unix))]
+pub(super) fn claim_gate(run: RunId) -> Arc<super::refusal_owner::ReadyGate> {
+    let gate = Arc::new(super::refusal_owner::ReadyGate::default());
+    CLAIM_GATES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(run, gate.clone());
+    gate
+}
+#[cfg(all(test, unix))]
+fn pause_after_hydration(run: RunId) {
+    let gate = CLAIM_GATES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(&run);
+    if let Some(gate) = gate {
+        gate.enter();
+    }
+}
+fn preclaim_snapshot(
+    store: &WorkItemStore,
+    value: &StoredLaunch,
+    run: RunId,
+    observation: Option<ReconciliationObservation<'_>>,
+) -> Result<Option<(u64, private_unavailable::Wakes)>> {
+    let conn = store.pool.get()?;
+    if let Some(observed) = observation
+        && !observed.matches(&conn, &work_items::attempt(&conn, run)?)?
+    {
+        return Ok(None);
+    }
+    let attempt = association(&conn, value, run)?;
+    Ok(Some((
+        work_items::record(&conn, attempt.item)?.version,
+        private_unavailable::Wakes::read(&conn, run)?,
+    )))
+}
+fn settle_private_unavailable(
+    store: &WorkItemStore,
+    observed: &StoredLaunch,
+    guard: Arc<PreparationLock>,
+    observation: Option<ReconciliationObservation<'_>>,
+    snapshot: (u64, private_unavailable::Wakes),
+    error: WorkItemError,
+) -> Result<Option<WorkItemLaunchClaim>> {
+    let Some(observation) = observation else {
+        return Err(error);
+    };
+    let run = observation.attempt.run;
+    let prepared = refusal::reserve_refusal(store, guard.clone(), run)?;
+    let mut conn = store.pool.get()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let attempt = work_items::attempt(&tx, run)?;
+    if !observation.matches(&tx, &attempt)?
+        || work_items::record(&tx, attempt.item)?.version != snapshot.0
+        || private_unavailable::Wakes::read(&tx, run)? != snapshot.1
+    {
+        return Ok(None);
+    }
+    let current = stored(&tx, run)?;
+    if &current != observed {
+        return Err(WorkItemError::IndependentAcceptedDataInvalid);
+    }
+    association(&tx, &current, run)?;
+    guard.verify()?;
+    private_unavailable::attention(
+        &tx,
+        &attempt,
+        observation.control,
+        snapshot.0,
+        "owned_flow_private_inputs_unavailable",
+    )?;
+    snapshot.1.disarm(&tx, run)?;
+    guard.verify()?;
+    tx.commit()?;
+    guard.verify()?;
+    drop(prepared);
+    Err(error)
+}
 impl WorkItemStore {
     pub(in crate::work_items) fn claim_owned_flow_matching(
         &self,
@@ -194,10 +284,31 @@ impl WorkItemStore {
                 "owned Flow launch object replaced".into(),
             ));
         }
+        let Some(snapshot) = preclaim_snapshot(self, &value, run, observation)? else {
+            return Ok(None);
+        };
+        let private_owner = match private_inputs::hydrate(self, &value.inputs) {
+            Ok((_, owner)) => owner,
+            Err(error) if private_unavailable::known(&error) && observation.is_some() => {
+                return settle_private_unavailable(
+                    self,
+                    &value,
+                    Arc::new(guard),
+                    observation,
+                    snapshot,
+                    error,
+                );
+            },
+            Err(error) => return Err(error),
+        };
+        #[cfg(all(test, unix))]
+        if observation.is_some() {
+            pause_after_hydration(run);
+        }
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = stored(&tx, run)?;
-        if current.operation != value.operation || current.identity != value.identity {
+        if current != value {
             return Err(WorkItemError::Conflict(
                 "owned Flow launch ownership changed".into(),
             ));
@@ -216,6 +327,23 @@ impl WorkItemStore {
             ));
         }
         guard.verify()?;
+        if let Some(owner) = &private_owner
+            && let Err(error) = owner.verify_in(&tx)
+        {
+            tx.rollback()?;
+            drop(conn);
+            if observation.is_some() && private_unavailable::known(&error) {
+                return settle_private_unavailable(
+                    self,
+                    &value,
+                    Arc::new(guard),
+                    observation,
+                    snapshot,
+                    error,
+                );
+            }
+            return Err(error);
+        }
         let token = RunId::new().to_string();
         tx.execute(
             "UPDATE work_item_attempts SET claim_token=? WHERE run=? AND generation=?",
@@ -227,6 +355,7 @@ impl WorkItemStore {
                 guard: Arc::new(guard),
                 operation: value.operation,
                 identity: value.identity,
+                private_owner,
             },
             run,
             token,
@@ -241,6 +370,7 @@ impl WorkItemStore {
         let LaunchLock::OwnedFlow {
             operation,
             identity,
+            private_owner,
             ..
         } = &claim.lock
         else {
@@ -249,6 +379,17 @@ impl WorkItemStore {
             ));
         };
         let value = stored(conn, claim.run)?;
+        if matches!(value.inputs.mcp(), FrozenOwnedFlowMcp::Private { .. })
+            || matches!(
+                value.inputs.request_identity(),
+                OwnedFlowRequestIdentity::Hmac { .. }
+            )
+        {
+            let owner = private_owner
+                .as_ref()
+                .ok_or(WorkItemError::PrivateInputsRecoveryRequired)?;
+            owner.verify_in(conn)?;
+        }
         if *operation != value.operation
             || *identity != value.identity
             || association(conn, &value, claim.run)?.binding != claim.binding
@@ -266,7 +407,7 @@ impl WorkItemStore {
         let tx = conn.transaction()?;
         self.validate_claim_in(&tx, claim)?;
         pending_permission(&tx, &stored(&tx, claim.run)?, claim.run)?;
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -316,7 +457,7 @@ impl WorkItemStore {
                 ));
             }
         }
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -338,7 +479,13 @@ impl WorkItemStore {
             |r| r.get(0),
         )?;
         if exists {
-            Ok(Some(stored(&conn, run)?.inputs))
+            let inputs = stored(&conn, run)?.inputs;
+            drop(conn);
+            let (_, owner) = private_inputs::hydrate(self, &inputs)?;
+            if let Some(owner) = owner {
+                owner.verify()?;
+            }
+            Ok(Some(inputs))
         } else {
             Ok(None)
         }
@@ -353,7 +500,7 @@ impl WorkItemStore {
         }
         self.validate_claim(claim)?;
         let value = stored(&*self.pool.get()?, claim.run)?;
-        let servers = private_inputs::hydrate(&self.home, &value.inputs)?;
+        let (servers, private_owner) = private_inputs::hydrate(self, &value.inputs)?;
         self.validate_claim(claim)?;
         let current = stored(&*self.pool.get()?, claim.run)?;
         if current.inputs != value.inputs {
@@ -362,6 +509,7 @@ impl WorkItemStore {
         Ok(Some(AuthenticatedOwnedFlowInputs {
             manifest: value.inputs,
             servers,
+            private_owner,
         }))
     }
     /// Mark startup after the owning host has verified the actual unique journal manifest.
@@ -380,7 +528,7 @@ impl WorkItemStore {
         }
         pending_permission(&tx, &value, claim.run)?;
         tx.execute("UPDATE owned_flow_operations SET intent_state='started' WHERE run=? AND intent_state='pending'",[claim.run.to_string()])?;
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         tx.commit()?;
         Ok(())
     }

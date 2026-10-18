@@ -9,6 +9,7 @@ use surge_core::{
 #[derive(Clone, Copy)]
 pub(in crate::work_items) enum PreparationLockKey {
     Task(WorkItemId),
+    PrivateEstablishment,
     FlowOperation(WorkItemOperationId),
     FlowLaunch {
         operation: WorkItemOperationId,
@@ -19,6 +20,7 @@ impl PreparationLockKey {
     fn name(self) -> String {
         match self {
             Self::Task(item) => item.to_string(),
+            Self::PrivateEstablishment => "flow-private-establishment-v1".into(),
             Self::FlowOperation(operation) => format!("flow-operation-v1-{operation}"),
             Self::FlowLaunch { operation, run } => format!("flow-launch-v1-{operation}-{run}"),
         }

@@ -145,7 +145,7 @@ impl WorkItemStore {
                 ));
             }
         }
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         if serde_json::to_value(&current)? != serde_json::to_value(observed)?
             || control.as_ref() != observed_control
             || !reconciliation_state_eligible(current.state, control.as_ref())
@@ -154,7 +154,7 @@ impl WorkItemStore {
         }
         self.validate_claim_in(&tx, claim)?;
         write_reconciliation_result(&tx, claim, current, control, update)?;
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         tx.commit()?;
         Ok(ReconciliationSettlement::Settled)
     }

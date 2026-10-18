@@ -7,12 +7,15 @@ mod refusal_delivery;
 pub use source_snapshot::CapturedSource as OwnedFlowCapturedSource;
 mod launch;
 mod preparation;
+mod private_establishment;
 mod private_files;
 mod private_inputs;
+mod private_unavailable;
 pub use launch::AuthenticatedOwnedFlowInputs;
 pub use preparation::{
     OwnedFlowAcceptance, OwnedFlowPreparation, OwnedFlowPreparationResult, OwnedFlowSourceSnapshot,
 };
+pub(in crate::work_items) use private_establishment::PrivateOwner;
 
 #[cfg(test)]
 mod tests;

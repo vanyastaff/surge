@@ -147,10 +147,33 @@ enum LaunchLock {
         guard: std::sync::Arc<start_preparation::secure_lock::PreparationLock>,
         operation: surge_core::id::WorkItemOperationId,
         identity: String,
+        private_owner: Option<std::sync::Arc<owned_flow::PrivateOwner>>,
     },
 }
 impl WorkItemLaunchClaim {
     fn verify_lock(&self) -> Result<()> {
+        self.verify_native_lock()?;
+        if let LaunchLock::OwnedFlow {
+            private_owner: Some(owner),
+            ..
+        } = &self.lock
+        {
+            owner.verify()?;
+        }
+        self.verify_native_lock()
+    }
+    fn verify_lock_in(&self, conn: &Connection) -> Result<()> {
+        self.verify_native_lock()?;
+        if let LaunchLock::OwnedFlow {
+            private_owner: Some(owner),
+            ..
+        } = &self.lock
+        {
+            owner.verify_in(conn)?;
+        }
+        self.verify_native_lock()
+    }
+    fn verify_native_lock(&self) -> Result<()> {
         match &self.lock {
             #[cfg(not(windows))]
             LaunchLock::Legacy { file, path } => verify_lock_identity(file, path),
@@ -921,7 +944,7 @@ impl WorkItemStore {
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
         let value = self.validate_claim_in(&tx, claim)?;
-        claim.verify_lock()?;
+        claim.verify_lock_in(&tx)?;
         tx.commit()?;
         Ok(value)
     }

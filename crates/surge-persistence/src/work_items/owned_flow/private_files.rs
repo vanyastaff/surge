@@ -165,6 +165,34 @@ mod platform {
             }
             Ok(())
         }
+        pub(super) fn identity(&self) -> Result<Vec<Vec<u8>>> {
+            self.verify()?;
+            self.dirs
+                .iter()
+                .map(|file| {
+                    let m = file.metadata().map_err(|_| unsafe_location())?;
+                    Ok([m.dev().to_le_bytes(), m.ino().to_le_bytes()].concat())
+                })
+                .collect()
+        }
+        pub(super) fn retain(&self, name: &str) -> Result<File> {
+            self.verify()?;
+            let file = open(
+                self.parent()?,
+                &component(name)?,
+                OFlag::O_RDONLY,
+                Mode::empty(),
+            )
+            .map_err(|_| WorkItemError::PrivateInputsRecoveryRequired)?;
+            file_identity(&file)?;
+            self.verify()?;
+            Ok(file)
+        }
+        pub(super) fn retained_identity(&self, file: &File) -> Result<Vec<u8>> {
+            self.verify()?;
+            let (device, inode, _) = file_identity(file)?;
+            Ok([device.to_le_bytes(), inode.to_le_bytes()].concat())
+        }
         pub(super) fn read(&self, name: &str) -> Result<Vec<u8>> {
             self.verify()?;
             let c = component(name)?;
@@ -290,6 +318,18 @@ mod platform {
                 .map(Self)
                 .map_err(error)
         }
+        pub(super) fn verify(&self) -> Result<()> {
+            self.0.verify().map_err(error)
+        }
+        pub(super) fn identity(&self) -> Result<Vec<Vec<u8>>> {
+            self.0.identity().map_err(error)
+        }
+        pub(super) fn retain(&self, name: &str) -> Result<std::fs::File> {
+            self.0.retain(name).map_err(error)
+        }
+        pub(super) fn retained_identity(&self, file: &std::fs::File) -> Result<Vec<u8>> {
+            self.0.retained_identity(file).map_err(error)
+        }
         pub(super) fn read(&self, name: &str) -> Result<Vec<u8>> {
             self.0.read(name).map_err(error)
         }
@@ -317,6 +357,48 @@ impl PrivateFiles {
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             let _ = (home, create);
+            Err(WorkItemError::PrivateInputsUnsupported)
+        }
+    }
+    pub(super) fn verify(&self) -> Result<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            self.inner.verify()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            Err(WorkItemError::PrivateInputsUnsupported)
+        }
+    }
+    pub(super) fn identity(&self) -> Result<Vec<Vec<u8>>> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            self.inner.identity()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            Err(WorkItemError::PrivateInputsUnsupported)
+        }
+    }
+    pub(super) fn retain(&self, name: &str) -> Result<std::fs::File> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            self.inner.retain(name)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            let _ = name;
+            Err(WorkItemError::PrivateInputsUnsupported)
+        }
+    }
+    pub(super) fn retained_identity(&self, file: &std::fs::File) -> Result<Vec<u8>> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            self.inner.retained_identity(file)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            let _ = file;
             Err(WorkItemError::PrivateInputsUnsupported)
         }
     }

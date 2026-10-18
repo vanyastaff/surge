@@ -103,7 +103,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-acp/src/quota_observation.rs` | Typed subscription quota evidence; distinguishes unsupported probes, unknown availability and actual rate-limit observations. |
 | `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
 | `crates/surge-persistence/src/work_items/start_preparation.rs` | Exclusive host Start preparation lease, immutable snapshot fences and atomic reservation finalization; private `secure_lock.rs` owns descriptor-checked per-item OS locks. |
-| `crates/surge-persistence/src/work_items/owned_flow/` | Provisional operation and atomic acceptance (`preparation.rs`), stable launch/hydration (`launch.rs`), private objects/authentication (`private_files.rs`, `private_inputs.rs`) and source capture (`source_snapshot.rs`). |
+| `crates/surge-persistence/src/work_items/owned_flow/` | Provisional operation and atomic acceptance (`preparation.rs`), launch/hydration (`launch.rs`), private objects/authentication (`private_files.rs`, `private_inputs.rs`), retained namespace/key/marker establishment (`private_establishment.rs`) and source capture (`source_snapshot.rs`). |
 | `crates/surge-persistence/src/work_items/recipe_capacity.rs` | Registry opening epochs and current exact-recipe exhaustion inspection; newer comparable openings supersede prior evidence. |
 | `crates/surge-orchestrator/src/recipe_admission.rs` | Facade decorator that commits a unique registry opening barrier before provider RPC and checks its returned identity. |
 | `crates/surge-persistence/src/work_items/control.rs` | Generation-fenced task suspension/continuation intents and acknowledgments. |

@@ -283,7 +283,7 @@ pub enum ReservationDisposition {
 }
 
 fn owner_fence(tx: &Transaction<'_>, claim: &WorkItemLaunchClaim) -> Result<()> {
-    claim.verify_lock()?;
+    claim.verify_lock_in(tx)?;
     let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_attempts a JOIN work_items i ON i.id=a.item WHERE a.run=? AND a.generation=? AND a.claim_token=? AND a.item=? AND i.active_run=a.run AND i.generation=a.generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','suspended'))", params![claim.run.to_string(), claim.binding.generation, claim.token,claim.binding.item.to_string()], |row|row.get(0))?;
     if !valid {
         return Err(WorkItemError::Conflict("obsolete recovery owner".into()));

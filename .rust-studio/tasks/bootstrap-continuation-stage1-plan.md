@@ -472,7 +472,7 @@ feature repair count remains0/3. Production hold/release remains root-owned.
 ## Canonical review-repair record
 
 Feature: bootstrap-owned-continuation; all stages0–7 and phases5a/5b share limit3.
-Current count: **2/3 repair dispatches**. Home10 remains closed/exhausted separately.
+Current count: **5/5 repair dispatches**, with explicit human extensions for repairs4 and5. Home10 remains closed/exhausted separately.
 Baseline39673ff5172adbb391691d68487cf0352c060180; initial90-file freeze digest
 864e6d1b5f9b5dc4fac5ca2b55851baa1a08c997026dfc81c3a858bda1b4eec2, manifest
 71043550c9bfa334509f3f444776a866adc0e3709700435f5a2c545cc42eab15.
@@ -549,3 +549,140 @@ Stage0 readiness + Stage1 foundation may be committed as a local dependency-clos
 checkpoint. This does not close the feature or deliberately failing outer test.
 Stages2–7, authenticatedseedhydration, endpoint, nativeUI, same real Sol habit
 tracker/history/all8tasks, followup and platform acceptance remain open. No push/merge.
+
+### Stage2 marker contract finding — pending third repair release
+
+Current count remains2/3; no production marker fix released. Root's independent
+owning-contract review found blocking CONT-S2-MARKER-01: parent353–354 explicitly
+requires missing/replaced marker refusal; current inflight Stage2Substep1 stores
+namespace/key identities but verifies marker content only. Identical-byte native
+replacement is unproved and current owner assessment identifies the gap.
+Stage2ownerplan f1e267143979fce52d2a8a5e3bcdd3dc63660979c59141ff272b8b73802ec25d
+underspecified this parent obligation without waiving it. Source is951da616 plus
+Substep1f441d69f…15-file candidate; fullintegrationcompile was interrupted for
+pool-correction, strictboth nowgreen oncurrentcandidate, nofeaturecompletion.
+
+Read-only clarification and current-code RED probes do not release production
+fixes. A narrow marker-native-identity amendment is being drafted for independent
+critic/security pre-code review. Once accepted and the actual RED is captured,
+root will record3/3 HERE BEFORE dispatching the implementation correction. This
+is conservatively counted as review-driven repair, not renamed initialauthoring
+or a newstage budget. Further automatic repair beyond3 is not authorized.
+Original Stage2initialauthoring and builder-owned test/compile inner loops remain
+recorded separately; no earlier count reset or hidden retrospective pass is made.
+
+### Repair3 dispatch — CONT-S2-MARKER-01
+
+Recorded BEFORE marker production release to the same continuation_builder.
+Shared limit3/3 is now exhausted across stages0–7 and bothreviewphases; no automatic
+fourth repair. Home10 remains separate/closed; no counter reset by newstage.
+Source/destination: codex/results-planning-history, HEAD951da616, inflight
+Stage2Substep1f441d69f…15-file production candidate plus genuine marker tests.
+Current-source RED session77418 exit100:3run,1healthycontrolPASS,2FAIL; actual
+Unix native dev/inode IDs differ, displaced originals retained, rows/key/private
+bytes unchanged and owners settled before assertions. Receipt SHAa85870ae8c367c6dfdd16fa85f6b4a3a23cce37c372c76cb8e875d8620b7bf6e.
+
+Narrow owner amendment004885c6a4add9510b2f8d08bed4e6d5f85a3f6014826fb2de0748db38523f13
+accepted by owner plus independent focusedcritic/security. Production correction:
+retain/persist/verify exact marker native identity through existing PrivateFiles
+owner; atomic write-once markerID with key/digest/Established in uncommitted0035;
+complete/decode/native/platform/crash/legacy closure; preserve connection-aware
+verification. Windows actual held-handle denial positive plus separatecoldloss/
+replacementrefusal. No newprotocol/API/core/seedactivation/sandbox/capability.
+Refresh focused/full affected gates, exacttwo pendingRED filters and separate
+currentexpectedREDs, then PAUSE for independent Substep1/repairreview and local
+commit consideration. No selfacceptance/commit/pushmerge/fullfeaturecompletion.
+Amendment draft wording initialshaping/count2 was historical; THIS canonical
+record and explicit3/3dispatch supersede it. Any further review-driven production
+correction requires explicit extension, with a concrete reviewed proposal.
+
+
+### Repair4 dispatch — private-unavailable recovery and held-connection closure
+
+Recorded BEFORE implementation dispatch to the same usable continuation_builder.
+The human explicitly answered: “Да, разрешаю четвёртый раунд в этом объёме”.
+This extends the ONE shared feature budget to4/4; no reset by stage/review/worker.
+Reviewed proposal: bootstrap-continuation-fourth-round-proposal.md, SHA256
+`d81f9ff85d8d61294aa5d80230afd857a9ef6caf38d77d3c040c0f6e5152fde4`.
+Owner, independent critic and security verdicts ACCEPTABLE; receipt:
+`stage2/fourth-round-pre-code-review.json`.
+Source: HEAD951da616f8de86cd3e1898ecbbfbbb95e5d4dee1 plus paused16-file
+stage2/substep1 source digest8cfb8896c695c6e84b750b337e04d6fce53e6b5e8232ddbe28af4cfe823ba1c4.
+Blocking evidence: current full gate4199PASS/2FAIL out4201; cold private-input
+failure refuses dispatch but leaves attempt Suspended. Additional static held-
+transaction verify_lock re-entry sites require actual bounded-pool RED first.
+Authorized closure: exact-fenced Attention under original OS guard, separate typed
+private-unavailable result, no fake Ready/private claim or permanent mismatch
+receipt; identified held-connection verification call closure; RED→GREEN including
+all8 fault cases and positive/race controls; current full gates and independent
+5a then5b/API reviews; local stage commit only after closure. No push/merge.
+Original retained habit tracker, history/all8 tasks/exactgpt-6.1-sol remain required
+for later stages, not replaced by this repair. No fourth-round success claimed yet.
+Any further review-driven implementation after this dispatch requires explicit
+new human mandate; verification/review of repair4 remains allowed.
+
+
+### Repair4 verification and review boundary
+
+Final21-source digest62572fdb2864e17f7f2b4a2b5399263b4297c1f215e11a7b3e3884fde8ed6cd4.
+Current affected eight-package4210/4210PASS (25existingignored+2 separately real
+pending RED), workspace strictboth/recovery3/restart2/doctests/docs/fmt/diff
+recorded in stage2/repair4/gate-summary.json. Phase5a ACCEPTABLE; SECURITY and
+API COMPLETE, DOMAIN initially COMPLETE. Phase5b QUALITY NEEDS WORK with
+CONT-S2-QUALITY-01 blocking: if-let pooled-read temporary in private_establishment
+open successful arm overlaps existing() second pool borrow. Existing max2/hold1
+tests enter open/hydrate before holding external connection; no dynamic actual
+reopen reproduction yet. Static exact call/lifetime evidence requires narrow
+adjudication/plan, not removal of owner checks. No fifth fix/dispatch authorized.
+Source/test/Cargo writer remains PAUSED; local commit HOLD pending quality closure.
+Shared count4/4 EXHAUSTED. Evidence phase5a-review.json / phase5b-review.json;
+current proposal/review work is read-only/documentary and does not reset count.
+
+
+### Repair5 dispatch — CONT-S2-QUALITY-01 established-open lifetime
+
+Recorded BEFORE dispatch to the same usable continuation_builder. Human explicit
+answer: “Да, разрешаю пятый раунд в этом объёме”. One shared budget extended to5/5;
+no reset across stages/reviews. Independently accepted fifth-round proposal SHA256
+b234d9d84a3822efbe69511ef318fe1f5efcda372be4bb075897f52c73dce55d.
+Baseline HEAD951da616f8de86cd3e1898ecbbfbbb95e5d4dee1 and21-source digest
+62572fdb2864e17f7f2b4a2b5399263b4297c1f215e11a7b3e3884fde8ed6cd4 verified unchanged.
+Only confirmed if-let481→existing341 redundant pooled checkout lifetime is
+authorized: real bounded public reopen/replay/claim/hydration RED first, explicit
+connection scope/drop before native helper; preserve all native/stored/guard checks,
+healthy/refusal controls, affected full gates and independent5a→focused5b/API.
+Withdrawn lazy-boolean461 claim excluded. Local dependency-closed commit only after
+review closure; no push/merge. Prior4210PASS remains historical until refreshed.
+History/all8 habit tasks/exactgpt-6.1-sol and later feature stages stay required.
+No implementation success claimed; any sixth review repair requires new mandate.
+
+
+### Repair5 ongoing-build mechanical fixture closure
+
+Before5a/5b, current fullgate4212/4213PASS exposed existing child readiness marker
+publication race (empty vs busy). All3 new bounded-public pool regressions passed.
+Unchangedfocused1PASS does not clear fullfailure. Owning architect and independent
+security accepted test-only protocol correction; root records this as mechanical
+failure inside ongoingrepair5, not a sixthreviewrepair or countreset. Only test
+marker complete atomic publication and bounded liveness/complete-token observation
+may change; exact busy/held,10sdeadline, native exclusion/deathreacquire and actual
+child joins preserved. No prod/pool/API/schema/skip/retry change. Details:
+stage2/repair5/mechanical-readiness-scope-decision.json. Fresh fullgates/review
+remainrequired, no success claimed. Shared count5/5 remains exhausted.
+
+
+### Stage2 Substep1 closure after repair5
+
+Current21-source digest e1f08dce2310a96953db25ed7e00876a75e53ac2dd50d3129557bdebf612c069.
+Phase5a ACCEPTABLE; focused5b QUALITY/SECURITY/DOMAIN/API COMPLETE, no blockers;
+CONT-S2-QUALITY-01 resolved. Prior wholeSubstep1 unchanged acceptance carries.
+Current affected eight-package4213/4213PASS,27skips=25existingignored+2 separate
+expectedRED. Fullworkspace strictboth, focused30, ownership5 independentprocesses,
+sameprocess3, ignoredrecovery3/restart2, doctestsboth, normaldocsboth/fmt/diff PASS.
+Normaldocs58exactbaselinewarnings NOT strictclean; APItoolsabsent, manualAPIgate.
+MacOS-only receipts; noWindows/Linux/MSRV/nativeprovideracceptance. Evidence
+stage2/repair5/{builder-handoff.md,gate-summary.json,phase5a-review.json,phase5b-review.json}.
+Root may commit entire dependency-closed Substep1 only; no push/merge. FullStage2
+Substeps2/3 seedstorage/pins/deletion and laterstages remainOPEN, two genuine
+pendingREDs retain that boundary. Source/test/Cargo lease PAUSED. Shared5/5 stays
+exhausted acrossfeature stages/reviews, no reset or sixthrepair dispatch.
