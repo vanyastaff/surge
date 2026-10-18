@@ -686,3 +686,175 @@ Root may commit entire dependency-closed Substep1 only; no push/merge. FullStage
 Substeps2/3 seedstorage/pins/deletion and laterstages remainOPEN, two genuine
 pendingREDs retain that boundary. Source/test/Cargo lease PAUSED. Shared5/5 stays
 exhausted acrossfeature stages/reviews, no reset or sixthrepair dispatch.
+
+
+### Planned Stage2 Substeps2/3 — conservative legacy deletion scope
+
+Root explicitly accepted positive physical deletion only for NEW runs coordinated
+before first namespace creation. Legacy history/reads/ordinary execution/continuation/
+pins remain; Legacy physical delete returns DeletionCoordinationUnavailable without
+filesystem/SQL mutation. Writer reopen cannot upgrade Legacy; missing/replaced
+NewControlled origin/control cannot downgrade. No extra database-FD lock bridge.
+See Stage2 appended criterion record and bootstrap-continuation-stage2-seed-storage-amendment.md
+for exact owner/reader/deletion closure and independent pre-code review gates.
+Human NO new UI: Stage6 new native UI deferred, existing history support retained;
+same habit/all8/codex-acp/exact gpt-6.1-sol evidence remains OPEN and mandatory.
+This is initial planned feature design, not implementation release. Shared5/5 stays
+EXHAUSTED across stages/reviews; no sixth dispatch/reset.
+
+### Initial implementation release — Stage2 Substeps2/3
+
+Root verified final amendment SHA52701bf84d8d55f71dbe2838bc3924fb3f1d22cf055242e72ca0a5c2799c5797
+and API draft a406200881a547707378a91cd07b67591b2c2587733bc078ba4d9dd6652b2fa5.
+Owner/critic/security ACCEPTABLE; API ACCEPTABLE with exact final contention erratum
+verified by root. Initial planned feature implementation released to existing builder
+from committed77c5f128. Complete storage/reservation/seal/read-back/private pins/
+controlled deletion closure together; no intermediate completed slice/commit.
+Genuine RED then GREEN and full applicable gates/review remain mandatory.
+No new UI, no original habit runtime/SQL/provider changes yet, no push/merge.
+This release is not a review repair; shared repair count remains5/5 EXHAUSTED.
+No later review-blocker repair may be dispatched automatically without a revised mandate.
+Evidence: stage2/substeps2-3-pre-code-review.json. Outer same-history/all8/exactSol
+acceptance remains OPEN.
+
+### Initial Stage2 policy fork — human decision pending
+
+Persistence preflight632run/631PASS/1FAIL: static_event_pages_read_latest_live_wal_and_keep_cold_files_unchanged.
+New retained run-read admission performs registry READ_ONLY origin/control queries;
+cold SQLite registry coordination creates WAL/SHM paths forbidden by the prior test.
+No safe existing no-create helper was found; immutable/nolock/cleanup shortcuts rejected.
+Default and all-features workspace/all-target strict clippy PASS on source-pre-policy
+45-path digest34e5d083bec44938bf44ea32a44a89b4eedfa96809eb64438185e15b35ee4af0.
+Source/assertion behavior PAUSED. Root presented explicit contract choice to human.
+Proposal bootstrap-continuation-registry-readonly-policy-proposal.md SHA
+9cc9cf434e5865ad5e6155ebc4f51ef08863288870595f9c7fc48b44140ab64d,132lines.
+Owner/critic ACCEPTABLE as proposal; security CONT-S2-POLICY-COMPANIONS-01 resolved
+by exact no-follow identity/security checks and nonvacuous cold ordering.
+Proposal/review is NOT permission. Await explicit response before any policy/test edit.
+Independent already-authorized docs/fmt/compile checks may finish. No source runtime/
+provider or original habit change. Same8/exactSol/outer backend remains OPEN.
+Shared review-repair count remains5/5 EXHAUSTED; no sixth dispatch/reset.
+
+Pre-policy independent checks terminal: strict workspace/all-target default and
+all-features PASS; docs both modes exit0 with58 baseline warning/file multiset
+(no added/removed, line shifts allowed); doctests both modes5PASS/1existingignored;
+fmt/diffPASS. Root independently checked all45 source hashes unchanged against
+source-pre-policy.json. Behavioral631/632 +1FAIL remains; no full-nextest,5a/5b,
+stage completion or provider claim. Sole builder Rust/test/Cargo lease PAUSED;
+all commands settled, pending explicit human policy choice. No push/merge/cleanup.
+
+### Human approval received — registry coordination sidecars only
+
+Human explicitly answered: «Да, разрешить только эти SQLite sidecars (рекомендую)».
+Approved exact132-line proposal SHA9cc9cf434e5865ad5e6155ebc4f51ef08863288870595f9c7fc48b44140ab64d.
+Release only the reviewed narrow policy/tests/docs and safe exec observer; preserve
+all existing durable bytes/native identities/security/control checks and live WAL
+freshness. New WAL has no frames; only exact checked registry companions allowed.
+No new UI, production VFS/locking/cleanup bypass, push or merge. Required full gates,
+independent5a/5b and local completed-stage commit remain part of authorization.
+This resolves the initial feature contract fork, not a sixth review repair; shared
+5/5 EXHAUSTED remains unchanged. Earlier failing receipt is retained. Same habit
+history/all8/exact codex-acp/gpt-6.1-sol and later backend stages remain OPEN.
+
+
+### Initial Stage2 definitive gate — typed unpublished-opening closure
+
+Frozen48 source digest a616325e49a6d21ae4bd97586def56999d121958bbdb81191a89a854e2498f3d
+full8 gate:4261run/4260PASS/1FAIL/26skipped, exit100; failure archive retained at
+stage2/substeps2-3/gate-v1-failure/. Only failure: daemon owned_flow_mcp_recovery::
+manifest_binding_refusal_must_persist_attention_after_actual_wake. Real producer
+reserves latest Opening with NULL database identity, then creates DB and binds
+identity through exact opening/epoch/state guarded UPDATE. Reader currently decodes
+NULL as Vec, laundering a truthful intermediate state into a generic SQL error.
+Owner/API/security independently ACCEPTABLE the bounded initial-build correction:
+validate original control/current route/latest version/state/route first, both Unix
+and Windows. Only genuine latest Opening+NULL returns OpeningNotReady{run_id}
+before run SQLite open. Missing/malformed/unsupported/foreign/nonOpening NULL must
+remain permanent refusals; no older-row fallback or synthetic Busy/success.
+Use crate-private typed admitted-open seam retaining all existing checks. Inspection
+read_event_range/read_folded propagate StorageError::RunOpening(OpenError); manual
+From<OpenError> preserves only genuine Sqlite(e) as old StorageError::Sqlite(e).
+Public exhaustive error variants are MAJOR-on-paper under accepted active-dev policy;
+no wire/schema/public signature/capability change. Readiness test polls only exact
+same-run typed transition plus its existing genuine missing-events schema window,
+under unchanged deadline. Deterministic paused-producer RED before fix, bound read
+GREEN, malformed/latest-row negatives, conversion and both caller proof required.
+Root releases only this corrective closure to sole existing builder, then fresh full
+gates/source freeze and independent5a then5b. No new UI/provider/user runtime/push/
+merge. Current work is ongoing initial feature build, not post-review repair6;
+shared review repair count5/5 EXHAUSTED unchanged. All8/same history/exactSol and
+original outer acceptance remain OPEN; failed gate cannot be reported green.
+
+
+### Stage2 Substeps2/3 current implementation — independent5a dispatched
+
+Root independently verified49source hashes at gate-source-v2 digest
+2c44436fc185ebe824aacfe45136630bff23605dc4836a2c6676a10394252b16 againstHEAD77c5f128.
+Builder current-handoff-index.json records4264/4264fullPASS,26skips=25existingignored+
+1exactplannedouterREDfilter; strictworkspace/alltargets bothPASS, ignoredrecovery3/
+restart2PASS, docs both58baseline warnings, doctestsboth5PASS/1existingignored,
+fmt/diffPASS. APItoolsabsent/manualinventoryonly. AuthenticouterRED remainsOPEN at
+missingendpoint; no real provider/appcompletion/Windows/Linux/MSRVclaim.
+Sole source/test/Cargo writer PAUSED; all command handles settled. Independent
+continuation_stage1_spec reviews whole dependency-closed Substeps2/3 vs77c5f128,
+including new untracked files and approved scope changes. Phase5b NOT started.
+Builder native Windows reader watchpoint (artifacts-missing fallback may create)
+forwarded as evidence to5a, not yet a finding or authorized repair. Shared5/5
+EXHAUSTED remains; no postreview repair dispatch without revisedmandate. No local
+completedstagecommit/push/merge yet; samehabit/history/all8/exactSol remainsOPEN.
+
+
+### Phase5a evidence correction and confirmed native blocker — no repair release
+
+Independent5a verified listed49hashes but found omitted tracked modified daemon
+owned_flow_mcp_recovery.rs. Builder corrected metadata ONLY: current-source-complete
+accounts50paths/digest5a53f4c609e45c35f41b4386bb13405d68020e6d8506c6c7c38d124e29424e03.
+Original49receipt/copy retained. Omitted fixture92231bytes/SHA
+aa7e25e4548a3792d5a8e3534995c8c4299542877b2dc48df178523380991f2e reconstructed
+from retainedbeforefix+single recordedreplacement, exactcurrentmatch. There was NO
+contemporaneous complete50-source freeze; do not claim it. Tool chronology is the
+limited evidence for the fixture, not invented hash timestamps. Current index is
+corrected; no Rust/test/Cargo writes or rerun occurred. Final5a pending.
+Independent5a confirmed Windows reader creates missing artifacts through existing
+RunRoot::run(run,false) fallback before latestopening auth. This violates exact
+no-other-path-mutation contract; not advisory/platformunverified-only. Root requests
+read-only bounded correction PLAN, not implementation. Shared5/5EXHAUSTED; no sixth
+repair dispatched. Need explicit revisedmandate before repair. 5b held, no completed
+stagecommit/push/merge; realhabit/all8/exactSol remainsOPEN.
+
+
+### Phase5a final NEEDS WORK — sixth proposal reviewed, awaiting human
+
+Final independent5a: ONE blocker CONT-S2-SPEC-01(P2), Windows refused read creates
+missingartifacts before native/latest-row authentication. No other concrete spec
+blocker found in whole Stage2 Substeps2/3. Evidence omission accounted as limitation,
+not fabricated fullgate-time50proof. Phase5b remainsPENDING, no completedstagecommit.
+Bounded sixth proposal bootstrap-continuation-readonly-opening-sixth-round-proposal.md
+145lines/SHAa96bb70661d582dacdb836408e181e4dcaf8e6dbabcea8cb77838a45ee815376:
+private Windows existing_run(existing_childONLY), readcaller migration, writable
+creator unchanged; nativepublicinspection RED→GREEN, positivecreate/readcontrols,
+fullcomplete-source/gates/focusedreviews. Owner/critic/security ACCEPTABLE finalplan.
+CurrenthostmacOS/no evidencednativeWindowsrunner; implementation requires human6
+AND nativeexecutionpath, no WindowsRED/PASS inferred. Localexisting ci.yml supports
+workflow_dispatch/windows-latest. Root will explicitly ask optional publication of
+ONEdiagnosticcodexbranch+existingCI dispatch fornativeproof; NO currentpublication
+permission, no newworkflow/PR/merge, eachcheckpointreviewablefirst. KnownouterRED
+separate fromfocusednativepass, neveroverallgreenCIclaim. Approval/execution still
+PENDING; solebuilder remainsPAUSED, no repair/source/test/build dispatch occurred.
+Shared5/5EXHAUSTED unchanged. Samehabit/history/all8/exactSol/newUIexclusion remain.
+
+
+### Human sixth-round authorization received — counted before dispatch
+
+Human explicitly answered: «Да: шестой раунд, диагностическая ветка и Windows CI»
+to exact145line proposal SHAa96bb70661d582dacdb836408e181e4dcaf8e6dbabcea8cb77838a45ee815376.
+Repair6 is now dispatched/counted6/6, ONLY CONT-S2-SPEC-01 and required regressions,
+fullchecks/independentreview/localcommit. NativeWindows path is existing GitHub CI:
+user also authorizes publication of ONEdiagnosticcodexbranch+existingworkflowdispatch,
+noPR/merge/newworkflow/newUI/userhabit/runtime/providerchanges. NativeWindowsRED
+must be actualobserved before productionfix; locallyreviewable test-only diagnostic
+checkpoint may be committed/pushed to obtain that evidence, not a completedstage.
+Root checked gh auth/remote readonly; successfulrunner/dispatch notyetclaimed.
+Priorfull50sourceclosure and incomplete49gateprovenance retained. Samehistory/all8/
+codex-acp/exactgpt-6.1-sol remain goal afternecessarybackendstages. No repair7 or
+permissionreset inferred. Solebuilder receives test-only firstlease; root ownsGit/CI.

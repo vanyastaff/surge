@@ -788,6 +788,12 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         continue;
                     },
+                    Err(surge_persistence::runs::StorageError::RunOpening(
+                        surge_persistence::runs::OpenError::OpeningNotReady { run_id },
+                    )) if run_id == receipt.run => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    },
                     Err(error) => panic!("unexpected initial journal inspection error: {error:?}"),
                 };
                 if let RunDatabaseInspection::Present { events } = history.database

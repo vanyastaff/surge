@@ -7,6 +7,10 @@ use crate::{ContentHash, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::Duration;
+mod continuation;
+pub use continuation::{
+    ContinuationInputRequirement, ContinuationInputsFields, OwnedFlowInputPurpose,
+};
 
 /// Malformed public projection, without echoing submitted values.
 #[derive(Debug, thiserror::Error)]
@@ -114,7 +118,7 @@ fn is_hex_identity(value: &str) -> bool {
 pub enum OwnedFlowRequestIdentity {
     /// Digest of a request with no private transport payload in its body.
     PlainPublic { digest: ContentHash },
-    /// Host-authenticated identity when explicit transport bytes occur in the body.
+    /// Host-authenticated explicit transport bytes or required private continuation inputs.
     Hmac { tag: HmacSha256Tag },
 }
 
@@ -383,6 +387,8 @@ pub struct OwnedFlowInputsManifest {
     workspace_owner: RunId,
     workspace: WorkItemWorkspace,
     mcp: FrozenOwnedFlowMcp,
+    #[serde(skip_serializing_if = "OwnedFlowInputPurpose::is_ordinary")]
+    purpose: OwnedFlowInputPurpose,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -395,22 +401,50 @@ struct RawInputsManifest {
     workspace_owner: RunId,
     workspace: WorkItemWorkspace,
     mcp: FrozenOwnedFlowMcp,
+    #[serde(default)]
+    purpose: RawPurpose,
+}
+#[derive(Default)]
+enum RawPurpose {
+    #[default]
+    Absent,
+    Present(OwnedFlowInputPurpose),
+}
+impl<'de> Deserialize<'de> for RawPurpose {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        OwnedFlowInputPurpose::deserialize(deserializer).map(Self::Present)
+    }
 }
 impl TryFrom<RawInputsManifest> for OwnedFlowInputsManifest {
     type Error = OwnedFlowManifestError;
     fn try_from(raw: RawInputsManifest) -> Result<Self, Self::Error> {
-        if raw.schema_version != 1 {
-            return Err(OwnedFlowManifestError::Identity);
+        match (raw.schema_version, raw.purpose) {
+            (1, RawPurpose::Absent) => Self::new(
+                raw.operation,
+                raw.request_identity,
+                raw.binding,
+                raw.run,
+                raw.workspace_owner,
+                raw.workspace,
+                raw.mcp,
+            ),
+            (2, RawPurpose::Present(OwnedFlowInputPurpose::Continuation { source })) => {
+                let OwnedFlowRequestIdentity::Hmac { tag } = raw.request_identity else {
+                    return Err(OwnedFlowManifestError::RequestIdentity);
+                };
+                Self::new_continuation(ContinuationInputsFields {
+                    operation: raw.operation,
+                    request_auth_tag: tag,
+                    binding: raw.binding,
+                    run: raw.run,
+                    workspace_owner: raw.workspace_owner,
+                    workspace: raw.workspace,
+                    mcp: raw.mcp,
+                    source,
+                })
+            },
+            _ => Err(OwnedFlowManifestError::Identity),
         }
-        Self::new(
-            raw.operation,
-            raw.request_identity,
-            raw.binding,
-            raw.run,
-            raw.workspace_owner,
-            raw.workspace,
-            raw.mcp,
-        )
     }
 }
 impl OwnedFlowInputsManifest {
@@ -427,15 +461,56 @@ impl OwnedFlowInputsManifest {
         workspace: WorkItemWorkspace,
         mcp: FrozenOwnedFlowMcp,
     ) -> Result<Self, OwnedFlowManifestError> {
-        if operation == WorkItemOperationId::nil()
-            || run == RunId::nil()
-            || workspace_owner == RunId::nil()
-            || binding.item == crate::id::WorkItemId::nil()
-            || binding.revision == 0
-            || binding.generation == 0
+        let value = Self {
+            schema_version: 1,
+            operation,
+            request_identity,
+            binding,
+            run,
+            workspace_owner,
+            workspace,
+            mcp,
+            purpose: OwnedFlowInputPurpose::Ordinary,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    /// Construct structural continuation metadata; storage authority remains separate.
+    ///
+    /// # Errors
+    /// Rejects malformed identities, source correlation, workspaces or MCP snapshots.
+    pub fn new_continuation(
+        fields: ContinuationInputsFields,
+    ) -> Result<Self, OwnedFlowManifestError> {
+        let value = Self {
+            schema_version: 2,
+            operation: fields.operation,
+            request_identity: OwnedFlowRequestIdentity::Hmac {
+                tag: fields.request_auth_tag,
+            },
+            binding: fields.binding,
+            run: fields.run,
+            workspace_owner: fields.workspace_owner,
+            workspace: fields.workspace,
+            mcp: fields.mcp,
+            purpose: OwnedFlowInputPurpose::Continuation {
+                source: fields.source,
+            },
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    fn validate(&self) -> Result<(), OwnedFlowManifestError> {
+        if self.operation == WorkItemOperationId::nil()
+            || self.run == RunId::nil()
+            || self.workspace_owner == RunId::nil()
+            || self.binding.item == crate::id::WorkItemId::nil()
+            || self.binding.revision == 0
+            || self.binding.generation == 0
         {
             return Err(OwnedFlowManifestError::Identity);
         }
+        let workspace = &self.workspace;
         if !workspace.repository.is_absolute()
             || !workspace.checkout.is_absolute()
             || !workspace.path.is_absolute()
@@ -449,32 +524,47 @@ impl OwnedFlowInputsManifest {
         {
             return Err(OwnedFlowManifestError::Workspace);
         }
-        mcp.validate()?;
-        if matches!(
-            (&mcp, &request_identity),
-            (
-                FrozenOwnedFlowMcp::Empty { .. },
-                OwnedFlowRequestIdentity::Hmac { .. }
-            ) | (
-                FrozenOwnedFlowMcp::Private {
-                    selection: OwnedFlowMcpSelection::Explicit,
-                    ..
-                },
-                OwnedFlowRequestIdentity::PlainPublic { .. }
-            )
-        ) {
-            return Err(OwnedFlowManifestError::RequestIdentity);
+        self.mcp.validate()?;
+        match &self.purpose {
+            OwnedFlowInputPurpose::Ordinary => {
+                if self.schema_version != 1 {
+                    return Err(OwnedFlowManifestError::Identity);
+                }
+                if matches!(
+                    (&self.mcp, &self.request_identity),
+                    (
+                        FrozenOwnedFlowMcp::Empty { .. },
+                        OwnedFlowRequestIdentity::Hmac { .. }
+                    ) | (
+                        FrozenOwnedFlowMcp::Private {
+                            selection: OwnedFlowMcpSelection::Explicit,
+                            ..
+                        },
+                        OwnedFlowRequestIdentity::PlainPublic { .. }
+                    )
+                ) {
+                    return Err(OwnedFlowManifestError::RequestIdentity);
+                }
+            },
+            OwnedFlowInputPurpose::Continuation { source } => {
+                if self.schema_version != 2
+                    || self.run == source.source_run()
+                    || self.run == source.source_bootstrap()
+                    || self.workspace_owner != source.source_run()
+                {
+                    return Err(OwnedFlowManifestError::Identity);
+                }
+                if !matches!(self.request_identity, OwnedFlowRequestIdentity::Hmac { .. }) {
+                    return Err(OwnedFlowManifestError::RequestIdentity);
+                }
+            },
         }
-        Ok(Self {
-            schema_version: 1,
-            operation,
-            request_identity,
-            binding,
-            run,
-            workspace_owner,
-            workspace,
-            mcp,
-        })
+        Ok(())
+    }
+    /// Why the host requires these inputs; this value alone grants no authority.
+    #[must_use]
+    pub fn purpose(&self) -> &OwnedFlowInputPurpose {
+        &self.purpose
     }
     /// Public snapshot schema, independent of journal schema.
     #[must_use]
@@ -766,5 +856,245 @@ mod tests {
             tag
         );
         assert!(!format!("{tag:?}").contains("090909"));
+    }
+
+    fn fixed_ordinary_wire() -> String {
+        let value = r#"{"schema_version":1,"operation":"00000000000000000000000002","request_identity":{"kind":"plain_public","digest":"sha256:6237bce3e575db2b91926e0b27e552e14dd7cf88fd97bb26f0d34f9e37906d0b"},"binding":{"item":"00000000000000000000000001","revision":1,"requirements_hash":"sha256:a81b42f3f5ec4667ebd343091a86883409542b5ca1caa59daf064c86d0a6c4cb","generation":1},"run":"00000000000000000000000003","workspace_owner":"00000000000000000000000004","workspace":{"repository":"/repo/.git","checkout":"/repo","path":"/repo/.worktrees/flow","ownership":"flow-owner","branch":"codex/flow","base_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"mcp":{"kind":"empty","selection":"explicit"}}"#;
+        if cfg!(windows) {
+            value.replace("/repo", r"C:\repo")
+        } else {
+            value.into()
+        }
+    }
+    #[test]
+    fn ordinary_v1_fixed_bytes_and_empty_hmac_rejection_remain_exact() {
+        let fixed = fixed_ordinary_wire();
+        let value: OwnedFlowInputsManifest = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap(), fixed);
+        let mut raw: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        raw["request_identity"] = serde_json::json!({"kind":"hmac","tag":"hmac-sha256:0303030303030303030303030303030303030303030303030303030303030303"});
+        assert!(serde_json::from_value::<OwnedFlowInputsManifest>(raw).is_err());
+        assert!(matches!(
+            OwnedFlowInputsManifest::new(
+                value.operation,
+                OwnedFlowRequestIdentity::Hmac {
+                    tag: HmacSha256Tag::from_bytes([3; 32]),
+                },
+                value.binding,
+                value.run,
+                value.workspace_owner,
+                value.workspace,
+                value.mcp
+            ),
+            Err(OwnedFlowManifestError::RequestIdentity)
+        ));
+    }
+    fn continuation_fields(selection: OwnedFlowMcpSelection) -> ContinuationInputsFields {
+        let ordinary = manifest(FrozenOwnedFlowMcp::empty(selection));
+        ContinuationInputsFields {
+            operation: ordinary.operation,
+            request_auth_tag: HmacSha256Tag::from_bytes([3; 32]),
+            binding: ordinary.binding,
+            run: ordinary.run,
+            workspace_owner: ordinary.workspace_owner,
+            workspace: ordinary.workspace,
+            mcp: ordinary.mcp,
+            source: ContinuationInputRequirement::new(
+                "00000000000000000000000005".parse().unwrap(),
+                ordinary.workspace_owner,
+            )
+            .unwrap(),
+        }
+    }
+    #[test]
+    fn continuation_constructor_preserves_both_real_empty_selections() {
+        for selection in [
+            OwnedFlowMcpSelection::Explicit,
+            OwnedFlowMcpSelection::HostDefault,
+        ] {
+            let value =
+                OwnedFlowInputsManifest::new_continuation(continuation_fields(selection)).unwrap();
+            assert_eq!(value.schema_version(), 2);
+            assert_eq!(value.mcp(), &FrozenOwnedFlowMcp::empty(selection));
+            assert!(matches!(
+                value.request_identity(),
+                OwnedFlowRequestIdentity::Hmac { .. }
+            ));
+            assert!(
+                matches!(value.purpose(), OwnedFlowInputPurpose::Continuation { source } if source.source_run() == value.workspace_owner())
+            );
+            assert_eq!(
+                serde_json::from_str::<OwnedFlowInputsManifest>(
+                    &serde_json::to_string(&value).unwrap()
+                )
+                .unwrap(),
+                value
+            );
+        }
+    }
+    fn fixed_continuation_wire() -> String {
+        let ordinary = fixed_ordinary_wire();
+        let ordinary = ordinary.replace("\"schema_version\":1", "\"schema_version\":2");
+        let start = ordinary.find("\"request_identity\":").unwrap();
+        let end = ordinary[start..].find(",\"binding\"").unwrap() + start;
+        let mut value = ordinary[..start].to_string();
+        value.push_str(r#""request_identity":{"kind":"hmac","tag":"hmac-sha256:0303030303030303030303030303030303030303030303030303030303030303"}"#);
+        value.push_str(&ordinary[end..ordinary.len() - 1]);
+        value.push_str(r#","purpose":{"kind":"continuation","source":{"source_bootstrap":"00000000000000000000000005","source_run":"00000000000000000000000004"}}}"#);
+        value
+    }
+    #[test]
+    fn continuation_fixed_v2_wire_decodes_and_reencodes_exactly() {
+        let fixed = fixed_continuation_wire();
+        let value: OwnedFlowInputsManifest = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap(), fixed);
+        assert_eq!(
+            value,
+            OwnedFlowInputsManifest::new_continuation(continuation_fields(
+                OwnedFlowMcpSelection::Explicit
+            ))
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn continuation_hostile_wire_cannot_erase_the_required_purpose() {
+        let fixed = fixed_continuation_wire();
+        let good: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        let mut cases = Vec::new();
+        for version in [0, 1, 3] {
+            let mut v = good.clone();
+            v["schema_version"] = version.into();
+            cases.push(v);
+        }
+        for purpose in [
+            serde_json::Value::Null,
+            serde_json::json!({"kind":"ordinary"}),
+            serde_json::json!({"kind":"future"}),
+        ] {
+            let mut v = good.clone();
+            v["purpose"] = purpose;
+            cases.push(v);
+        }
+        let mut absent = good.clone();
+        absent.as_object_mut().unwrap().remove("purpose");
+        cases.push(absent);
+        let mut public = good.clone();
+        public["request_identity"] = serde_json::json!({"kind":"plain_public","digest":ContentHash::compute(b"public request")});
+        cases.push(public);
+        for field in ["source_bootstrap", "source_run"] {
+            let mut nil = good.clone();
+            nil["purpose"]["source"][field] = serde_json::json!(RunId::nil());
+            cases.push(nil);
+            let mut successor = good.clone();
+            successor["purpose"]["source"][field] = good["run"].clone();
+            cases.push(successor);
+        }
+        let mut owner = good.clone();
+        owner["workspace_owner"] = good["run"].clone();
+        cases.push(owner);
+        let mut unknown = good.clone();
+        unknown["purpose"]["source"]["unknown"] = true.into();
+        cases.push(unknown);
+        let mut v1null: serde_json::Value = serde_json::from_str(&fixed_ordinary_wire()).unwrap();
+        v1null["purpose"] = serde_json::Value::Null;
+        cases.push(v1null);
+        for invalid in cases {
+            assert!(serde_json::from_value::<OwnedFlowInputsManifest>(invalid).is_err());
+        }
+        let duplicate = fixed.replacen(
+            "\"schema_version\":2",
+            "\"schema_version\":2,\"schema_version\":2",
+            1,
+        );
+        assert!(serde_json::from_str::<OwnedFlowInputsManifest>(&duplicate).is_err());
+        let duplicate = fixed.replacen(
+            "\"source_run\":",
+            "\"source_run\":\"00000000000000000000000004\",\"source_run\":",
+            1,
+        );
+        assert!(serde_json::from_str::<OwnedFlowInputsManifest>(&duplicate).is_err());
+    }
+    #[test]
+    fn continuation_correlations_preserve_equal_source_roles_and_private_mcp() {
+        let same: RunId = "00000000000000000000000004".parse().unwrap();
+        let source = ContinuationInputRequirement::new(same, same).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ContinuationInputRequirement>(
+                &serde_json::to_string(&source).unwrap()
+            )
+            .unwrap(),
+            source
+        );
+        for pair in [(RunId::nil(), same), (same, RunId::nil())] {
+            assert!(matches!(
+                ContinuationInputRequirement::new(pair.0, pair.1),
+                Err(OwnedFlowManifestError::Identity)
+            ));
+        }
+        let mut fields = continuation_fields(OwnedFlowMcpSelection::Explicit);
+        fields.source = source;
+        fields.mcp = private(vec![entry(0, "fixed-private", None)]);
+        let value = OwnedFlowInputsManifest::new_continuation(fields).unwrap();
+        assert_eq!(
+            serde_json::from_str::<OwnedFlowInputsManifest>(
+                &serde_json::to_string(&value).unwrap()
+            )
+            .unwrap(),
+            value
+        );
+        let event = crate::EventPayload::OwnedFlowInputsBound {
+            manifest: Box::new(value),
+        };
+        let wrapper = crate::VersionedEventPayload::new(event.clone());
+        assert_eq!(
+            crate::migrations::migrate_payload(
+                wrapper.schema_version(),
+                &serde_json::to_vec(&wrapper).unwrap()
+            )
+            .unwrap(),
+            event
+        );
+    }
+    fn frozen_v1_reader(bytes: &str) -> Result<OwnedFlowInputsManifest, serde_json::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct V1 {
+            schema_version: u32,
+            operation: WorkItemOperationId,
+            request_identity: OwnedFlowRequestIdentity,
+            binding: WorkItemBinding,
+            run: RunId,
+            workspace_owner: RunId,
+            workspace: WorkItemWorkspace,
+            mcp: FrozenOwnedFlowMcp,
+        }
+        let raw: V1 = serde_json::from_str(bytes)?;
+        if raw.schema_version != 1 {
+            return Err(serde::de::Error::custom(
+                "unsupported legacy manifest schema",
+            ));
+        }
+        OwnedFlowInputsManifest::new(
+            raw.operation,
+            raw.request_identity,
+            raw.binding,
+            raw.run,
+            raw.workspace_owner,
+            raw.workspace,
+            raw.mcp,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+    #[test]
+    fn frozen_legacy_reader_accepts_v1_and_refuses_v2_without_upgrade() {
+        // The frozen old decoder shape is a structural compatibility oracle, not an old binary.
+        let legacy = frozen_v1_reader(&fixed_ordinary_wire()).unwrap();
+        assert_eq!(legacy.schema_version(), 1);
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            fixed_ordinary_wire()
+        );
+        assert!(frozen_v1_reader(&fixed_continuation_wire()).is_err());
     }
 }

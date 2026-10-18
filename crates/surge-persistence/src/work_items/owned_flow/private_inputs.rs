@@ -28,6 +28,8 @@ pub(super) struct InputBinding {
     run: RunId,
     workspace_owner: RunId,
     workspace: WorkItemWorkspace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    continuation: Option<ContinuationInputRequirement>,
 }
 impl InputBinding {
     pub(super) fn from_manifest(manifest: &OwnedFlowInputsManifest) -> Self {
@@ -38,6 +40,10 @@ impl InputBinding {
             run: manifest.run(),
             workspace_owner: manifest.workspace_owner(),
             workspace: manifest.workspace().clone(),
+            continuation: match manifest.purpose() {
+                OwnedFlowInputPurpose::Ordinary => None,
+                OwnedFlowInputPurpose::Continuation { source } => Some(source.clone()),
+            },
         }
     }
     pub(super) fn new(
@@ -55,9 +61,30 @@ impl InputBinding {
             run,
             workspace_owner,
             workspace,
+            continuation: None,
         }
     }
+    pub(super) fn with_purpose(mut self, purpose: &super::OwnedFlowPreparationPurpose) -> Self {
+        self.continuation = purpose.source().cloned();
+        self
+    }
     pub(super) fn manifest(&self, mcp: FrozenOwnedFlowMcp) -> Result<OwnedFlowInputsManifest> {
+        if let Some(source) = &self.continuation {
+            let OwnedFlowRequestIdentity::Hmac { tag } = &self.request_identity else {
+                return Err(WorkItemError::PrivateInputsCorrupt);
+            };
+            return OwnedFlowInputsManifest::new_continuation(ContinuationInputsFields {
+                operation: self.operation,
+                request_auth_tag: tag.clone(),
+                binding: self.binding.clone(),
+                run: self.run,
+                workspace_owner: self.workspace_owner,
+                workspace: self.workspace.clone(),
+                mcp,
+                source: source.clone(),
+            })
+            .map_err(|_| WorkItemError::PrivateInputsCorrupt);
+        }
         OwnedFlowInputsManifest::new(
             self.operation,
             self.request_identity.clone(),
@@ -89,12 +116,12 @@ struct EnvelopeObject {
     envelope_ref: OwnedFlowObjectRef,
 }
 
-fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+pub(super) fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(value).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
     value.sort_all_objects();
     serde_json::to_vec(&value).map_err(|_| WorkItemError::PrivateInputsCorrupt)
 }
-fn authentication(key: &[u8; 32], domain: &[u8], bytes: &[u8]) -> Result<HmacSha256Tag> {
+pub(super) fn authentication(key: &[u8; 32], domain: &[u8], bytes: &[u8]) -> Result<HmacSha256Tag> {
     let mut mac = Hmac256::new_from_slice(key).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
     mac.update(domain);
     mac.update(bytes);
@@ -102,14 +129,19 @@ fn authentication(key: &[u8; 32], domain: &[u8], bytes: &[u8]) -> Result<HmacSha
         mac.finalize().into_bytes().into(),
     ))
 }
-fn verify(key: &[u8; 32], domain: &[u8], bytes: &[u8], tag: &HmacSha256Tag) -> Result<()> {
+pub(super) fn verify(
+    key: &[u8; 32],
+    domain: &[u8],
+    bytes: &[u8],
+    tag: &HmacSha256Tag,
+) -> Result<()> {
     let mut mac = Hmac256::new_from_slice(key).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
     mac.update(domain);
     mac.update(bytes);
     mac.verify_slice(tag.as_bytes())
         .map_err(|_| WorkItemError::PrivateInputsCorrupt)
 }
-fn random_reference() -> Result<OwnedFlowObjectRef> {
+pub(super) fn random_reference() -> Result<OwnedFlowObjectRef> {
     OwnedFlowObjectRef::new(hex::encode(rand::random::<[u8; 32]>()))
         .map_err(|_| WorkItemError::PrivateInputsCorrupt)
 }
@@ -256,14 +288,32 @@ pub(super) fn freeze(
     binding: &InputBinding,
     selection: OwnedFlowMcpSelection,
     servers: &[McpServerRef],
+    retained: Option<Arc<PrivateOwner>>,
 ) -> Result<(OwnedFlowInputsManifest, Option<Arc<PrivateOwner>>)> {
-    if servers.is_empty() {
+    if servers.is_empty() && binding.continuation.is_none() {
         return Ok((
             binding.manifest(FrozenOwnedFlowMcp::empty(selection))?,
             None,
         ));
     }
-    let owner = private_establishment::open(store, None, None)?;
+    let owner = match retained {
+        Some(owner) => owner,
+        None if binding.continuation.is_some() => {
+            return Err(WorkItemError::PrivateInputsRecoveryRequired);
+        },
+        None => private_establishment::open(store, None, None)?,
+    };
+    if binding.continuation.is_some() {
+        let _verified =
+            super::seed_objects::require_sealed(store, binding.operation, owner.clone())?;
+    }
+    if servers.is_empty() {
+        owner.verify()?;
+        return Ok((
+            binding.manifest(FrozenOwnedFlowMcp::empty(selection))?,
+            Some(owner),
+        ));
+    }
     let files = owner.files();
     let key = owner.key();
     let mut entries = Vec::with_capacity(servers.len());
@@ -311,6 +361,7 @@ pub(super) fn hydrate(
     store: &WorkItemStore,
     manifest: &OwnedFlowInputsManifest,
 ) -> Result<(Vec<McpServerRef>, Option<Arc<PrivateOwner>>)> {
+    super::purpose::refuse_execution(store, manifest.run())?;
     if !matches!(manifest.mcp(), FrozenOwnedFlowMcp::Private { .. })
         && !matches!(
             manifest.request_identity(),
@@ -460,7 +511,7 @@ mod tests {
             OwnedFlowMcpSelection::Explicit,
             OwnedFlowMcpSelection::HostDefault,
         ] {
-            let manifest = freeze(&store, &context, selection, &[])
+            let manifest = freeze(&store, &context, selection, &[], None)
                 .map(|(value, _owner)| value)
                 .unwrap();
             assert_eq!(manifest.mcp().selection(), selection);
@@ -510,9 +561,15 @@ mod tests {
             server("first"),
             server("second").with_startup_timeout(Some(std::time::Duration::from_secs(20))),
         ];
-        let manifest = freeze(&store, &context, OwnedFlowMcpSelection::Explicit, &servers)
-            .map(|(value, _owner)| value)
-            .unwrap();
+        let manifest = freeze(
+            &store,
+            &context,
+            OwnedFlowMcpSelection::Explicit,
+            &servers,
+            None,
+        )
+        .map(|(value, _owner)| value)
+        .unwrap();
         assert_eq!(
             hydrate(&store, &manifest)
                 .map(|(value, _owner)| value)
@@ -588,6 +645,7 @@ mod tests {
             &context,
             OwnedFlowMcpSelection::HostDefault,
             &[server("one"), server("two")],
+            None,
         )
         .map(|(value, _owner)| value)
         .unwrap();
@@ -792,3 +850,6 @@ mod tests {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
 #[path = "private_inputs_establishment_tests.rs"]
 mod establishment_tests;
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
+pub(super) use establishment_tests::bounded_private_store;

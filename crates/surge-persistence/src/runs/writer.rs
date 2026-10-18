@@ -214,9 +214,16 @@ async fn writer_loop(
         lease.namespace.clone(),
     )?;
     #[cfg(not(windows))]
-    let mut conn = Connection::open_with_flags(
+    let mut conn = super::connection::RetainedConnection::open_controlled(
         &cfg.events_db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        lease
+            .authority
+            .use_owner()
+            .as_ref()
+            .map(crate::runs::host_settlement::control::RunUseOwner::database)
+            .transpose()
+            .map_err(|error| WriterError::Io(std::io::Error::other(error.to_string())))?,
     )?;
     crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)?;
     let mut checkpoint_interval = tokio::time::interval(std::time::Duration::from_secs(

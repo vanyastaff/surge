@@ -130,6 +130,7 @@ impl WorkItemStore {
         update: ReconciliationUpdate<'_>,
     ) -> Result<ReconciliationSettlement> {
         claim.verify_lock()?;
+        super::owned_flow::refuse_execution(self, claim.run())?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = attempt(&tx, claim.run())?;

@@ -44,10 +44,7 @@
 
 pub use error::{PersistenceError, Result};
 
-/// SQLite pool manager; Windows connections retain checked native ownership.
-#[cfg(not(windows))]
-pub use r2d2_sqlite::SqliteConnectionManager;
-#[cfg(windows)]
+/// SQLite pool manager retaining checked run ownership through actual connection close.
 pub use runs::connection::{
     OwnedSqliteConnectionManager as SqliteConnectionManager,
     RetainedConnection as OwnedSqliteConnection,

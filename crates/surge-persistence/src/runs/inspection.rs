@@ -206,7 +206,10 @@ impl Storage {
     /// Read at most 256 existing journal rows after a watermark, without storage opening.
     /// `root` is the runs directory. `None` means absent, distinct from present-empty.
     /// Pages are independent read transactions; sequence gaps stay visible to compilers.
-    /// Existing ephemeral SHM lock metadata may change; durable journal bytes are read-only.
+    /// Durable DB/WAL/content bytes and existing native identities remain unchanged.
+    /// Normal SQLite reads of the checked registry may create only its empty/header-only
+    /// `registry.sqlite-wal` and coordination `registry.sqlite-shm` companions. Existing
+    /// SHM lock bytes may change; no application writes, migration or cleanup occurs.
     pub async fn inspect_existing_events_after(
         root: std::path::PathBuf,
         run_id: RunId,
@@ -378,7 +381,7 @@ fn read_event_range(
     after: Option<i64>,
     limit: i64,
 ) -> Result<Vec<ReadEvent>, StorageError> {
-    let mut connection = crate::runs::connection::RetainedConnection::read_only(path)?;
+    let mut connection = crate::runs::connection::RetainedConnection::read_only_admitted(path)?;
     let transaction = connection.transaction()?;
     let query = if after.is_some() {
         "SELECT seq, timestamp, kind, payload, schema_version FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?2"
@@ -879,7 +882,7 @@ fn read_folded_with_gate_receipt(
 > {
     use surge_core::EventPayload as E;
     let mut receipt = None;
-    let mut connection = crate::runs::connection::RetainedConnection::read_only(path)?;
+    let mut connection = crate::runs::connection::RetainedConnection::read_only_admitted(path)?;
     let transaction = connection.transaction()?;
     let mut state = surge_core::RunState::not_started();
     let mut semantic_guard =

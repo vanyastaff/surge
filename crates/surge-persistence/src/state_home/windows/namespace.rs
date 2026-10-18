@@ -1155,3 +1155,358 @@ mod tests {
         }
     }
 }
+
+/// Permanent outside-run native control, compatible with all shared run users.
+pub(crate) struct NativeRunControl {
+    home: Namespace,
+    parent: Namespace,
+    file: File,
+    component: std::ffi::OsString,
+}
+impl NativeRunControl {
+    pub(crate) fn acquire(
+        home: &Path,
+        run: surge_core::RunId,
+        create: bool,
+        exclusive: bool,
+    ) -> NativeResult<Self> {
+        let home = Namespace::existing_parent(home)?;
+        let parent = if create {
+            home.child(OsStr::new("run-controls"), false)?
+        } else {
+            home.existing_child(OsStr::new("run-controls"), false)?
+        };
+        let component = std::ffi::OsString::from(format!("{run}.lock"));
+        let file = if create {
+            let (file, created) = parent.runtime_file(&component, false)?;
+            if !created {
+                return Err(refusal("unbound existing run control"));
+            }
+            file
+        } else {
+            let directory = parent
+                .files
+                .last()
+                .ok_or_else(|| refusal("missing controls parent"))?;
+            relative(directory, &component, false, None, true)?
+        };
+        let locked = if exclusive {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        };
+        locked.map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => NativeError::Busy,
+            std::fs::TryLockError::Error(error) => NativeError::from(error),
+        })?;
+        let owner = Self {
+            home,
+            parent,
+            file,
+            component,
+        };
+        owner.verify()?;
+        if create {
+            flush_complete(&owner.file)?;
+            owner.parent.flush_parent()?;
+        }
+        Ok(owner)
+    }
+    pub(crate) fn verify(&self) -> NativeResult<()> {
+        self.home.verify()?;
+        self.parent.verify()?;
+        self.parent.verify_database(&self.component, &self.file)?;
+        self.parent.owner.validate_directory(
+            &self.file,
+            DirectoryPolicy::Protected { inheritable: false },
+        )?;
+        if self.file.metadata()?.len() != 0 {
+            return Err(refusal("run control payload changed"));
+        }
+        Ok(())
+    }
+    pub(crate) fn identities(
+        &self,
+    ) -> NativeResult<crate::runs::host_settlement::control::NativeControlIdentities> {
+        self.verify()?;
+        Ok((
+            self.home.object_identity()?,
+            self.parent.object_identity()?,
+            file_identity(&self.file, false)?,
+        ))
+    }
+}
+
+// Deletion opens only after EXCLUSIVE outside use exclusion has settled all SQLite owners.
+pub(crate) struct DeletionNamespace {
+    home: Namespace,
+    runs: Namespace,
+    directory: Option<File>,
+    component: OsString,
+    path: PathBuf,
+}
+fn deletion_open(parent: &File, name: &OsStr, directory: bool) -> NativeResult<File> {
+    use windows::Win32::Storage::FileSystem::{DELETE, FILE_GENERIC_READ, FILE_SHARE_DELETE};
+    relative_access_with_sharing(
+        parent,
+        name,
+        directory,
+        None,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        false,
+    )
+}
+fn deletion_observe(parent: &File, name: &OsStr, directory: bool) -> NativeResult<File> {
+    use windows::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_SHARE_DELETE};
+    relative_access_with_sharing(
+        parent,
+        name,
+        directory,
+        None,
+        FILE_GENERIC_READ | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        false,
+    )
+}
+fn deletion_missing(error: &NativeError) -> bool {
+    matches!(
+        error,
+        NativeError::Open(
+            windows::Win32::Foundation::STATUS_OBJECT_NAME_NOT_FOUND
+                | windows::Win32::Foundation::STATUS_OBJECT_PATH_NOT_FOUND
+        )
+    )
+}
+impl DeletionNamespace {
+    pub(crate) fn existing(
+        home: &Path,
+        run: surge_core::RunId,
+    ) -> Result<Self, crate::runs::error::OpenError> {
+        let path = home.join("runs").join(run.to_string());
+        let home = Namespace::existing_parent(home)?;
+        let runs = home.existing_child(OsStr::new("runs"), true)?;
+        let component = OsString::from(run.to_string());
+        let parent = runs
+            .files
+            .last()
+            .ok_or_else(|| refusal("missing runs parent"))?;
+        let directory = match deletion_observe(parent, &component, true) {
+            Ok(file) => Some(file),
+            Err(error) if deletion_missing(&error) => None,
+            Err(error) => return Err(error.into()),
+        };
+        let owner = Self {
+            home,
+            runs,
+            directory,
+            component,
+            path,
+        };
+        owner.verify()?;
+        Ok(owner)
+    }
+    pub(crate) fn verify(&self) -> Result<(), crate::runs::error::OpenError> {
+        self.home.verify()?;
+        self.runs.verify()?;
+        let parent = self
+            .runs
+            .files
+            .last()
+            .ok_or_else(|| refusal("missing runs parent"))?;
+        match (
+            &self.directory,
+            deletion_observe(parent, &self.component, true),
+        ) {
+            (Some(held), Ok(named)) if inspect(held, true)? == inspect(&named, true)? => {
+                self.runs
+                    .owner
+                    .validate_directory(held, DirectoryPolicy::Protected { inheritable: true })?;
+                Ok(())
+            },
+            (None, Err(error)) if deletion_missing(&error) => Ok(()),
+            (_, Err(error)) => Err(error.into()),
+            _ => Err(refusal("original deletion root changed").into()),
+        }
+    }
+    pub(crate) fn outside_parent(
+        &self,
+    ) -> Result<(Vec<u8>, Vec<u8>), crate::runs::error::OpenError> {
+        self.home.verify()?;
+        self.runs.verify()?;
+        Ok((self.home.object_identity()?, self.runs.object_identity()?))
+    }
+    pub(crate) fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+    pub(crate) fn absent(&self) -> Result<bool, crate::runs::error::OpenError> {
+        self.verify()?;
+        Ok(self.directory.is_none())
+    }
+    fn parent(&self, path: &Path) -> Result<(File, OsString), crate::runs::error::OpenError> {
+        self.verify()?;
+        let mut parent = self
+            .directory
+            .as_ref()
+            .ok_or_else(|| refusal("deletion root absent"))?
+            .try_clone()?;
+        let mut parts = path.components().peekable();
+        while let Some(component) = parts.next() {
+            let Component::Normal(component) = component else {
+                return Err(refusal("invalid relative deletion name").into());
+            };
+            if parts.peek().is_none() {
+                return Ok((parent, component.to_owned()));
+            }
+            parent = deletion_observe(&parent, component, true)?;
+        }
+        Err(refusal("empty deletion child").into())
+    }
+    pub(crate) fn entry(
+        &self,
+        path: &Path,
+    ) -> Result<
+        Option<crate::runs::host_settlement::deletion::NativeEntry>,
+        crate::runs::error::OpenError,
+    > {
+        self.verify()?;
+        if path.as_os_str().is_empty() {
+            return self
+                .directory
+                .as_ref()
+                .map(|file| {
+                    crate::runs::host_settlement::deletion::read_native_entry(
+                        file,
+                        file_identity(file, true).map_err(crate::runs::error::OpenError::from)?,
+                        true,
+                    )
+                })
+                .transpose();
+        }
+        let metadata = match std::fs::symlink_metadata(self.path.join(path)) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let (parent, name) = self.parent(path)?;
+        let file = deletion_observe(&parent, &name, metadata.is_dir())?;
+        crate::runs::host_settlement::deletion::read_native_entry(
+            &file,
+            file_identity(&file, metadata.is_dir())?,
+            metadata.is_dir(),
+        )
+        .map(Some)
+    }
+    pub(crate) fn remove(
+        &mut self,
+        path: &Path,
+        expected: &crate::runs::host_settlement::deletion::NativeEntry,
+        parent_identity: &[u8],
+    ) -> Result<(), crate::runs::error::OpenError> {
+        self.verify()?;
+        let file = if path.as_os_str().is_empty() {
+            if self.runs.object_identity()? != parent_identity {
+                return Err(refusal("outside deletion parent changed").into());
+            }
+            let parent = self
+                .runs
+                .files
+                .last()
+                .ok_or_else(|| refusal("missing runs parent"))?;
+            deletion_open(parent, &self.component, true)?
+        } else {
+            let (parent, name) = self.parent(path)?;
+            if file_identity(&parent, true)? != parent_identity {
+                return Err(refusal("deletion child parent changed").into());
+            }
+            deletion_open(&parent, &name, expected.directory)?
+        };
+        if file_identity(&file, expected.directory)? != expected.identity {
+            return Err(refusal("deletion child identity changed").into());
+        }
+        use windows::Win32::Storage::FileSystem::{
+            FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_INFO_EX, FileDispositionInfoEx,
+            SetFileInformationByHandle,
+        };
+        let disposition = FILE_DISPOSITION_INFO_EX {
+            Flags: FILE_DISPOSITION_FLAG_DELETE,
+        };
+        // SAFETY: original DELETE-capable handle, exact initialized SDK layout, bounded size.
+        unsafe {
+            SetFileInformationByHandle(
+                HANDLE(file.as_raw_handle()),
+                FileDispositionInfoEx,
+                (&raw const disposition).cast(),
+                u32::try_from(size_of::<FILE_DISPOSITION_INFO_EX>())
+                    .map_err(|_| refusal("deletion disposition size overflow"))?,
+            )
+        }?;
+        drop(file);
+        if path.as_os_str().is_empty() {
+            self.directory.take();
+        }
+        self.verify()
+    }
+}
+
+/// Test-only no-SQL observation through existing native security and named-object checks.
+#[cfg(test)]
+pub(crate) fn snapshot_observe<T>(
+    path: &Path,
+    directory: bool,
+    read: impl FnOnce(&File) -> std::io::Result<T>,
+) -> NativeResult<(Vec<u8>, T)> {
+    let parent =
+        Namespace::existing_parent(path.parent().ok_or_else(|| refusal("snapshot parent"))?)?;
+    let name = path.file_name().ok_or_else(|| refusal("snapshot name"))?;
+    let held_parent = parent
+        .files
+        .last()
+        .ok_or_else(|| refusal("snapshot parent handle"))?;
+    let access = FILE_READ_ATTRIBUTES
+        | READ_CONTROL
+        | SYNCHRONIZE
+        | if directory {
+            FILE_TRAVERSE
+        } else {
+            FILE_READ_DATA
+        };
+    let file = relative_access_with_sharing(
+        held_parent,
+        name,
+        directory,
+        None,
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+        false,
+    )?;
+    let validate = |file: &File| {
+        parent.owner.validate_directory(
+            file,
+            if directory {
+                DirectoryPolicy::Protected { inheritable: true }
+            } else {
+                DirectoryPolicy::SqliteSidefile
+            },
+        )
+    };
+    validate(&file)?;
+    let identity = file_identity(&file, directory)?;
+    let value = read(&file)?;
+    parent.verify()?;
+    validate(&file)?;
+    let named = relative_access_with_sharing(
+        held_parent,
+        name,
+        directory,
+        None,
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+        false,
+    )?;
+    if file_identity(&file, directory)? != identity || file_identity(&named, directory)? != identity
+    {
+        return Err(refusal("snapshot named identity changed"));
+    }
+    Ok((identity, value))
+}

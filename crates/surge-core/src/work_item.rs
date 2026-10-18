@@ -16,7 +16,8 @@ pub use wake_refusal::{
 };
 mod origin;
 pub use flow_inputs::{
-    FrozenOwnedFlowMcp, HmacSha256Tag, OwnedFlowInputsManifest, OwnedFlowManifestError,
+    ContinuationInputRequirement, ContinuationInputsFields, FrozenOwnedFlowMcp, HmacSha256Tag,
+    OwnedFlowInputPurpose, OwnedFlowInputsManifest, OwnedFlowManifestError,
     OwnedFlowMcpManifestEntry, OwnedFlowMcpSelection, OwnedFlowObjectRef, OwnedFlowRequestIdentity,
 };
 pub use origin::{AcceptedFlowContract, AcceptedFlowError, AcceptedWorkItemOrigin, FlowOrigin};

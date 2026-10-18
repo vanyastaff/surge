@@ -244,6 +244,7 @@ impl WorkItemStore {
         protected(|| self.claim_quota_wake_inner(run, now))
     }
     fn claim_quota_wake_inner(&self, run: RunId, now: i64) -> Result<OwnedFlowWakeAdmission> {
+        super::purpose::refuse_execution(self, run)?;
         let exists: bool = self.pool.get()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM owned_flow_operations WHERE run=? AND state='accepted')",
             [run.to_string()],

@@ -92,11 +92,12 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-orchestrator/src/engine/stage/verification.rs` | Host-owned verification input and inline report sealing. |
 | `crates/surge-persistence/src/runs/verification.rs` | Transactional normalized verification context and stored-proof inspection. |
 | `crates/surge-persistence/src/state_home.rs` | Retained Windows runtime-home, directory, append and control capabilities; native security and routing implementations live in `state_home/windows/`. |
-| `crates/surge-persistence/src/runs/connection.rs` | Checked Windows SQLite ownership through actual connection close, including independently retained pool-manager fences. |
-| `crates/surge-persistence/src/runs/host_settlement/` | Run opening authority, retained namespace identities and opaque creation reservations; durable settlement integration is in progress. |
+| `crates/surge-persistence/src/runs/connection.rs` | SQLite manager/connection ownership through actual close; platform implementations include `connection/unix.rs`. |
+| `crates/surge-persistence/src/runs/host_settlement/` | Run opening authority, retained namespaces, creation reservations and inventory-bound deletion (`deletion.rs`); settlement integration is in progress. |
+| `crates/surge-persistence/src/runs/host_settlement/control.rs` | Immutable run coordination origins and retained shared/exclusive native controls. |
 | `crates/surge-core/src/work_item.rs` | Persistent work-item identities, immutable accepted requirements, attempts and typed controls. |
 | `crates/surge-core/src/work_item/origin.rs` | Accepted requirement/Flow origins, exact graph and raw prompt contracts, and domain-separated hashes. |
-| `crates/surge-core/src/work_item/flow_inputs.rs` | Public frozen MCP manifests and opaque private-object references; structural validation does not grant runtime authority. |
+| `crates/surge-core/src/work_item/flow_inputs.rs` | Frozen MCP manifests, continuation purpose and opaque private-object references; structural validation does not grant runtime authority. |
 | `crates/surge-core/src/execution_recovery.rs` | Validated provider session identity, opening metadata and recoverable execution contracts. |
 | `crates/surge-core/src/execution_recovery/gate_commit.rs` | Validated human-decision occurrence, response/effect hashes and journal-derived gate commit records. |
 | `crates/surge-acp/src/process_evidence.rs` | Host process identity and writer-liveness evidence; Windows named Job authentication lives in `process_evidence/windows.rs`. |
@@ -104,6 +105,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
 | `crates/surge-persistence/src/work_items/start_preparation.rs` | Exclusive host Start preparation lease, immutable snapshot fences and atomic reservation finalization; private `secure_lock.rs` owns descriptor-checked per-item OS locks. |
 | `crates/surge-persistence/src/work_items/owned_flow/` | Provisional operation and atomic acceptance (`preparation.rs`), launch/hydration (`launch.rs`), private objects/authentication (`private_files.rs`, `private_inputs.rs`), retained namespace/key/marker establishment (`private_establishment.rs`) and source capture (`source_snapshot.rs`). |
+| `crates/surge-persistence/src/work_items/owned_flow/seed_objects.rs` | Authenticated immutable seed storage; `purpose.rs` owns durable source requirements and dependency pins. |
 | `crates/surge-persistence/src/work_items/recipe_capacity.rs` | Registry opening epochs and current exact-recipe exhaustion inspection; newer comparable openings supersede prior evidence. |
 | `crates/surge-orchestrator/src/recipe_admission.rs` | Facade decorator that commits a unique registry opening barrier before provider RPC and checks its returned identity. |
 | `crates/surge-persistence/src/work_items/control.rs` | Generation-fenced task suspension/continuation intents and acknowledgments. |

@@ -116,13 +116,18 @@ fn read(conn: &Connection) -> Result<Option<Record>> {
 }
 fn private_dependencies(conn: &Connection) -> Result<bool> {
     let mut query =
-        conn.prepare("SELECT request_identity,inputs_manifest FROM owned_flow_operations")?;
+        conn.prepare("SELECT request_identity,inputs_manifest,operation,input_purpose FROM owned_flow_operations")?;
     let rows = query.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
     })?;
     let mut found = false;
     for row in rows {
-        let (identity, manifest) = row?;
+        let (identity, manifest, operation, encoded_purpose) = row?;
         let identity: OwnedFlowRequestIdentity =
             serde_json::from_str(&identity).map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
         let manifest: Option<OwnedFlowInputsManifest> = manifest
@@ -130,7 +135,13 @@ fn private_dependencies(conn: &Connection) -> Result<bool> {
                 serde_json::from_str(&encoded).map_err(|_| WorkItemError::PrivateInputsCorrupt)
             })
             .transpose()?;
-        found |= matches!(identity, OwnedFlowRequestIdentity::Hmac { .. })
+        let operation = operation
+            .parse()
+            .map_err(|_| WorkItemError::PrivateInputsCorrupt)?;
+        let purpose =
+            super::purpose::decode(conn, operation, &identity, encoded_purpose.as_deref())?;
+        found |= purpose.private()
+            || matches!(identity, OwnedFlowRequestIdentity::Hmac { .. })
             || manifest
                 .as_ref()
                 .is_some_and(|value| matches!(value.mcp(), FrozenOwnedFlowMcp::Private { .. }));
@@ -311,6 +322,9 @@ impl PrivateOwner {
     }
     pub(super) fn key(&self) -> &[u8; 32] {
         &self.key
+    }
+    pub(super) fn establishment_nonce(&self) -> &str {
+        &self.record.nonce
     }
     fn check_record(&self, lock: &PreparationLock, conn: &Connection) -> Result<()> {
         if self.record.state != "Established"

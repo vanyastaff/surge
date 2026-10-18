@@ -1,8 +1,9 @@
 //! Immutable provisional operation identity and the short atomic acceptance boundary.
 use super::{
+    OwnedFlowPreparationPurpose,
     private_establishment::PrivateOwner,
     private_inputs::{self, InputBinding},
-    source_snapshot,
+    purpose, source_snapshot,
 };
 use crate::work_items::start_preparation::secure_lock::{PreparationLock, PreparationLockKey};
 use crate::work_items::{self, Result, WorkItemError, WorkItemStore};
@@ -51,6 +52,7 @@ pub struct OwnedFlowPreparation {
     store: WorkItemStore,
     operation: WorkItemOperationId,
     identity: OwnedFlowRequestIdentity,
+    purpose: OwnedFlowPreparationPurpose,
     item: WorkItemId,
     run: RunId,
     workspace_owner: RunId,
@@ -62,6 +64,7 @@ pub struct OwnedFlowPreparation {
 }
 struct Operation {
     identity: OwnedFlowRequestIdentity,
+    input_purpose: Option<String>,
     item: WorkItemId,
     run: RunId,
     workspace_owner: RunId,
@@ -73,13 +76,13 @@ struct Operation {
     receipt: Option<OwnedFlowReceipt>,
 }
 fn read(conn: &Connection, operation: WorkItemOperationId) -> Result<Option<Operation>> {
-    conn.query_row("SELECT request_identity,item,run,workspace_owner,operation_lock_identity,launch_lock_identity,source_snapshot,config_snapshot,inputs_manifest,receipt FROM owned_flow_operations WHERE operation=?",[operation.to_string()],|r| {
+    conn.query_row("SELECT request_identity,item,run,workspace_owner,operation_lock_identity,launch_lock_identity,source_snapshot,config_snapshot,inputs_manifest,receipt,input_purpose FROM owned_flow_operations WHERE operation=?",[operation.to_string()],|r| {
         let id = |index|->rusqlite::Result<String> { r.get(index) };
         let parse_error = |index,error:Box<dyn std::error::Error+Send+Sync>| rusqlite::Error::FromSqlConversionFailure(index,rusqlite::types::Type::Text,error);
         let source:Option<String>=r.get(6)?;
         let inputs:Option<String>=r.get(8)?;
         let receipt:Option<String>=r.get(9)?;
-        Ok(Operation { identity:work_items::json(r.get(0)?)?,item:id(1)?.parse().map_err(|e|parse_error(1,Box::new(e)))?,run:id(2)?.parse().map_err(|e|parse_error(2,Box::new(e)))?,workspace_owner:id(3)?.parse().map_err(|e|parse_error(3,Box::new(e)))?,operation_lock_identity:r.get(4)?,launch_lock_identity:r.get(5)?,source:source.map(work_items::json).transpose()?,config:r.get(7)?,inputs:inputs.map(work_items::json).transpose()?,receipt:receipt.map(work_items::json).transpose()? })
+        Ok(Operation { identity:work_items::json(r.get(0)?)?,input_purpose:r.get(10)?,item:id(1)?.parse().map_err(|e|parse_error(1,Box::new(e)))?,run:id(2)?.parse().map_err(|e|parse_error(2,Box::new(e)))?,workspace_owner:id(3)?.parse().map_err(|e|parse_error(3,Box::new(e)))?,operation_lock_identity:r.get(4)?,launch_lock_identity:r.get(5)?,source:source.map(work_items::json).transpose()?,config:r.get(7)?,inputs:inputs.map(work_items::json).transpose()?,receipt:receipt.map(work_items::json).transpose()? })
     }).optional().map_err(WorkItemError::from)
 }
 fn register_project(conn: &Connection, workspace: &WorkItemWorkspace) -> Result<WorkItemProjectId> {
@@ -109,6 +112,38 @@ fn register_project(conn: &Connection, workspace: &WorkItemWorkspace) -> Result<
     Ok(project)
 }
 impl WorkItemStore {
+    fn preparation_identity(
+        &self,
+        operation: WorkItemOperationId,
+        canonical_body: &[u8],
+        purpose: &OwnedFlowPreparationPurpose,
+        operation_lock: &PreparationLock,
+        lock_identity: &str,
+    ) -> Result<(OwnedFlowRequestIdentity, Option<Arc<PrivateOwner>>)> {
+        let existing = read(&*self.pool.get()?, operation)?;
+        if let Some(existing) = existing {
+            if existing.operation_lock_identity != lock_identity
+                || matches!(existing.identity, OwnedFlowRequestIdentity::Hmac { .. })
+                    != purpose.private()
+            {
+                return Err(WorkItemError::Conflict(
+                    "owned Flow operation ownership changed".into(),
+                ));
+            }
+            let owner = purpose::verify_request(
+                self,
+                operation,
+                canonical_body,
+                &existing.identity,
+                existing.inputs.as_ref(),
+                Some(operation_lock),
+                purpose,
+            )?;
+            Ok((existing.identity, owner))
+        } else {
+            purpose::identity(self, canonical_body, purpose)
+        }
+    }
     /// Inspect exact replay before configuration, locator or discovery I/O.
     /// Private-backed receipts still require the original established native storage.
     ///
@@ -118,24 +153,34 @@ impl WorkItemStore {
         &self,
         operation: WorkItemOperationId,
         canonical_body: &[u8],
-        explicit_private: bool,
+        purpose: OwnedFlowPreparationPurpose,
     ) -> Result<Option<OwnedFlowReceipt>> {
-        let value = read(&*self.pool.get()?, operation)?;
-        let Some(value) = value else {
-            return Ok(None);
+        let value = {
+            let conn = self.pool.get()?;
+            let Some(value) = read(&conn, operation)? else {
+                return Ok(None);
+            };
+            if purpose::decode(
+                &conn,
+                operation,
+                &value.identity,
+                value.input_purpose.as_deref(),
+            )? != purpose
+            {
+                return Err(WorkItemError::Conflict(
+                    "owned Flow operation purpose changed".into(),
+                ));
+            }
+            value
         };
-        if matches!(value.identity, OwnedFlowRequestIdentity::Hmac { .. }) != explicit_private {
-            return Err(WorkItemError::Conflict(
-                "owned Flow operation body changed".into(),
-            ));
-        }
-        let owner = private_inputs::verify_request(
+        let owner = purpose::verify_request(
             self,
             operation,
             canonical_body,
             &value.identity,
             value.inputs.as_ref(),
             None,
+            &purpose,
         )?;
         if let Some(owner) = owner {
             owner.verify()?;
@@ -150,15 +195,14 @@ impl WorkItemStore {
         &self,
         operation: WorkItemOperationId,
         canonical_body: &[u8],
-        explicit_private: bool,
+        purpose: OwnedFlowPreparationPurpose,
         now: i64,
     ) -> Result<OwnedFlowPreparationResult> {
+        let explicit_private = purpose.private();
         if operation == WorkItemOperationId::nil() {
             return Err(WorkItemError::Invalid("nil owned Flow operation".into()));
         }
-        if let Some(receipt) =
-            self.replay_owned_flow(operation, canonical_body, explicit_private)?
-        {
+        if let Some(receipt) = self.replay_owned_flow(operation, canonical_body, purpose.clone())? {
             return Ok(OwnedFlowPreparationResult::Replay(receipt));
         }
         let operation_lock = if explicit_private {
@@ -173,33 +217,26 @@ impl WorkItemStore {
             )?
         };
         let lock_identity = operation_lock.identity()?;
-        let existing = read(&*self.pool.get()?, operation)?;
-        let (identity, private_owner) = if let Some(existing) = &existing {
-            if existing.operation_lock_identity != lock_identity
-                || matches!(existing.identity, OwnedFlowRequestIdentity::Hmac { .. })
-                    != explicit_private
-            {
-                return Err(WorkItemError::Conflict(
-                    "owned Flow operation ownership changed".into(),
-                ));
-            }
-            let owner = private_inputs::verify_request(
-                self,
-                operation,
-                canonical_body,
-                &existing.identity,
-                existing.inputs.as_ref(),
-                Some(&operation_lock),
-            )?;
-            (existing.identity.clone(), owner)
-        } else {
-            private_inputs::request_identity(self, canonical_body, explicit_private)?
-        };
+        let (identity, private_owner) = self.preparation_identity(
+            operation,
+            canonical_body,
+            &purpose,
+            &operation_lock,
+            &lock_identity,
+        )?;
         let token = RunId::new().to_string();
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = if let Some(value) = read(&tx, operation)? {
-            if value.identity != identity || value.operation_lock_identity != lock_identity {
+            if value.identity != identity
+                || value.operation_lock_identity != lock_identity
+                || purpose::decode(
+                    &tx,
+                    operation,
+                    &value.identity,
+                    value.input_purpose.as_deref(),
+                )? != purpose
+            {
                 return Err(WorkItemError::Conflict(
                     "owned Flow first identity changed".into(),
                 ));
@@ -212,9 +249,12 @@ impl WorkItemStore {
         } else {
             let value = Operation {
                 identity: identity.clone(),
+                input_purpose: Some(serde_json::to_string(&purpose)?),
                 item: WorkItemId::new(),
                 run: RunId::new(),
-                workspace_owner: RunId::new(),
+                workspace_owner: purpose
+                    .source()
+                    .map_or_else(RunId::new, |source| source.source_run()),
                 operation_lock_identity: lock_identity.clone(),
                 launch_lock_identity: None,
                 source: None,
@@ -222,7 +262,15 @@ impl WorkItemStore {
                 inputs: None,
                 receipt: None,
             };
-            tx.execute("INSERT INTO owned_flow_operations(operation,request_identity,item,run,workspace_owner,operation_lock_identity,token,state,created_at_ms) VALUES(?,?,?,?,?,?,?,'preparing',?)",params![operation.to_string(),serde_json::to_string(&identity)?,value.item.to_string(),value.run.to_string(),value.workspace_owner.to_string(),lock_identity,token,now])?;
+            tx.execute("INSERT INTO owned_flow_operations(operation,request_identity,item,run,workspace_owner,operation_lock_identity,token,state,created_at_ms,input_purpose) VALUES(?,?,?,?,?,?,?,'preparing',?,?)",params![operation.to_string(),serde_json::to_string(&identity)?,value.item.to_string(),value.run.to_string(),value.workspace_owner.to_string(),lock_identity,token,now,value.input_purpose])?;
+            purpose::reserve(
+                &tx,
+                operation,
+                &purpose,
+                private_owner
+                    .as_ref()
+                    .map(|owner| owner.establishment_nonce()),
+            )?;
             value
         };
         tx.commit()?;
@@ -234,6 +282,7 @@ impl WorkItemStore {
                 store: self.clone(),
                 operation,
                 identity,
+                purpose,
                 item: value.item,
                 run: value.run,
                 workspace_owner: value.workspace_owner,
@@ -247,6 +296,105 @@ impl WorkItemStore {
     }
 }
 impl OwnedFlowPreparation {
+    /// Seal bounded private bytes; this grants no semantic or execution authority.
+    ///
+    /// # Errors
+    /// Refuses unavailable owners or inconsistent immutable storage correlation.
+    pub fn freeze_seed_storage(
+        &mut self,
+        binding: &super::SeedStorageBinding,
+        payload: &[u8],
+    ) -> Result<ContinuationSeedManifest> {
+        let owner = self
+            .private_owner
+            .clone()
+            .ok_or(WorkItemError::PrivateInputsRecoveryRequired)?;
+        self.operation_lock.require_private()?;
+        let stored = {
+            let conn = self.store.pool.get()?;
+            let value = self.verify(&conn)?;
+            let source = value
+                .source
+                .ok_or_else(|| WorkItemError::Invalid("owned Flow source missing".into()))?;
+            self.validate_seed_binding(binding, &source)?;
+            super::seed_objects::load(&conn, self.operation, &owner)?
+        };
+        let stored = if let Some(stored) = stored {
+            super::seed_objects::check_retry(&stored.pending, binding, payload)?;
+            stored
+        } else {
+            let (pending, bytes) = super::seed_objects::prepare(
+                &owner,
+                binding,
+                &self.identity,
+                payload,
+                private_inputs::random_reference()?,
+            )?;
+            #[cfg(test)]
+            super::continuation_tests::seed_boundary(self.operation, "before-pin")?;
+            {
+                let mut conn = self.store.pool.get()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                self.verify(&tx)?;
+                super::seed_objects::allocate(&tx, self.operation, &pending)?;
+                tx.commit()?;
+            }
+            #[cfg(test)]
+            super::continuation_tests::seed_boundary(self.operation, "pending")?;
+            super::seed_objects::publish(&owner, &pending, &bytes)?;
+            #[cfg(test)]
+            super::continuation_tests::seed_boundary(self.operation, "published")?;
+            super::seed_objects::StoredSeed {
+                pending,
+                manifest: None,
+            }
+        };
+        let authenticated = super::seed_objects::verify_storage(owner.clone(), &stored)?;
+        {
+            let mut conn = self.store.pool.get()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            self.verify(&tx)?;
+            super::seed_objects::seal(
+                &tx,
+                self.operation,
+                &owner,
+                &stored.pending,
+                &authenticated.manifest,
+            )?;
+            tx.commit()?;
+        }
+        owner.verify()?;
+        Ok(authenticated.manifest)
+    }
+    fn validate_seed_binding(
+        &self,
+        binding: &super::SeedStorageBinding,
+        snapshot: &OwnedFlowSourceSnapshot,
+    ) -> Result<()> {
+        let Some(source) = self.purpose.source() else {
+            return Err(WorkItemError::Invalid(
+                "ordinary Flow has no required seed".into(),
+            ));
+        };
+        let expected = WorkItemBinding {
+            item: self.item,
+            revision: 1,
+            requirements_hash: snapshot.contract.hash()?,
+            generation: 1,
+        };
+        if binding.operation() != self.operation
+            || binding.run() != self.run
+            || binding.binding() != &expected
+            || binding.workspace_owner() != self.workspace_owner
+            || binding.source() != source
+            || snapshot.workspace.ownership != self.workspace_owner.to_string()
+        {
+            return Err(WorkItemError::Conflict(
+                "continuation seed storage correlation changed".into(),
+            ));
+        }
+        Ok(())
+    }
     /// Stable host-allocated item, retained even if preparation is abandoned.
     #[must_use]
     pub fn item(&self) -> WorkItemId {
@@ -271,6 +419,12 @@ impl OwnedFlowPreparation {
         let owned:bool=conn.query_row("SELECT token=? AND state='preparing' AND receipt IS NULL FROM owned_flow_operations WHERE operation=?",params![self.token,self.operation.to_string()],|r|r.get(0))?;
         if !owned
             || value.identity != self.identity
+            || purpose::decode(
+                conn,
+                self.operation,
+                &value.identity,
+                value.input_purpose.as_deref(),
+            )? != self.purpose
             || value.item != self.item
             || value.run != self.run
             || value.workspace_owner != self.workspace_owner
@@ -393,8 +547,15 @@ impl OwnedFlowPreparation {
             self.run,
             self.workspace_owner,
             source.workspace,
-        );
-        let (inputs, owner) = private_inputs::freeze(&self.store, &context, selection, servers)?;
+        )
+        .with_purpose(&self.purpose);
+        let (inputs, owner) = private_inputs::freeze(
+            &self.store,
+            &context,
+            selection,
+            servers,
+            self.private_owner.clone(),
+        )?;
         let mut conn = self.store.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = self.verify(&tx)?;
@@ -440,6 +601,21 @@ impl OwnedFlowPreparation {
         self.launch_lock = Some(Arc::new(lock));
         Ok(())
     }
+    fn refuse_continuation_execution(&self) -> Result<()> {
+        if self.purpose.source().is_none() {
+            return Ok(());
+        }
+        {
+            let conn = self.store.pool.get()?;
+            self.verify(&conn)?;
+        }
+        let owner = self
+            .private_owner
+            .clone()
+            .ok_or(WorkItemError::PrivateInputsRecoveryRequired)?;
+        super::seed_objects::require_sealed(&self.store, self.operation, owner)?;
+        Err(WorkItemError::ContinuationExecutionUnavailable)
+    }
     /// Accept the item, revision, Reserved attempt, launch intent and receipt together.
     /// The awaiting host consumes this after its worker returns; canceled callers
     /// only abandon preparation while that worker still owns both guards.
@@ -449,6 +625,7 @@ impl OwnedFlowPreparation {
             .as_ref()
             .ok_or_else(|| WorkItemError::Invalid("owned Flow launch ownership missing".into()))?;
         launch.verify()?;
+        self.refuse_continuation_execution()?;
         let mut conn = self.store.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = self.verify(&tx)?;

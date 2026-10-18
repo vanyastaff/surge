@@ -14,9 +14,18 @@ use surge_orchestrator::engine::owned_flow::{
     FlowInput, McpSelection, OwnedFlowStart, WorkspaceRequest,
 };
 use surge_persistence::work_items::{
-    OwnedFlowCapturedSource, OwnedFlowPreparation, OwnedFlowPreparationResult,
-    OwnedFlowSourceSnapshot, WorkItemError,
+    OrdinaryRequestPrivacy, OwnedFlowCapturedSource, OwnedFlowPreparation,
+    OwnedFlowPreparationPurpose, OwnedFlowPreparationResult, OwnedFlowSourceSnapshot,
+    WorkItemError,
 };
+
+fn ordinary_input_purpose(selection: &McpSelection) -> OwnedFlowPreparationPurpose {
+    let privacy = match selection {
+        McpSelection::Explicit(servers) if !servers.is_empty() => OrdinaryRequestPrivacy::Private,
+        _ => OrdinaryRequestPrivacy::Public,
+    };
+    OwnedFlowPreparationPurpose::Ordinary(privacy)
+}
 
 pub(crate) async fn execute(
     request: &OwnedFlowStart,
@@ -31,13 +40,12 @@ pub(crate) async fn execute(
     let body = request
         .canonical_bytes()
         .map_err(|_| WorkItemError::Invalid("invalid owned Flow request encoding".into()))?;
-    let explicit_private =
-        matches!(&request.config.mcp,McpSelection::Explicit(servers) if !servers.is_empty());
+    let purpose = ordinary_input_purpose(&request.config.mcp);
     let (engine, storage) = tracking
         .task_sources()
         .ok_or_else(|| WorkItemError::Invalid("owned Flow host unavailable".into()))?;
     let store = storage.work_items();
-    if let Some(receipt) = store.replay_owned_flow(request.operation_id, &body, explicit_private)? {
+    if let Some(receipt) = store.replay_owned_flow(request.operation_id, &body, purpose.clone())? {
         return Ok(receipt);
     }
     let runtime = tokio::runtime::Handle::current();
@@ -46,7 +54,7 @@ pub(crate) async fn execute(
         let preparation = store.begin_owned_flow(
             request.operation_id,
             &body,
-            explicit_private,
+            purpose,
             chrono::Utc::now().timestamp_millis(),
         )?;
         let OwnedFlowPreparationResult::Preparing(mut preparation) = preparation else {

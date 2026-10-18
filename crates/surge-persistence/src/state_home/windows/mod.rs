@@ -9,7 +9,7 @@ mod security;
 #[cfg(test)]
 pub(super) mod creation_observation;
 
-pub(crate) use namespace::NativeJournalLock;
+pub(crate) use namespace::{DeletionNamespace, NativeJournalLock, NativeRunControl};
 pub(super) use namespace::{Namespace, NativeAppendFile, NativeControlFile};
 pub(crate) use namespace::{PrivateFiles, PrivatePreparation};
 
@@ -178,6 +178,18 @@ impl RunRoute {
             self.namespace.object_identity()?,
         ))
     }
+    pub(crate) fn reader_route_identity(&self) -> NativeResult<Vec<u8>> {
+        let (home, run) = self.identities()?;
+        let lock = self
+            .namespace
+            .database(OsStr::new("events.sqlite.lock"), false)?;
+        let mut identity = vec![2];
+        identity.extend(home);
+        identity.extend(run);
+        identity.extend(namespace::file_identity(&lock, false)?);
+        self.verify()?;
+        Ok(identity)
+    }
     pub(crate) fn database(&self, create: bool) -> NativeResult<Arc<SqliteNamespaceOwner>> {
         self.verify()?;
         let name = OsString::from("events.sqlite");
@@ -342,3 +354,6 @@ pub(super) fn user_profile_path() -> NativeResult<std::path::PathBuf> {
     }
     Ok(path)
 }
+
+#[cfg(test)]
+pub(crate) use namespace::snapshot_observe;

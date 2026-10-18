@@ -549,3 +549,58 @@ Substeps2/3 seed reservation/storage/pins/native deletion remainOPEN; separate
 outer/deletion expectedREDs, empty-MCP HMAC core amendment and stages3–7 remain
 required. Local commit is a Substep1 checkpoint, not complete Stage2 or habit app.
 No push/merge/native provider/platform acceptance authorized or claimed here.
+
+
+## Root-accepted Substeps2/3 legacy physical deletion criterion amendment
+
+This appendix preserves the original first536 lines and explicitly narrows their
+ordinary deletion compatibility criterion (lines360–374): positive physical deletion
+is required only for NEW runs durably coordinated before first namespace creation.
+Legacy runs retain history/read-only views, ordinary execution, continuation and
+durable source/private pins. Their physical deletion returns typed
+DeletionCoordinationUnavailable with zero filesystem or SQL mutation. A legacy
+writer reopen never upgrades authority; missing/replaced NewControlled origin/control
+never downgrades. Referenced deletion refuses and every deletion/cleanup bypass closes.
+Root explicitly accepted this necessary-only scope under the latest human direction:
+same habit/history/all8, codex-acp/exact gpt-6.1-sol, NO new UI. Stage6 new native UI
+is deferred, not a prerequisite for CLI/daemon continuation; existing history support
+and real same-app/all8/model evidence remain required. Exact closure is defined in
+bootstrap-continuation-stage2-seed-storage-amendment.md; independent critic/security/API
+pre-code re-review is required before writer release. Substeps2/3 remain OPEN.
+No source/build/runtime/provider changes; canonical5/5 EXHAUSTED across stages/reviews,
+not a reset or sixth repair dispatch.
+
+### Controlled Unix database identity lifetime clarification
+
+Before native-reader implementation, root/builder identified that the existing
+Unix Database retains a raw events.sqlite File. Closing it while another SQLite
+connection is live bypasses SQLite VFS deferred-close bookkeeping and can cancel
+process POSIX locks. Owner and independent security accept a bounded NewControlled-only
+correction: store validated native dev/ino facts under retained RunRoute parent and
+shared outside control; use fstatat(AT_SYMLINK_NOFOLLOW), preserving original regular-file,
+link-count, owner/security checks before and after SQLite-owned opening. No added
+raw database descriptors for verification/identity. New database creation uses
+SQLite APIs under original creation ownership outside SQL; metadata association
+and admission must not expose a race before original identity is bound.
+Legacy behavior and Windows retained native handles remain unchanged. No new
+SQLite FD-layout FFI, global lifetime registry or permanent retention.
+Pinned libsqlite3-sys0.30.1 sqlite3.c39488–39500 documents deferred close; primary
+reference: https://www.sqlite.org/howtocorrupt.html section2.2.
+Root accepts the focused security verdict under the explicitly cooperative Unix
+threat model, not malicious same-user containment or native SQLite-FD attestation.
+Actual-close,64-reader,replacement and cold-admission tests remain required.
+This clarification is within initial feature implementation, not a post-review repair;
+shared5/5 unchanged. Seed storage work was not paused.
+
+
+### Human-approved registry read-only companion policy
+
+The human explicitly approved only the SQLite registry companions described by
+`bootstrap-continuation-registry-readonly-policy-proposal.md` (132 lines,
+SHA256 `9cc9cf434e5865ad5e6155ebc4f51ef08863288870595f9c7fc48b44140ab64d`).
+This resolves the initial Substeps2/3 policy fork; shared repair count remains5/5.
+Only exact checked registry WAL without frames and SHM coordination additions are
+permitted; original durable bytes/native identities, live-WAL visibility and all
+production admission/locking checks remain. Test snapshots execute a no-SQL child
+observer; prior failure evidence is retained. No VFS/flag/cleanup or runtime authority
+is added. Original accepted document prefixes remain unchanged.

@@ -152,7 +152,7 @@ impl PreparationLock {
 /// Private owned-flow objects exist only on Linux and macOS
 /// (`owned_flow::private_files`), so this check has no other callers.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(in crate::work_items) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
+pub(crate) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
     unix::check_acl(file)
         .map_err(|()| WorkItemError::Invalid("unsafe private preparation ACL".into()))
 }

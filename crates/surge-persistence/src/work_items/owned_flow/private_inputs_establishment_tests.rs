@@ -214,11 +214,32 @@ async fn legacy_existing_hmac_and_public_private_envelope_pin_only_original_key(
             let fixture = legacy_fixture(&store, home.path(), kind, Mismatch::None);
             let before = audit(&store, fixture.operation);
             let replay = store
-                .replay_owned_flow(fixture.operation, BODY, matches!(kind, Kind::Hmac))
+                .replay_owned_flow(
+                    fixture.operation,
+                    BODY,
+                    crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                        if matches!(kind, Kind::Hmac) {
+                            crate::work_items::OrdinaryRequestPrivacy::Private
+                        } else {
+                            crate::work_items::OrdinaryRequestPrivacy::Public
+                        },
+                    ),
+                )
                 .unwrap();
             let after = audit(&store, fixture.operation);
             let prepared = store
-                .begin_owned_flow(fixture.operation, BODY, matches!(kind, Kind::Hmac), 2)
+                .begin_owned_flow(
+                    fixture.operation,
+                    BODY,
+                    crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                        if matches!(kind, Kind::Hmac) {
+                            crate::work_items::OrdinaryRequestPrivacy::Private
+                        } else {
+                            crate::work_items::OrdinaryRequestPrivacy::Public
+                        },
+                    ),
+                    2,
+                )
                 .unwrap();
             let super::super::OwnedFlowPreparationResult::Preparing(prepared) = prepared else {
                 panic!("provisional legacy owner")
@@ -276,7 +297,13 @@ async fn legacy_authenticated_foreign_envelope_never_pins_or_changes_original_op
             let store = storage.work_items();
             let fixture = legacy_fixture(&store, home.path(), Kind::PublicMcp, mismatch);
             let before = audit(&store, fixture.operation);
-            let result = store.replay_owned_flow(fixture.operation, BODY, false);
+            let result = store.replay_owned_flow(
+                fixture.operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public,
+                ),
+            );
             matches!(result, Err(WorkItemError::PrivateInputsCorrupt))
                 && establishment_count(&store) == 0
                 && audit(&store, fixture.operation) == before
@@ -306,7 +333,13 @@ async fn legacy_wrong_hmac_body_refuses_without_first_pinning() {
         let store = storage.work_items();
         let fixture = legacy_fixture(&store, home.path(), Kind::Hmac, Mismatch::None);
         let before = audit(&store, fixture.operation);
-        let result = store.replay_owned_flow(fixture.operation, b"changed body", true);
+        let result = store.replay_owned_flow(
+            fixture.operation,
+            b"changed body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Private,
+            ),
+        );
         (
             matches!(result, Err(WorkItemError::Conflict(_))),
             establishment_count(&store) == 0,
@@ -325,8 +358,14 @@ async fn new_private_request_cannot_first_pin_another_legacy_operation() {
         let store = storage.work_items();
         let fixture = legacy_fixture(&store, home.path(), Kind::Hmac, Mismatch::None);
         let before = audit(&store, fixture.operation);
-        let result =
-            store.begin_owned_flow(WorkItemOperationId::new(), b"new unrelated body", true, 3);
+        let result = store.begin_owned_flow(
+            WorkItemOperationId::new(),
+            b"new unrelated body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Private,
+            ),
+            3,
+        );
         (
             matches!(result, Err(WorkItemError::PrivateInputsRecoveryRequired)),
             establishment_count(&store) == 0,
@@ -351,7 +390,14 @@ async fn retained_private_owners_refuse_marker_loss_at_actual_use_boundaries() {
         let store = storage.work_items();
         let fixture = legacy_fixture(&store, home.path(), Kind::PublicMcp, Mismatch::None);
         let super::super::OwnedFlowPreparationResult::Preparing(mut prepared) = store
-            .begin_owned_flow(fixture.operation, BODY, false, 2)
+            .begin_owned_flow(
+                fixture.operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public,
+                ),
+                2,
+            )
             .unwrap()
         else {
             panic!("original provisional operation")
@@ -539,7 +585,13 @@ async fn legacy_and_established_missing_or_corrupt_private_material_never_repair
             if established {
                 assert!(
                     store
-                        .replay_owned_flow(fixture.operation, BODY, false)
+                        .replay_owned_flow(
+                            fixture.operation,
+                            BODY,
+                            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                                crate::work_items::OrdinaryRequestPrivacy::Public
+                            )
+                        )
                         .unwrap()
                         .is_none()
                 );
@@ -555,7 +607,13 @@ async fn legacy_and_established_missing_or_corrupt_private_material_never_repair
         let correct = {
             let storage = crate::runs::Storage::open(home.path()).await.unwrap();
             let store = storage.work_items();
-            let result = store.replay_owned_flow(operation, BODY, false);
+            let result = store.replay_owned_flow(
+                operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public,
+                ),
+            );
             matches!(result, Err(WorkItemError::PrivateInputsRecoveryRequired))
                 && audit(&store, operation) == before
                 && establishment_count(&store) == count
@@ -577,8 +635,16 @@ fn private_preparation(
     operation: WorkItemOperationId,
     now: i64,
 ) -> Box<super::super::OwnedFlowPreparation> {
-    let super::super::OwnedFlowPreparationResult::Preparing(preparation) =
-        store.begin_owned_flow(operation, BODY, false, now).unwrap()
+    let super::super::OwnedFlowPreparationResult::Preparing(preparation) = store
+        .begin_owned_flow(
+            operation,
+            BODY,
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
+            ),
+            now,
+        )
+        .unwrap()
     else {
         panic!("original private preparation")
     };
@@ -617,7 +683,14 @@ async fn canceled_caller_retains_private_preparation_until_actual_worker_exit() 
         caller.abort();
         let canceled = matches!(caller.await, Err(error) if error.is_cancelled());
         let busy = matches!(
-            store.begin_owned_flow(operation, BODY, false, 3),
+            store.begin_owned_flow(
+                operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                3
+            ),
             Err(WorkItemError::Busy)
         );
         #[cfg(windows)]
@@ -635,8 +708,16 @@ async fn canceled_caller_retains_private_preparation_until_actual_worker_exit() 
             .await
             .unwrap()
             .unwrap();
-        let super::super::OwnedFlowPreparationResult::Preparing(preparation) =
-            store.begin_owned_flow(operation, BODY, false, 4).unwrap()
+        let super::super::OwnedFlowPreparationResult::Preparing(preparation) = store
+            .begin_owned_flow(
+                operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public,
+                ),
+                4,
+            )
+            .unwrap()
         else {
             panic!("original abandoned preparation")
         };
@@ -773,7 +854,13 @@ async fn legacy_hmac_acceptance_validates_receipt_even_without_private_mcp() {
             let (fixture, expected_receipt) = accepted_hmac_fixture(&store, home.path(), case);
             let before = audit(&store, fixture.operation);
             let bytes = private_bytes(home.path());
-            let result = store.replay_owned_flow(fixture.operation, BODY, true);
+            let result = store.replay_owned_flow(
+                fixture.operation,
+                BODY,
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Private,
+                ),
+            );
             let (matches_result, count) = match case {
                 AcceptedHmacCase::Provisional | AcceptedHmacCase::HealthyPrivate => (
                     matches!(result, Ok(receipt) if receipt == expected_receipt),
@@ -800,7 +887,10 @@ async fn legacy_hmac_acceptance_validates_receipt_even_without_private_mcp() {
     );
 }
 
-fn bounded_private_store(storage: &crate::runs::Storage, home: &Path) -> WorkItemStore {
+pub(in crate::work_items::owned_flow) fn bounded_private_store(
+    storage: &crate::runs::Storage,
+    home: &Path,
+) -> WorkItemStore {
     let database = home.join("db/registry.sqlite");
     #[cfg(windows)]
     let manager = crate::SqliteConnectionManager::file(
@@ -1018,7 +1108,13 @@ async fn cold_replay_and_begin_refuse_same_byte_marker_replacement() {
         let accepted = accepted_private_fixture(&store, home.path());
         assert_eq!(
             store
-                .replay_owned_flow(accepted.fixture.operation, BODY, false)
+                .replay_owned_flow(
+                    accepted.fixture.operation,
+                    BODY,
+                    crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                        crate::work_items::OrdinaryRequestPrivacy::Public
+                    )
+                )
                 .unwrap(),
             Some(accepted.receipt)
         );
@@ -1035,8 +1131,21 @@ async fn cold_replay_and_begin_refuse_same_byte_marker_replacement() {
     let facts = {
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
-        let replay = store.replay_owned_flow(operation, BODY, false);
-        let begin = store.begin_owned_flow(operation, BODY, false, 4);
+        let replay = store.replay_owned_flow(
+            operation,
+            BODY,
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
+            ),
+        );
+        let begin = store.begin_owned_flow(
+            operation,
+            BODY,
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
+            ),
+            4,
+        );
         (
             matches!(replay, Err(WorkItemError::PrivateInputsRecoveryRequired)),
             matches!(begin, Err(WorkItemError::PrivateInputsRecoveryRequired)),
@@ -1394,7 +1503,13 @@ async fn bounded_established_entry(entry: EstablishedEntry) {
             scope
                 .spawn(|| match entry {
                     EstablishedEntry::Replay => store
-                        .replay_owned_flow(receipt.operation_id, b"original body", false)
+                        .replay_owned_flow(
+                            receipt.operation_id,
+                            b"original body",
+                            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                                crate::work_items::OrdinaryRequestPrivacy::Public,
+                            ),
+                        )
                         .map(|value| value == Some(receipt.clone())),
                     EstablishedEntry::ColdClaim => store
                         .claim(receipt.run)

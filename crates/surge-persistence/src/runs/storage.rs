@@ -312,6 +312,22 @@ impl Storage {
     /// This does not upgrade legacy schemas; opening its exclusive writer applies
     /// supported pending migrations before current materialized-view reads.
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
+        let control = super::host_settlement::control::acquire(
+            &self.home,
+            &self.registry_pool,
+            run_id,
+            false,
+        )?;
+        self.open_run_reader_owned(run_id, control).await
+    }
+    async fn open_run_reader_owned(
+        self: &Arc<Self>,
+        run_id: RunId,
+        control: Option<Arc<super::host_settlement::control::RunUseOwner>>,
+    ) -> Result<RunReader, OpenError> {
+        if let Some(owner) = &control {
+            owner.verify_reconnect()?;
+        }
         registry_exec::read(&self.registry_pool, move |connection| {
             super::host_settlement::admit(connection, run_id)
         })
@@ -333,6 +349,7 @@ impl Storage {
             let manager = SqliteConnectionManager::file(&events_path, namespace);
             #[cfg(not(windows))]
             let manager = SqliteConnectionManager::file(&events_path);
+            let manager = manager.with_run_owner(control)?;
             let manager = manager.with_flags(
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
                     | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -386,7 +403,7 @@ impl Storage {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
             lease.verify()?;
-            storage.upgrade_existing_run(&storage.events_db_path(&run_id))?;
+            storage.upgrade_existing_run(&storage.events_db_path(&run_id), &lease)?;
             if freshly_created {
                 super::host_settlement::verify_empty_initialized(
                     run_id,
@@ -406,7 +423,9 @@ impl Storage {
         lease: Arc<WriterLease>,
     ) -> Result<RunWriter, OpenError> {
         lease.verify()?;
-        let reader = self.open_run_reader(run_id.clone()).await?;
+        let reader = self
+            .open_run_reader_owned(run_id.clone(), lease.authority.use_owner())
+            .await?;
 
         let cfg = WriterConfig {
             run_id: run_id.clone(),
@@ -431,7 +450,11 @@ impl Storage {
     }
 
     // Called only after acquiring both writer guards, before pools or the writer task.
-    fn upgrade_existing_run(&self, events_path: &Path) -> Result<(), OpenError> {
+    fn upgrade_existing_run(
+        &self,
+        events_path: &Path,
+        lease: &WriterLease,
+    ) -> Result<(), OpenError> {
         use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
 
         #[cfg(windows)]
@@ -443,9 +466,15 @@ impl Storage {
             namespace,
         )?;
         #[cfg(not(windows))]
-        let mut conn = rusqlite::Connection::open_with_flags(
+        let mut conn = super::connection::RetainedConnection::open_controlled(
             events_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            lease
+                .authority
+                .use_owner()
+                .as_ref()
+                .map(crate::runs::host_settlement::control::RunUseOwner::database)
+                .transpose()?,
         )?;
         let has_migrations: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations')",
@@ -584,36 +613,7 @@ impl Storage {
         self: &Arc<Self>,
         run_id: &RunId,
     ) -> Result<(), crate::runs::error::StorageError> {
-        if self
-            .active_writers
-            .is_held(run_id)
-            .await
-            .map_err(|_| crate::runs::error::StorageError::WriterOwnershipPoisoned)?
-        {
-            return Err(crate::runs::error::StorageError::WriterStillActive {
-                run_id: run_id.clone(),
-            });
-        }
-        let row = run_id.clone();
-        registry_exec::write(&self.registry_pool, move |tx| {
-            registry::delete_run_connection(tx, &row)
-        })
-        .await?;
-        // Idempotent cleanup of an already-unregistered run; finishing after
-        // an abandoned caller is harmless.
-        let dir = self.run_dir(run_id);
-        tokio::task::spawn_blocking(move || {
-            if dir.exists() {
-                std::fs::remove_dir_all(&dir)?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| {
-            crate::runs::error::StorageError::Pool(format!(
-                "run directory removal task failed: {e}"
-            ))
-        })?
+        super::host_settlement::deletion::delete(self.clone(), *run_id).await
     }
 
     /// Set the registry status (and optional `ended_at` ms) for a run.
@@ -1314,14 +1314,28 @@ mod deletion_identity_characterization {
     }
 
     fn record_real_fixture_intent(storage: &Storage, run: RunId) -> String {
-        let mut conn = storage.registry_pool.get().unwrap();
-        let tx = conn.transaction().unwrap();
-        let (opening, route, database): (String, Vec<u8>, Vec<u8>) = tx.query_row(
-            "SELECT opening_id,route_identity,database_identity FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",
-            [run.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-        ).unwrap();
-        let journal = [route, database].concat();
-        assert_eq!(journal.len(), 65, "actual Unix framed journal identity");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let _original_control = loop {
+            match super::super::host_settlement::control::acquire(
+                storage.home(),
+                &storage.registry_pool,
+                run,
+                true,
+            ) {
+                Ok(Some(owner)) => break owner,
+                Err(OpenError::RunInUse { .. }) if std::time::Instant::now() < deadline => {
+                    std::thread::yield_now();
+                },
+                other => panic!(
+                    "actual fixture SQLite owners did not settle: {}",
+                    other
+                        .err()
+                        .map_or("missing original control".into(), |error| format!(
+                            "{error:?}"
+                        ))
+                ),
+            }
+        };
         let root = storage.run_dir(&run);
         let parent = std::fs::File::open(root.parent().unwrap()).unwrap();
         let meta = parent.metadata().unwrap();
@@ -1331,6 +1345,14 @@ mod deletion_identity_characterization {
             .iter()
             .flat_map(|(path, bytes)| [path.as_slice(), bytes.as_slice()].concat())
             .collect();
+        let mut conn = storage.registry_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let (opening, route, database): (String, Vec<u8>, Vec<u8>) = tx.query_row(
+            "SELECT opening_id,route_identity,database_identity FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",
+            [run.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+        ).unwrap();
+        let journal = [route, database].concat();
+        assert_eq!(journal.len(), 65, "actual Unix framed journal identity");
         let deletion = "independently-recorded-original-fixture-delete".to_string();
         tx.execute("INSERT INTO run_host_tombstones(run_id,deletion_id,original_opening,journal_identity,provenance,inventory_version,inventory_count,inventory_bytes,inventory_digest,outside_parent,state) VALUES(?,?,?,?,'ExplicitStorageDelete',1,?,?,?,?,'DeletePending')",
             params![run.to_string(),deletion,opening,journal,rows.len(),inventory.len(),Sha256::digest(&inventory).as_slice(),outside_parent]).unwrap();
@@ -1377,7 +1399,7 @@ mod deletion_identity_characterization {
             (
                 matches!(
                     result,
-                    Err(crate::runs::error::StorageError::OperationRejected(_))
+                    Err(crate::runs::error::StorageError::DeletionOwnership{run_id,..}) if run_id==run
                 ),
                 replacement_preserved,
                 std::fs::read(original.join("artifacts/original-marker")).unwrap()
@@ -1421,3 +1443,13 @@ mod deletion_identity_characterization {
         assert_eq!(facts, (true, true, true, true));
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "storage/continuation_storage_tests.rs"]
+mod continuation_storage_tests;
+#[cfg(all(test, unix))]
+pub(crate) use continuation_storage_tests::legacy_fixture;
+
+#[cfg(test)]
+#[path = "storage/deletion_process_tests.rs"]
+mod deletion_process_tests;

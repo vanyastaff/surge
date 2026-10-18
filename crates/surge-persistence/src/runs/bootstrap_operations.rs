@@ -672,7 +672,7 @@ pub(super) fn read_inspection(
         stored_row(row)
     })
 }
-fn read(
+pub(crate) fn read(
     connection: &Connection,
     id: RunId,
 ) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {

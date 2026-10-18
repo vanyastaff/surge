@@ -2,8 +2,6 @@
 
 use crate::models::{CircuitBreakerState, SessionUsage, SpecUsage, SubtaskUsage};
 use crate::{PersistenceError, Result};
-#[cfg(not(windows))]
-use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
@@ -154,7 +152,11 @@ impl Store {
             namespace,
         )?;
         #[cfg(not(windows))]
-        let conn = Connection::open(path)?;
+        let conn = crate::runs::connection::RetainedConnection::open_controlled(
+            path,
+            rusqlite::OpenFlags::default(),
+            None,
+        )?;
         let mut store = Self {
             conn,
             path: path.to_path_buf(),
@@ -169,7 +171,7 @@ impl Store {
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory()?;
         #[cfg(not(windows))]
-        let conn = Connection::open_in_memory()?;
+        let conn = crate::runs::connection::RetainedConnection::in_memory()?;
         let mut store = Self {
             conn,
             path: PathBuf::from(":memory:"),

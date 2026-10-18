@@ -9,8 +9,16 @@ fn begin(
     operation: WorkItemOperationId,
     body: &[u8],
 ) -> OwnedFlowPreparation {
-    let OwnedFlowPreparationResult::Preparing(preparation) =
-        store.begin_owned_flow(operation, body, false, 1).unwrap()
+    let OwnedFlowPreparationResult::Preparing(preparation) = store
+        .begin_owned_flow(
+            operation,
+            body,
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
+            ),
+            1,
+        )
+        .unwrap()
     else {
         panic!("new owning preparation")
     };
@@ -79,12 +87,26 @@ async fn abandoned_first_body_ids_and_source_are_retained_without_an_accepted_it
         preparation.freeze_source(&source, None).unwrap();
         assert!(store.show(item).is_err());
         assert!(matches!(
-            store.begin_owned_flow(operation, b"original", false, 2),
+            store.begin_owned_flow(
+                operation,
+                b"original",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                2
+            ),
             Err(WorkItemError::Busy)
         ));
         drop(preparation);
         assert!(matches!(
-            store.begin_owned_flow(operation, b"different", false, 2),
+            store.begin_owned_flow(
+                operation,
+                b"different",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                2
+            ),
             Err(WorkItemError::Conflict(_))
         ));
         let preparation = begin(&store, operation, b"original");
@@ -132,7 +154,13 @@ async fn atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_auth
         );
         assert_eq!(
             store
-                .replay_owned_flow(operation, b"original body", false)
+                .replay_owned_flow(
+                    operation,
+                    b"original body",
+                    crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                        crate::work_items::OrdinaryRequestPrivacy::Public
+                    )
+                )
                 .unwrap(),
             Some(receipt.clone())
         );
@@ -443,7 +471,14 @@ async fn canceled_caller_leaves_the_real_blocking_worker_as_preparation_owner() 
         caller.abort();
         assert!(matches!(caller.await,Err(error) if error.is_cancelled()));
         assert!(matches!(
-            store.begin_owned_flow(operation, b"original", false, 2),
+            store.begin_owned_flow(
+                operation,
+                b"original",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                2
+            ),
             Err(WorkItemError::Busy)
         ));
         assert!(store.show(item).is_err());
@@ -524,7 +559,14 @@ async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_
         };
         let original_owner = preparation_identity();
         assert!(matches!(
-            store.begin_owned_flow(operation, b"public HostDefault body", false, 3),
+            store.begin_owned_flow(
+                operation,
+                b"public HostDefault body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                3
+            ),
             Err(WorkItemError::Busy)
         ));
         let server = surge_core::mcp_config::McpServerRef::new(
@@ -554,7 +596,14 @@ async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_
             "private upgrade replaced the retained preparation owner"
         );
         assert!(matches!(
-            store.begin_owned_flow(operation, b"public HostDefault body", false, 4),
+            store.begin_owned_flow(
+                operation,
+                b"public HostDefault body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                4
+            ),
             Err(WorkItemError::Busy)
         ));
 
@@ -589,11 +638,24 @@ async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_
         // rather than a directory, and cannot silently recreate the namespace.
         assert!(std::fs::read(namespace.join("host-key-v1")).is_err());
         assert!(matches!(
-            store.replay_owned_flow(operation, b"public HostDefault body", false),
+            store.replay_owned_flow(
+                operation,
+                b"public HostDefault body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                )
+            ),
             Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
         ));
         assert!(matches!(
-            store.begin_owned_flow(operation, b"public HostDefault body", false, 99),
+            store.begin_owned_flow(
+                operation,
+                b"public HostDefault body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                ),
+                99
+            ),
             Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
         ));
         assert_eq!(
@@ -637,7 +699,16 @@ async fn accepted_private_replay_control(
     let storage = crate::runs::Storage::open(home).await.unwrap();
     let store = storage.work_items();
     let OwnedFlowPreparationResult::Preparing(mut preparation) = store
-        .begin_owned_flow(operation, b"fixed private-backed body", private_request, 1)
+        .begin_owned_flow(
+            operation,
+            b"fixed private-backed body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(if private_request {
+                crate::work_items::OrdinaryRequestPrivacy::Private
+            } else {
+                crate::work_items::OrdinaryRequestPrivacy::Public
+            }),
+            1,
+        )
         .unwrap()
     else {
         panic!("new preparation required")
@@ -677,7 +748,15 @@ async fn accepted_private_replay_control(
     drop(claim);
     assert_eq!(
         store
-            .replay_owned_flow(operation, b"fixed private-backed body", private_request)
+            .replay_owned_flow(
+                operation,
+                b"fixed private-backed body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(if private_request {
+                    crate::work_items::OrdinaryRequestPrivacy::Private
+                } else {
+                    crate::work_items::OrdinaryRequestPrivacy::Public
+                })
+            )
             .unwrap(),
         Some(receipt.clone())
     );
@@ -715,10 +794,25 @@ async fn private_replay_replacement_case(private_request: bool) {
     let facts = {
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
-        let replay =
-            store.replay_owned_flow(operation, b"fixed private-backed body", private_request);
-        let begin =
-            store.begin_owned_flow(operation, b"fixed private-backed body", private_request, 99);
+        let replay = store.replay_owned_flow(
+            operation,
+            b"fixed private-backed body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(if private_request {
+                crate::work_items::OrdinaryRequestPrivacy::Private
+            } else {
+                crate::work_items::OrdinaryRequestPrivacy::Public
+            }),
+        );
+        let begin = store.begin_owned_flow(
+            operation,
+            b"fixed private-backed body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(if private_request {
+                crate::work_items::OrdinaryRequestPrivacy::Private
+            } else {
+                crate::work_items::OrdinaryRequestPrivacy::Public
+            }),
+            99,
+        );
         let refused = matches!(replay, Err(WorkItemError::PrivateInputsRecoveryRequired))
             && matches!(begin, Err(WorkItemError::PrivateInputsRecoveryRequired));
         let row: String = store.pool.get().unwrap().query_row(
@@ -777,7 +871,15 @@ async fn established_healthy_original_private_namespace_cold_replay_control() {
             let storage = crate::runs::Storage::open(home.path()).await.unwrap();
             let store = storage.work_items();
             let replay = store
-                .replay_owned_flow(operation, b"fixed private-backed body", private_request)
+                .replay_owned_flow(
+                    operation,
+                    b"fixed private-backed body",
+                    crate::work_items::OwnedFlowPreparationPurpose::Ordinary(if private_request {
+                        crate::work_items::OrdinaryRequestPrivacy::Private
+                    } else {
+                        crate::work_items::OrdinaryRequestPrivacy::Public
+                    }),
+                )
                 .unwrap();
             let claim = store.claim(receipt.run).unwrap();
             let inputs = store.hydrate_owned_flow_inputs(&claim).unwrap().unwrap();
@@ -806,7 +908,13 @@ async fn established_true_public_empty_mcp_cold_receipt_needs_no_private_namespa
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
         let replay = store
-            .replay_owned_flow(operation, b"original body", false)
+            .replay_owned_flow(
+                operation,
+                b"original body",
+                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                    crate::work_items::OrdinaryRequestPrivacy::Public,
+                ),
+            )
             .unwrap();
         (
             replay == Some(receipt),

@@ -74,7 +74,11 @@ pub fn open_registry_pool(
         namespace.clone(),
     )?;
     #[cfg(not(windows))]
-    let mut conn = rusqlite::Connection::open(&db_path)?;
+    let mut conn = super::connection::RetainedConnection::open_controlled(
+        &db_path,
+        rusqlite::OpenFlags::default(),
+        None,
+    )?;
     apply_pragmas(&conn, REGISTRY_PRAGMAS)?;
     crate::runs::busy::install(&conn)?;
     apply_migrations(
@@ -237,23 +241,6 @@ pub(crate) fn find_ids_by_suffix_connection(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(ids)
-}
-
-/// Delete a run row.
-pub fn delete_run(
-    pool: &Pool<SqliteConnectionManager>,
-    run_id: &RunId,
-) -> Result<(), StorageError> {
-    let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
-    delete_run_connection(&conn, run_id)
-}
-
-pub(crate) fn delete_run_connection(
-    conn: &rusqlite::Connection,
-    run_id: &RunId,
-) -> Result<(), StorageError> {
-    conn.execute("DELETE FROM runs WHERE id = ?", params![run_id.to_string()])?;
-    Ok(())
 }
 
 /// Update status (and optionally ended_at_ms) for a run.
@@ -512,14 +499,19 @@ mod tests {
         home.close().unwrap();
     }
 
-    #[test]
-    fn insert_get_list_delete_roundtrip() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn insert_get_list_delete_roundtrip() {
         let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let clock = MockClock::new(1_700_000_000_000);
-            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let clock = std::sync::Arc::new(MockClock::new(1_700_000_000_000));
+            let storage = crate::runs::Storage::open_with(tmp.path(), clock)
+                .await
+                .unwrap();
+            let pool = storage.registry_pool.clone();
             let s = fixture_summary(RunId::new(), Some(1234));
-
+            let reservation = storage.reserve_new_run(s.id).await.unwrap();
+            let (_, owner) = storage.bind_reserved(reservation).await.unwrap();
+            drop(owner);
             insert_run(&pool, &s).unwrap();
             let got = get_run(&pool, &s.id).unwrap().unwrap();
             assert_eq!(got.id, s.id);
@@ -528,7 +520,7 @@ mod tests {
             let listed = list_runs(&pool, &RunFilter::default()).unwrap();
             assert_eq!(listed.len(), 1);
 
-            delete_run(&pool, &s.id).unwrap();
+            storage.delete_run(&s.id).await.unwrap();
             assert!(get_run(&pool, &s.id).unwrap().is_none());
         }
         tmp.close().unwrap();

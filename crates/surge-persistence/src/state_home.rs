@@ -4,8 +4,8 @@ mod windows;
 #[cfg(test)]
 pub(crate) use windows::private_observation;
 
-pub(crate) use windows::NativeJournalLock;
 pub(crate) use windows::native::NativeError;
+pub(crate) use windows::{DeletionNamespace, NativeJournalLock, NativeRunControl};
 pub(crate) use windows::{PrivateFiles as WindowsPrivateFiles, PrivatePreparation};
 pub(crate) use windows::{RunRoot, RunRoute};
 pub(crate) use windows::{SqliteNamespaceOwner, StateHomeOwner};
@@ -504,3 +504,6 @@ impl RuntimeImmutableFiles {
             .map_err(PersistenceError::from)
     }
 }
+
+#[cfg(test)]
+pub(crate) use windows::snapshot_observe;

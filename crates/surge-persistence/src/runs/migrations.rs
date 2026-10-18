@@ -157,6 +157,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0035-owned-flow-private-establishment",
         include_str!("migrations/registry/0035_owned_flow_private_establishment.sql"),
     ),
+    (
+        "registry-0036-continuation-inputs",
+        include_str!("migrations/registry/0036_continuation_inputs.sql"),
+    ),
+    (
+        "registry-0037-run-coordination",
+        include_str!("migrations/registry/0037_run_coordination.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

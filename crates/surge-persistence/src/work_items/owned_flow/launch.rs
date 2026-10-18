@@ -270,6 +270,7 @@ impl WorkItemStore {
         run: RunId,
         observation: Option<ReconciliationObservation<'_>>,
     ) -> Result<Option<WorkItemLaunchClaim>> {
+        super::purpose::refuse_execution(self, run)?;
         let value = stored(&*self.pool.get()?, run)?;
         let guard = PreparationLock::acquire_stable(
             &self.home,
@@ -378,6 +379,7 @@ impl WorkItemStore {
                 "owned Flow requires stable launch ownership".into(),
             ));
         };
+        super::purpose::refuse_execution_in(conn, claim.run, private_owner.as_ref())?;
         let value = stored(conn, claim.run)?;
         if matches!(value.inputs.mcp(), FrozenOwnedFlowMcp::Private { .. })
             || matches!(
@@ -402,6 +404,7 @@ impl WorkItemStore {
     }
     /// Effect-time permission for a genuinely pending owned ordinary Flow.
     pub fn validate_owned_flow_pending(&self, claim: &WorkItemLaunchClaim) -> Result<()> {
+        super::purpose::refuse_execution(self, claim.run)?;
         claim.verify_lock()?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
@@ -414,6 +417,7 @@ impl WorkItemStore {
     /// Recheck owned Flow intent and the latest generation control at an actual effect.
     /// Legacy task claims keep their existing execution-control path.
     pub fn validate_owned_flow_effect(&self, claim: &WorkItemLaunchClaim) -> Result<()> {
+        super::purpose::refuse_execution(self, claim.run)?;
         claim.verify_lock()?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
@@ -463,6 +467,7 @@ impl WorkItemStore {
     }
     /// Whether this exact Reserved attempt has a real uncanceled durable launch intent.
     pub fn has_pending_owned_flow(&self, run: RunId) -> Result<bool> {
+        super::purpose::refuse_execution(self, run)?;
         let conn = self.pool.get()?;
         let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM owned_flow_operations WHERE run=? AND state='accepted' AND intent_state='pending')",[run.to_string()],|r|r.get(0))?;
         if !exists {
@@ -472,6 +477,7 @@ impl WorkItemStore {
     }
     /// Authenticated public manifest for exact journal comparison; no effect capability.
     pub fn owned_flow_manifest(&self, run: RunId) -> Result<Option<OwnedFlowInputsManifest>> {
+        super::purpose::refuse_execution(self, run)?;
         let conn = self.pool.get()?;
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM owned_flow_operations WHERE run=? AND state='accepted')",
@@ -495,6 +501,7 @@ impl WorkItemStore {
         &self,
         claim: &WorkItemLaunchClaim,
     ) -> Result<Option<AuthenticatedOwnedFlowInputs>> {
+        super::purpose::refuse_execution(self, claim.run)?;
         if !matches!(claim.lock, LaunchLock::OwnedFlow { .. }) {
             return Ok(None);
         }
@@ -518,6 +525,7 @@ impl WorkItemStore {
         claim: &WorkItemLaunchClaim,
         manifest: &OwnedFlowInputsManifest,
     ) -> Result<()> {
+        super::purpose::refuse_execution(self, claim.run)?;
         claim.verify_lock()?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
