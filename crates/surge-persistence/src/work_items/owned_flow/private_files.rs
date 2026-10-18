@@ -302,12 +302,15 @@ mod platform {
     pub(super) struct Namespace(crate::state_home::WindowsPrivateFiles);
     fn error(error: crate::state_home::NativeError) -> WorkItemError {
         use windows::Win32::Foundation::{
-            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+            STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
         };
         match error {
             crate::state_home::NativeError::Open(
                 STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND,
             ) => WorkItemError::PrivateInputsRecoveryRequired,
+            crate::state_home::NativeError::Open(STATUS_NOT_A_DIRECTORY) => {
+                WorkItemError::PrivateInputsUnsafe
+            },
             crate::state_home::NativeError::Security(_) => WorkItemError::PrivateInputsUnsafe,
             error => error.into(),
         }

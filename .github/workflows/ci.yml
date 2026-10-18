@@ -109,6 +109,30 @@ jobs:
           path: ${{ runner.temp }}/bridge-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
 
+      # Fixed causal observation only; the unchanged full suite still runs on failure.
+      - name: Test fixed Windows observation checker
+        id: wg7_checker
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: python -m unittest discover -s scripts -p 'test_wg7_windows_observation.py' -v
+
+      - name: Observe five Windows cases before the full suite
+        id: wg7_focused
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: python scripts/wg7_windows_observation.py capture --output "${{ runner.temp }}/wg7-observation-${{ github.run_id }}-${{ github.run_attempt }}"
+        timeout-minutes: 45
+
+      - name: Upload early Windows observation evidence
+        id: wg7_early_upload
+        if: always() && matrix.os == 'windows-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: wg7-observation-before-full-${{ github.sha }}
+          path: ${{ runner.temp }}/wg7-observation-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
       # in its own process by default, which avoids parallel SQLite/WAL races
       # we hit on Windows under the old harness.
@@ -120,8 +144,15 @@ jobs:
         run: cargo nextest run --locked --workspace --no-fail-fast
 
       - name: Run tests (nextest)
+        id: full_native_suite
         if: matrix.os != 'ubuntu-latest'
         run: cargo nextest run --locked --workspace --exclude surge-ui --no-fail-fast
+
+      - name: Verify Windows observation identities after the full suite
+        id: wg7_identity
+        if: always() && matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: python scripts/wg7_windows_observation.py verify --output "${{ runner.temp }}/wg7-observation-${{ github.run_id }}-${{ github.run_attempt }}"
 
       - name: Probe native NTFS durability as a standard user (Windows)
         if: always() && matrix.os == 'windows-latest'
@@ -181,6 +212,24 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --locked -p surge-cli --test daemon_restart -- --ignored
         timeout-minutes: 10
+
+      - name: Upload final Windows observation evidence
+        id: wg7_final_upload
+        if: always() && matrix.os == 'windows-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: wg7-observation-after-full-${{ github.sha }}
+          path: ${{ runner.temp }}/wg7-observation-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+
+      - name: Enforce actual Windows observation and full-suite outcomes
+        if: always() && matrix.os == 'windows-latest'
+        env:
+          WG7_OUTCOMES: >-
+            {"checker":"${{ steps.wg7_checker.outcome }}","focused":"${{ steps.wg7_focused.outcome }}","early_upload":"${{ steps.wg7_early_upload.outcome }}","full":"${{ steps.full_native_suite.outcome }}","identity":"${{ steps.wg7_identity.outcome }}","final_upload":"${{ steps.wg7_final_upload.outcome }}"}
+        shell: pwsh
+        run: python scripts/wg7_windows_observation.py enforce --output "${{ runner.temp }}/wg7-observation-${{ github.run_id }}-${{ github.run_attempt }}" --outcomes $env:WG7_OUTCOMES
 
   clippy:
     name: Clippy (${{ matrix.os }})

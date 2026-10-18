@@ -42,15 +42,17 @@ pub(crate) fn read_native_entry(
         });
     }
     let before = file.metadata()?;
-    let mut input = file;
     let mut hash = Sha256::new();
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let count = input.read(&mut chunk)?;
-        if count == 0 {
-            break;
+    if before.len() != 0 {
+        let mut input = file;
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let count = input.read(&mut chunk)?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&chunk[..count]);
         }
-        hash.update(&chunk[..count]);
     }
     let after = file.metadata()?;
     if before.len() != after.len() || before.modified()? != after.modified()? {

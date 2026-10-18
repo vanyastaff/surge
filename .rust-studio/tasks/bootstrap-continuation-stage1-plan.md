@@ -1070,3 +1070,150 @@ does not cancel the native diagnostic run39167406937. The PR must state actual
 open gates and incomplete continuation endpoint; no green or app-completion claim.
 Keep same retained habit tracker/all8/history/exact codex-acp/gpt-6.1-sol as the
 continuation goal. Git/remote operations remain root-owned, no force push.
+
+
+### Repair7 native checkpoint — release exact deletion/private corrections
+
+Native c885efee / run39167406937 Windows job117793126362 completed4547run,
+4500PASS/47FAIL/53skip. All8 readonly regression cases PASS unchanged. Actual
+owned original zero-length events.sqlite.lock inventory fails ReadFile OS33;
+nonempty full-hash and locked-nonempty-refusal controls PASS. Actual unavailable
+private replay and begin both return StateHome/native Open NTSTATUS(-1073741565),
+exact STATUS_NOT_A_DIRECTORY. Independent owner/security preaccepted these exact
+conditions. Release sole builder accepted empty-length read avoidance preserving
+identity/security+before/after metadata, and ONLY exact SDK NTSTATUS mapping to
+PrivateInputsUnsafe. No other error/status/launch/Attention authority changes.
+
+IPC actual Ping anchor is confounded: healthy canonical passes, subsequent
+recreated same-name listener pairs all return AccessDenied, including canonical.
+Bare/absolute address mismatch and missing-parent acceptance are observed, but
+actual causal alias Ping RED is not established. IPC production remains HELD
+for focused owner/security-reviewed test correction and fresh native evidence.
+Unknown recovery47 includes six new anchors; no blanket baseline/load attribution.
+Linux4944/4948 has authentic futureouter plus3 UI settlement failures; macOS
+4553/4554 only authentic futureouter. These remain mandatory PR151 blockers.
+Same ongoing repair7/7, root Git/CI ownership and user no-new-UI boundary retained.
+Full logs and ci-first-native-classification.json retained. No provider/history
+actions and no whole Stage2, whole CI or merge-readiness claim.
+
+
+### Repair7 tactical IPC oracle/probe release after independent review
+
+Owning lead and security independently ACCEPTABLE: correct only the test oracle
+to ONE retained actual listener with sequential healthycanonical/ordinary/canonical/
+verbatim clients, original2s each and exact Ping87/version. Accept loop waits for
+explicit stop (not four successful accepts); failed ordinary connect must not kill
+the listener. Label resolve/create/connect/accept/read/write/response errors, retain
+later canonical positives, stop and actually join/settle owners before homeclose
+and final assertions. Actual native ordinary-alias RED with healthy controls is
+still required before IPC production B. No retry/recreation or weakened assertions.
+
+WG7-PROBE exact stalefilter replacement is ACCEPTABLE in this same correction
+checkpoint now original native private Open STATUS_NOT_A_DIRECTORY is confirmed
+and narrow mapping implemented. Select exact existing private-backed replay test,
+retain one actual execution/PASS/name/currentbinaryhash/non-elevatedSID/nonzero
+checks; all other cases/security/receipts unchanged. Next native probe must prove
+GREEN, this release does not assume it. Sole builder lease extends exactly to
+IPC test module and this script filter; no IPC production/recovery/UI behavior.
+Same7/7, PR151 fullCI/review/merge authorization, source freeze before dispatch.
+
+
+### Mandatory PR151 gate plans — isolated native discriminator and test scheduling
+
+Independent spec diagnosis WG7-RECOVERY-OBS01: native deadline cuts occur during
+admitted nonterminal progress, not a proven permanent fault. Quota has established
+session and durable SessionOpened before first-send gate; MCP cases reach differing
+session/usage/closure boundaries; cold mock remains in real startup; split already
+commits/routes and starts later session. Post-timeout lease-drop logs are effects.
+No production recovery/timeout change released on this evidence.
+
+Owning lead and security accept ONE fixed Windows isolated diagnostic step before
+the UNCHANGED full suite, exact five binary/test identities:
+- surge-daemon::quota_recovery_route_test / actual_429_after_declared_source_change_is_audit_only_and_primary_is_attempted_again
+- surge-daemon::owned_flow_mcp_recovery / explicit_empty_survives_real_cold_wake_and_changed_global_defaults
+- surge-daemon::work_item_route_test / cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+- surge-daemon::work_item_route_test / task_split_recovery::accepted_split_recovers_children_once_with_fresh_retry_budget
+- surge-orchestrator / engine::ipc::windows_address_tests::public_resolver_aliases_reach_same_actual_listener_with_ping
+Preflight inventory MUST equal exact set5; require exactly5 actual executions.
+Same SHA and actual native test/mock binary hashes, test-threads1, no retries or
+per-test deadline/assertion changes, inherited120s killbound. Reuse existing receipt/
+logging seams, separate focused logs/JUnit from existing bridge evidence and upload
+with always immediately after focused step. continue-on-error ONLY allows fullsuite;
+final always enforcement checks actual focused AND full step outcomes, fails for
+either failure or skipped required execution. No selectable dispatchinputs/new
+workflow/framework or reduction of full acceptance. Implementation lease remains
+HELD until root receives owning lead exact mechanism confirmation and dispatches.
+
+Mandatory Ubuntu UI gate plans UI-CLOCK-01/UI-HYDRATE-02 have independent owner/
+security conditional ACCEPTABLE verdicts and critic source diagnosis. They change
+TEST synchronization only, no production UI behavior. First capture deterministic
+old-harness RED: forced fast read completion demonstrates5s fakeclock overshooting
+original500ms/1s/2s retry boundaries; delayed failed-read publication demonstrates
+live/subscribed precedes completed hydration. Then step independently fixed original
+retry intervals only after actual same-owner/run settled read; preserve exact1..4
+counts (never>=), exhaustion/replacement/navigation assertions. For hydration reuse
+controlled_history_reads load/release seam and require same run/token Incomplete +
+!is_reading with retained diagnostic/pending before repair/retryclock. Preserve all
+pending/session/unconfirmed-fence/eventual-history assertions and existing deadlines.
+UI author lease remains HELD for first corrected native checkpoint publication;
+root may release these exact test-only RED/repair paths afterward within explicit
+user PR151 mandatory-green mandate. No new feature/UI improvement or count reset;
+ongoing7/7 remains shared. Source author remains sole builder, root owns Git/CI.
+
+
+### Repair7 fixed native observation mechanism — sole-builder lease released
+
+Owner final ACCEPTABLE confirms exactfive identities above. Use a tiny logging-only
+wg7-windows-observation nextest profile (same inherited120s timeout, fail-fastfalse,
+retries0, separate JUnit directory) and one fixed Windows step in existingci.yml.
+Preflight JSON inventory exact(binaryID,testname) set equality, nonignored, and
+postrun exactfive actual executions; capture currentSHA and actual selectedtest/
+mockbinary hashes, verify samebinaries after fullsuite. Capture nativeexitcode,
+early always upload separate logs/JUnit/inventory/identity evidence. Focused
+continue-on-error is for sequencing only; preserve fullsuite execution even when
+focused/evidence step fails and finalalways enforcement checks REAL outcomes
+(including evidence failures), never maskedconclusions. Full original suite/
+commands/requiredplatforms remain mandatory. No dispatchinputs/newworkflow/general
+diagnosticframework. Reuse existing receipt helpers where possible; a bounded
+fixed wrapper or inline workflow implementation may implement exactly this seam,
+with meaningful checker checks and independent readiness review before publishing.
+Release source lease for this mechanism alongside already released two production
+corrections, IPC TESToracle and exactprobefilter. UItest authoring remains HELD
+until first corrected native checkpoint is frozen/reviewed/published, so Windows
+evidence can run while later approved test-only deterministicRED proceeds.
+IPC production and unknownrecovery semantics remain HELD until causal evidence.
+Ongoing7/7, root-only Git/CI, no newUI/provider/history actions.
+
+
+### Existing recovery diagnostic scope — later macOS corruption refusal cut
+
+Initial PR151 macOS c885efee also fails transplanted_objects_and_changed_manifest_
+refuse_real_cold_writers after successful park/corruption/coldrestart, childphase
+refuse, original10s wait_attention. Reconciliation reports acceptedassociationchanged;
+ManifestBinding is only a candidate, dedicatedmanifestbindingcase PASSED same run.
+Do not change production classification/guard/expectedAttention on this evidence.
+Extend existing bounded TEST observation lease only: emit exact corruption label,
+run/control state, bounded lastjournal and duewake/reservation/refusal phase before
+cleanup at existing wait_attention seam; reuse retained stores, never rawliveDBFD,
+no private payloads. Preserve original10s/all no-effect+Attention assertions, owners
+and actual settlement. This is existing WG7-RECOVERY observation scope, not a sixth
+focused case/new discriminator/repair8. Exact isolatedset5 remains unchanged.
+
+
+### Fixed observation implementation closure accepted
+
+Sole builder proposed exact4file closure before extrahelper edits: existing
+.github/workflows/ci.yml, .config/nextest.toml, fixed scripts/wg7_windows_observation.py
+and its stdlib unittest file. Root accepts this bounded implementation of the
+independently approved seam. Reuse bridge_portability run_command/revision_errors/
+read_junit, strengthen exact(binaryID,name) matching, actual5execution/zeroignore/
+skip/duplicate checks, currentSHA and actualtest/mockbinaryhash before/afterfull.
+Capture/verify phases only, no configurableselectors/dispatchinputs/overrides.
+Native list/run shares fullsuite Cargo flags; logging-only profile+serialfocused
+execution is the sole runtime difference. Checker branches must cover mismatches,
+empty/extra/duplicate/ignored lists, failed/skipped/error/wrongidentityJUnit, source/
+binarydrift and masked/skipped outcomes. Actualnextest CLI/artifacts defineformat.
+Workflow finalalways enforcement checks checker/focus/full/verify/bothuploads REAL
+outcomes; all diagnostic step failures sequence fullsuite without erasing failure.
+Root keeps sourcefreeze/readiness/native dispatch and final fullgate obligations.
+Same7/7, no new workflow/framework/product/UI/provider/history authority.

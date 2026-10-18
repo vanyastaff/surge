@@ -1136,61 +1136,60 @@ mod windows_address_tests {
     use interprocess::local_socket::{ListenerOptions, tokio::prelude::*};
     use std::{path::Path, time::Duration};
 
-    async fn actual_alias_ping(listener_path: &Path, client_path: &Path) -> Result<(), String> {
-        let listener = ListenerOptions::new()
-            .name(local_socket_name_from_path(listener_path).map_err(|e| e.to_string())?)
-            .create_tokio()
-            .map_err(|e| e.to_string())?;
-        let (stop, stopped) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let stream = tokio::select! {
-                stream = listener.accept() => stream.map_err(|e| e.to_string())?,
-                _ = stopped => return Ok::<(), String>(()),
-            };
-            let (read, mut write) = stream.split();
-            let request = read_request_frame(&mut tokio::io::BufReader::new(read))
-                .await
-                .map_err(|e| e.to_string())?;
-            let Some(DaemonRequest::Ping { request_id }) = request else {
-                return Err("actual listener received a non-Ping request".into());
-            };
-            write_frame(
-                &mut write,
-                &DaemonResponse::PingOk {
-                    request_id,
-                    version: "fixed-native-alias".into(),
-                },
-            )
+    async fn serve_alias_ping(stream: LocalSocketStream) -> Result<&'static str, String> {
+        let (read, mut write) = stream.split();
+        let request = read_request_frame(&mut tokio::io::BufReader::new(read))
             .await
-            .map_err(|e| e.to_string())
-        });
-        let result = tokio::time::timeout(Duration::from_secs(2), async {
-            let name = local_socket_name_from_path(client_path).map_err(|e| e.to_string())?;
+            .map_err(|e| format!("phase=server-read {e}"))?;
+        let Some(DaemonRequest::Ping { request_id: 87 }) = request else {
+            return Err("phase=server-read actual listener received a non-Ping87 request".into());
+        };
+        write_frame(
+            &mut write,
+            &DaemonResponse::PingOk {
+                request_id: 87,
+                version: "fixed-native-alias".into(),
+            },
+        )
+        .await
+        .map_err(|e| format!("phase=server-write {e}"))?;
+        Ok("phase=server-read/write complete")
+    }
+
+    async fn actual_alias_ping(client_path: &Path) -> Result<(), String> {
+        let mut phase = "client-resolve";
+        let observed = tokio::time::timeout(Duration::from_secs(2), async {
+            let name = local_socket_name_from_path(client_path)
+                .map_err(|e| format!("phase=client-resolve {e}"))?;
+            phase = "client-connect";
             let stream = LocalSocketStream::connect(name)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("phase=client-connect {e}"))?;
             let (read, mut write) = stream.split();
+            phase = "client-write";
             write_frame(&mut write, &DaemonRequest::Ping { request_id: 87 })
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("phase=client-write {e}"))?;
+            phase = "client-read";
             let response = read_response_frame(&mut tokio::io::BufReader::new(read))
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("phase=client-read {e}"))?;
+            phase = "client-response";
             match response {
                 Some(DaemonResponse::PingOk {
                     request_id: 87,
                     version,
                 }) if version == "fixed-native-alias" => Ok(()),
-                other => Err(format!("actual alias Ping response: {other:?}")),
+                other => Err(format!(
+                    "phase=client-response actual alias Ping: {other:?}"
+                )),
             }
         })
-        .await
-        .map_err(|_| "actual alias Ping deadline".to_owned())
-        .and_then(|v| v);
-        let _ = stop.send(());
-        let joined = server.await.map_err(|e| e.to_string())?;
-        joined?;
-        result
+        .await;
+        match observed {
+            Ok(result) => result,
+            Err(_) => Err(format!("phase={phase} actual alias Ping deadline2s")),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1201,21 +1200,63 @@ mod windows_address_tests {
             .unwrap()
             .join("native-alias.sock");
         let verbatim = canonical.clone(); // The OS canonicalizer supplies the native verbatim spelling.
-        let mut results = vec![(
-            "healthy canonical",
-            actual_alias_ping(&canonical, &canonical).await,
-        )];
+        let name = local_socket_name_from_path(&canonical)
+            .expect("phase=listener-resolve canonical parent");
+        let listener = ListenerOptions::new()
+            .name(name)
+            .create_tokio()
+            .expect("phase=listener-create exactly one retained listener");
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut phases = Vec::new();
+            loop {
+                let accepted = tokio::select! {
+                    stream = listener.accept() => stream,
+                    _ = &mut stopped => { phases.push(Ok("phase=server-stop")); break; },
+                };
+                let stream = match accepted {
+                    Ok(stream) => {
+                        phases.push(Ok("phase=server-accept"));
+                        stream
+                    },
+                    Err(error) => {
+                        phases.push(Err(format!("phase=server-accept {error}")));
+                        break;
+                    },
+                };
+                let served = tokio::select! {
+                    result = serve_alias_ping(stream) => result,
+                    _ = &mut stopped => { phases.push(Ok("phase=server-stop-during-serve")); break; },
+                };
+                phases.push(served);
+            }
+            phases
+        });
+        let mut results = vec![("healthy canonical", actual_alias_ping(&canonical).await)];
         for (label, path) in [
             ("ordinary", &ordinary),
-            ("canonical", &canonical),
+            ("canonical after ordinary", &canonical),
             ("verbatim", &verbatim),
         ] {
-            results.push((label, actual_alias_ping(&canonical, path).await));
+            results.push((label, actual_alias_ping(path).await));
         }
+        let _ = stop.send(());
+        let server_phases = server.await;
         home.close().unwrap();
+        let server_phases = server_phases.expect("actual retained listener/server task must join");
         assert!(
-            results.iter().all(|(_, result)| result.is_ok()),
-            "actual alias Ping observations: {results:?}"
+            server_phases.iter().all(Result::is_ok),
+            "actual server phases: {server_phases:?}; clients={results:?}"
+        );
+        for index in [0, 2, 3] {
+            assert!(
+                results[index].1.is_ok(),
+                "actual canonical positive control: {results:?}; server={server_phases:?}"
+            );
+        }
+        assert!(
+            results[1].1.is_ok(),
+            "actual ordinary alias Ping: {results:?}; server={server_phases:?}"
         );
     }
 

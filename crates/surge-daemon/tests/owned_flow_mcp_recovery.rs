@@ -717,7 +717,9 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         } else if phase == "refuse-state" {
             tokio::time::sleep(Duration::from_millis(250)).await;
         } else {
-            wait_attention(&storage, receipt.run).await;
+            let corruption =
+                std::env::var("SURGE_OWNED_MCP_CORRUPTION").unwrap_or_else(|_| "none".into());
+            wait_attention(&storage, receipt.run, &corruption).await;
         }
         cancel.cancel();
         waking.await.unwrap();
@@ -905,6 +907,16 @@ fn fixture_with_host_defaults(populated: bool) -> RetainedFixture {
 }
 
 async fn phase(root: &Path, home: &Path, mode: &str, ready: &str) -> cold_host::ColdHost {
+    phase_labeled(root, home, mode, ready, "none").await
+}
+
+async fn phase_labeled(
+    root: &Path,
+    home: &Path,
+    mode: &str,
+    ready: &str,
+    corruption: &str,
+) -> cold_host::ColdHost {
     let mut host = cold_host::ColdHost::spawn(
         "child_owned_flow_mcp_probe",
         [
@@ -920,6 +932,10 @@ async fn phase(root: &Path, home: &Path, mode: &str, ready: &str) -> cold_host::
                 OsString::from("SURGE_OWNED_MCP_PHASE"),
                 OsString::from(mode),
             ),
+            (
+                OsString::from("SURGE_OWNED_MCP_CORRUPTION"),
+                OsString::from(corruption),
+            ),
         ],
         root.join(ready),
         root,
@@ -929,7 +945,7 @@ async fn phase(root: &Path, home: &Path, mode: &str, ready: &str) -> cold_host::
     if let Err(error) = result {
         let (stdout, stderr) = host.diagnostics_paths();
         panic!(
-            "{mode} child readiness failed: {error}; stdout {}; stderr {}",
+            "{mode} child readiness failed: {error}; corruption={corruption}; stdout {}; stderr {}",
             stdout.display(),
             stderr.display()
         );
@@ -1015,8 +1031,9 @@ async fn wait_completed(storage: &Arc<Storage>, run: RunId) {
     .unwrap();
 }
 
-async fn wait_attention(storage: &Arc<Storage>, run: RunId) {
-    tokio::time::timeout(Duration::from_secs(10), async {
+async fn wait_attention(storage: &Arc<Storage>, run: RunId, corruption: &str) {
+    let started = std::time::Instant::now();
+    let observed = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let attempt = storage.work_items().for_run(run).unwrap().unwrap();
             let control = storage.work_items().execution_control(run).unwrap();
@@ -1030,11 +1047,91 @@ async fn wait_attention(storage: &Arc<Storage>, run: RunId) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap();
+    .await;
+    if observed.is_err() {
+        attention_timeout_observation(storage, run, corruption, started.elapsed()).await;
+    }
+    observed.unwrap();
 }
 
-async fn cold_wake(root: &Path, home: &Path, expected: &Value, mode: &str) {
+async fn attention_timeout_observation(
+    storage: &Arc<Storage>,
+    run: RunId,
+    corruption: &str,
+    elapsed: Duration,
+) {
+    let attempt = storage.work_items().for_run(run).map(|value| {
+        value.map(|value| {
+            (
+                value.state,
+                value.binding.generation,
+                value.diagnostic.is_some(),
+            )
+        })
+    });
+    let control = storage.work_items().execution_control(run).map(|value| {
+        value.map(|value| (value.state, value.generation, value.diagnostic.is_some()))
+    });
+    let cycles = storage
+        .work_items()
+        .due_recovery_wakes_for_run(run, i64::MAX, 10)
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|cycle| {
+                    let reservations = storage
+                        .work_items()
+                        .recovery_reservations(run, &cycle.invocation, cycle.generation)
+                        .map(|values| values.len());
+                    (
+                        cycle.invocation,
+                        cycle.generation,
+                        cycle.revision,
+                        cycle.closed,
+                        cycle.wake.map(|wake| wake.due_at_ms()),
+                        reservations,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+    let history = storage.inspect_run(run).await.map(|history| {
+        let registry = history
+            .registry
+            .map(|value| (value.status, value.wake_at_ms));
+        let (tail, refusals) = match history.database {
+            RunDatabaseInspection::Present { events } => {
+                let tail = events
+                    .iter()
+                    .rev()
+                    .take(32)
+                    .map(|event| (event.seq, event.kind.clone()))
+                    .collect::<Vec<_>>();
+                let refusals = events
+                    .iter()
+                    .rev()
+                    .filter_map(|event| {
+                        if let EventPayload::OwnedFlowWakeRefused { receipt } =
+                            &event.payload.payload
+                        {
+                            Some((event.seq, receipt.reason()))
+                        } else {
+                            None
+                        }
+                    })
+                    .take(4)
+                    .collect::<Vec<_>>();
+                (tail, refusals)
+            },
+            RunDatabaseInspection::Absent => (Vec::new(), Vec::new()),
+        };
+        (registry, tail, refusals)
+    });
+    eprintln!(
+        "attention-timeout corruption={corruption} run={run} elapsed={elapsed:?} attempt={attempt:?} control={control:?} due_cycles_with_reservation_counts={cycles:?} registry_journal_refusals={history:?}"
+    );
+}
+
+async fn cold_wake(root: &Path, home: &Path, expected: &Value, mode: &str, corruption: &str) {
     // Poison present project defaults AND engine-global fallback after capture.
     let config = surge_core::SurgeConfig {
         mcp_servers: vec![server(root, "oracle", "changed-default.jsonl")],
@@ -1045,7 +1142,7 @@ async fn cold_wake(root: &Path, home: &Path, expected: &Value, mode: &str) {
         toml::to_string(&config).unwrap(),
     )
     .unwrap();
-    let mut host = phase(root, home, mode, "wake.ready").await;
+    let mut host = phase_labeled(root, home, mode, "wake.ready", corruption).await;
     assert!(
         host.wait_exit(Duration::from_secs(35))
             .await
@@ -1107,7 +1204,7 @@ async fn explicit_empty_survives_real_cold_wake_and_changed_global_defaults() {
     {
         let accepted = start_park(root.path(), root.home(), "explicit-empty").await;
         assert_eq!(accepted["manifest"]["mcp"]["selection"], "explicit");
-        cold_wake(root.path(), root.home(), &accepted, "wake").await;
+        cold_wake(root.path(), root.home(), &accepted, "wake", "none").await;
         assert!(!root.home().join("work-items/private-flow-inputs").exists());
         assert!(!root.path().join("original.jsonl").exists());
     }
@@ -1121,7 +1218,7 @@ async fn host_default_empty_survives_real_cold_wake_and_changed_global_defaults(
     {
         let accepted = start_park(root.path(), root.home(), "default-empty").await;
         assert_eq!(accepted["manifest"]["mcp"]["selection"], "host_default");
-        cold_wake(root.path(), root.home(), &accepted, "wake").await;
+        cold_wake(root.path(), root.home(), &accepted, "wake", "none").await;
         assert!(!root.home().join("work-items/private-flow-inputs").exists());
         assert!(!root.path().join("original.jsonl").exists());
     }
@@ -1338,7 +1435,7 @@ async fn populated_cold_valid_twin_keeps_original_transport_and_writer_history()
         {
             let accepted = start_park(root.path(), root.home(), mode).await;
             let before = records(&root.path().join("original.jsonl")).len();
-            cold_wake(root.path(), root.home(), &accepted, "wake").await;
+            cold_wake(root.path(), root.home(), &accepted, "wake", "none").await;
             verify_actual_transport(root.path(), &accepted);
             assert_stage_whitelist(root.path(), mode);
             assert_stage_whitelist(root.path(), "wake");
@@ -1481,7 +1578,7 @@ async fn unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatc
         drop(storage);
         let before = records(&root.path().join("original.jsonl"));
         let provider_before = records(&root.home().join("quota-a-wire.jsonl"));
-        cold_wake(root.path(), root.home(), &accepted, "refuse").await;
+        cold_wake(root.path(), root.home(), &accepted, "refuse", "legacy-case").await;
         assert_eq!(
             records(&root.path().join("original.jsonl")),
             before,
@@ -1617,7 +1714,14 @@ async fn corruption_refuses_before_any_new_actual_effect(fault: Corruption) {
         ];
         let before: Vec<_> = observed.iter().map(|name| records(name)).collect();
         corrupt(root.home(), &accepted, fault);
-        cold_wake(root.path(), root.home(), &accepted, "refuse").await;
+        cold_wake(
+            root.path(),
+            root.home(),
+            &accepted,
+            "refuse",
+            &format!("{fault:?}"),
+        )
+        .await;
         for (name, previous) in observed.iter().zip(before) {
             assert!(
                 records(name) == previous,
