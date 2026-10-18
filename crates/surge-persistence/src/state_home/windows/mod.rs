@@ -115,6 +115,19 @@ impl RunRoot {
         self.home.verify()?;
         self.runs.verify()
     }
+    pub(crate) fn existing_run(self: &Arc<Self>, run: surge_core::RunId) -> NativeResult<RunRoute> {
+        self.verify()?;
+        let component = run.to_string();
+        let namespace = self.runs.existing_child(OsStr::new(&component), true)?;
+        let artifacts = namespace.existing_child(OsStr::new("artifacts"), true)?;
+        let route = RunRoute {
+            root: self.clone(),
+            namespace,
+            artifacts,
+        };
+        route.verify()?;
+        Ok(route)
+    }
     pub(crate) fn run(
         self: &Arc<Self>,
         run: surge_core::RunId,

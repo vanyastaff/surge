@@ -213,7 +213,7 @@ impl RunUseOwner {
         #[cfg(unix)]
         let route = Arc::new(root.existing_run(self.run)?);
         #[cfg(windows)]
-        let route = Arc::new(root.run(self.run, false)?);
+        let route = Arc::new(root.existing_run(self.run)?);
         let expected_route = route.reader_route_identity()?;
         let expected = {
             let conn = crate::runs::connection::RetainedConnection::read_only(&self.registry)?;

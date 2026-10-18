@@ -940,3 +940,25 @@ reviews before root commits/pushes SAME diagnostic branch and existing workflow.
 Same ongoingrepair6/6, no reset/repair7/newUI/PR/merge/habit/provider changes. Other
 55 native failures and six Windows UI UnixListener compile errors remain outside
 this bounded repair; no global green claim.
+
+
+### Repair6 native v4 — genuine behavior RED; release bounded production correction
+
+Diagnostic2f4e14621ae443c597765892b09e8d5cd54fd2e8, workflow39157692686,
+WindowsTestSuite117764222765 completed4541run/4508PASS/33FAIL/53skip.
+Direct publicinspection test reaches READONLY ARTIFACTS EFFECT line355: before
+OS2/NotFound, inspect Some(Ok(RunInspection)), after Ok(directory Metadata).
+This is actual native behavior RED after actual producer/owner settlement and
+cleanup, not compiler/setup failure. Three missing-artifacts full matrices also
+reach final assertions; healthy writer+64readers, foreignrun, foreigndatabase and
+reparse controls PASS. Full raw log+classification retained.
+Release solebuilder EXACT previously accepted production correction: Windows
+crate-private RunRoot::existing_run verifies original root, opens run/artifacts
+via existing_child ONLY, builds same retained RunRoute then verifies it. Switch
+ONLY RunUseOwner::database Windows caller to existing_run. Writable run(false),
+creation/ownership/errors/ACL/coordination/schema/API/Unix behavior unchanged.
+All eight regression tests and observer assertions unchanged. Full local gates,
+native Windows GREEN and independent focused5a/then5b remain required. Same
+ongoingrepair6/6, no reset/repair7. Root owns diagnosticbranch/CI, noPR/merge/UI
+or habit/provider actions. Other29native failures and existing WindowsUIsix
+compile failures remain outside this bounded correction, no globalgreen claim.
