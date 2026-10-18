@@ -1217,3 +1217,24 @@ Workflow finalalways enforcement checks checker/focus/full/verify/bothuploads RE
 outcomes; all diagnostic step failures sequence fullsuite without erasing failure.
 Root keeps sourcefreeze/readiness/native dispatch and final fullgate obligations.
 Same7/7, no new workflow/framework/product/UI/provider/history authority.
+
+### Corrected checkpoint published; approved test-scheduling lease released
+
+Root committed and pushed `8e9e935eb94cea97a7a9e50009c9a2c7fad96f99` to PR151.
+Frozen checkpoint gates: persistence643/643, strict workspace all-targets default
+and all-features, checker7, fmt/diff; all terminal exit0. Spec/security/critic
+accepted diagnostic readiness only. Native corrected checkpoint remains pending
+in run39172594448; whole-feature Phase5a/5b and continuation outer remain open.
+
+Sole builder may now implement only reviewed UI-CLOCK-01/UI-HYDRATE-02 test
+scheduling corrections in the two existing UI test files. Production UI and IPC
+remain held. Independent critic accepts deterministic CLOCK counterexample by
+splitting the same old5s window at independent500ms/1s/2s boundaries, settling real
+current-owner reads and consuming remaining1.5s: record actual1→2→3→4, require4,
+then retain old expected2 assertion. This establishes an old TEST oracle defect,
+not a production regression. No counter/token/state/timer mutation. GREEN advances
+one independent original interval per actual settled read, preserving original
+exact counts, exhaustion/navigation assertions and deadlines. HYDRATE uses actual
+controlled failed-read publication and same-token Incomplete+!is_reading barrier.
+No new UI behavior, production seams, timeout increases or skipped assertions.
+Same ongoing7/7; no new repair dispatch or budget reset.

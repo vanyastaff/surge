@@ -223,12 +223,35 @@ fn run_reconnect_probe(pending: bool) {
         state
     });
     let app = cx.new(|cx| SurgeApp::new_shell(state.clone(), cx));
+    let (loaded, load_ready) = tokio::sync::oneshot::channel();
+    let (release, published) = tokio::sync::oneshot::channel();
+    app.update(&mut cx, |app, _| {
+        app.controlled_history_reads = Some(std::rc::Rc::new(std::cell::RefCell::new(
+            std::collections::VecDeque::from([(loaded, published)]),
+        )));
+    });
     app.update(&mut cx, |app, cx| app.sync_run_subscriptions(cx));
     drive_until(&host, &mut cx, |cx| {
         peer.subscribed.load(Ordering::SeqCst) == 1
             && cx.read(|cx| state.read(cx).run_streams[&run].live)
     });
-    // The actual application has accepted the subscription and awaited the failed read.
+    let load_ready = std::cell::RefCell::new(load_ready);
+    drive_until(&host, &mut cx, |_| {
+        load_ready.borrow_mut().try_recv().is_ok()
+    });
+    cx.read(|cx| assert!(state.read(cx).observations.is_reading(run)));
+    eprintln!(
+        "HYDRATE old live/subscribed barrier passed; actual failed read loaded, publication held, same run in-flight: {run}"
+    );
+    release.send(()).unwrap();
+    drive_until(&host, &mut cx, |cx| {
+        cx.read(|cx| failed_read_settled(&app, &state, cx, run))
+    });
+    cx.run_until_parked();
+    eprintln!(
+        "HYDRATE same-run/current-token Incomplete settlement confirmed before repair and original1s retry clock: {run}"
+    );
+    // Subscription acceptance precedes hydration; repair only after its real failed publication.
     let blocked = cx.read(|cx| {
         let stream = &state.read(cx).run_streams[&run];
         assert_eq!(
@@ -277,30 +300,33 @@ fn run_reconnect_probe(pending: bool) {
         writer.close().await.unwrap();
     });
     cx.background_executor.advance_clock(Duration::from_secs(1));
-    drive_until(&host, &mut cx, |cx| {
+    let eventual = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive_until(&host, &mut cx, |cx| {
+            cx.read(|cx| {
+                let stream = &state.read(cx).run_streams[&run];
+                stream.last_seq == restored_events.len() as u64
+                    && stream.observation_available_for(run)
+            })
+        });
         cx.read(|cx| {
             let stream = &state.read(cx).run_streams[&run];
-            stream.last_seq == restored_events.len() as u64 && stream.observation_available_for(run)
-        })
-    });
-    cx.read(|cx| {
-        let stream = &state.read(cx).run_streams[&run];
-        assert!(stream.observation_error.is_none());
-        assert_eq!(
-            stream.recovery().latest().unwrap().diagnostic,
-            "retained recovery history"
-        );
-        assert_eq!(stream.pending.len(), usize::from(pending));
-        assert_eq!(
-            stream.display().label(),
-            if pending {
-                "Waiting for human input"
-            } else {
-                "Running"
-            }
-        );
-        assert!(!stream.observation_available_for(RunId::new()));
-    });
+            assert!(stream.observation_error.is_none());
+            assert_eq!(
+                stream.recovery().latest().unwrap().diagnostic,
+                "retained recovery history"
+            );
+            assert_eq!(stream.pending.len(), usize::from(pending));
+            assert_eq!(
+                stream.display().label(),
+                if pending {
+                    "Waiting for human input"
+                } else {
+                    "Running"
+                }
+            );
+            assert!(!stream.observation_available_for(RunId::new()));
+        });
+    }));
     peer.close(&host);
     drive_until(&host, &mut cx, |cx| {
         cx.read(|cx| !state.read(cx).run_streams[&run].live)
@@ -314,4 +340,30 @@ fn run_reconnect_probe(pending: bool) {
         blocked,
         "successful subscription plus failed durable rehydration promoted stale history to current work"
     );
+    eprintln!(
+        "HYDRATE original cleanup sequence finished; eventual assertion failed={}",
+        eventual.is_err()
+    );
+    if let Err(error) = eventual {
+        std::panic::resume_unwind(error);
+    }
+}
+
+fn failed_read_settled(
+    app: &gpui_kit::Entity<SurgeApp>,
+    state: &gpui_kit::Entity<AppState>,
+    cx: &gpui_kit::App,
+    run: RunId,
+) -> bool {
+    let state = state.read(cx);
+    !state.observations.is_reading(run)
+        && app
+            .read(cx)
+            .current_read_settlements
+            .iter()
+            .any(|(token, disposition)| {
+                token.run == run
+                    && *disposition == crate::app_state::ReadDisposition::Incomplete
+                    && state.observations.last_read_is_current(token)
+            })
 }

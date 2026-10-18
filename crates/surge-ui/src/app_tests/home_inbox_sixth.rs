@@ -3026,6 +3026,54 @@ impl EighthRejectPeer {
     }
 }
 #[cfg(unix)]
+fn settled_rejected_read(
+    h: &Harness,
+    run: RunId,
+    count: usize,
+    original: Option<&crate::run_observation::Token>,
+) -> crate::run_observation::Token {
+    h.cx.read(|cx| {
+        let state = h.state.read(cx);
+        assert_eq!(state.rejected_history_reads.get(&run), Some(&count));
+        assert!(!state.observations.is_reading(run));
+        if let Some(original) = original {
+            assert!(
+                state.observations.accepts(original),
+                "same original publisher"
+            );
+        }
+        h.app
+            .read(cx)
+            .current_read_settlements
+            .iter()
+            .rev()
+            .find(|(token, kind)| {
+                token.run == run
+                    && *kind == crate::app_state::ReadDisposition::Incomplete
+                    && state.observations.last_read_is_current(token)
+            })
+            .expect("actual current-owner incomplete read settled")
+            .0
+            .clone()
+    })
+}
+
+#[cfg(unix)]
+fn rejected_retry_clock_step(cx: &mut TestAppContext, completed: usize, maximum: usize) {
+    // Independent fixed expectations: three retries, then retain the old exhaustion window.
+    let delay = match (completed, maximum) {
+        (count, max) if count == max => std::time::Duration::from_secs(5),
+        (1, _) => std::time::Duration::from_millis(500),
+        (2, _) => std::time::Duration::from_secs(1),
+        (3, _) => std::time::Duration::from_secs(2),
+        _ => panic!("unexpected fixture retry ordinal"),
+    };
+    cx.run_until_parked();
+    cx.background_executor.advance_clock(delay);
+    cx.run_until_parked();
+}
+
+#[cfg(unix)]
 #[test]
 fn eighth_ordinary_rejected_subscription_has_four_reads_no_operation_and_inert_replacement_timer() {
     for replacement in [0, 1, 2] {
@@ -3077,16 +3125,16 @@ fn eighth_ordinary_rejected_subscription_has_four_reads_no_operation_and_inert_r
             None
         };
         if replacement == 0 {
+            let original = settled_rejected_read(&h, run, 1, None);
             for count in 2..=4 {
-                h.cx.run_until_parked();
-                h.cx.background_executor
-                    .advance_clock(std::time::Duration::from_secs(5));
+                rejected_retry_clock_step(&mut h.cx, count - 1, 4);
                 drive(&mut h.cx, |cx| {
                     cx.read(|cx| {
                         h.state.read(cx).rejected_history_reads.get(&run) == Some(&count)
                             && !h.state.read(cx).observations.is_reading(run)
                     })
                 });
+                settled_rejected_read(&h, run, count, Some(&original));
             }
         }
         h.cx.background_executor
@@ -4007,6 +4055,7 @@ fn ninth_terminal_and_exhausted_fallback_require_genuine_current_admission() {
         h.app
             .update(&mut h.cx, |app, cx| app.sync_run_subscriptions(cx));
         let max = if terminal { 1 } else { 4 };
+        let mut first_read = None;
         for n in 1..=max {
             drive(&mut h.cx, |cx| {
                 cx.read(|cx| {
@@ -4014,9 +4063,11 @@ fn ninth_terminal_and_exhausted_fallback_require_genuine_current_admission() {
                         && !h.state.read(cx).observations.is_reading(run)
                 })
             });
-            h.cx.background_executor
-                .advance_clock(std::time::Duration::from_secs(5));
-            h.cx.run_until_parked();
+            if !terminal {
+                let current = settled_rejected_read(&h, run, n, first_read.as_ref());
+                first_read.get_or_insert(current);
+            }
+            rejected_retry_clock_step(&mut h.cx, n, max);
         }
         for _ in 0..5 {
             h.state.update(&mut h.cx, |s, _| {
