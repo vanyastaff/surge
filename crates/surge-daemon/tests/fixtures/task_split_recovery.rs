@@ -594,8 +594,9 @@ async fn run_in_home(home: &FixtureHome, cut: Cut, damage: Damage) {
     .await;
     // Observation failures must not detach the live recovery daemon or leave
     // its provider writers running while the fixture home unwinds.
+    let recovery_started = std::time::Instant::now();
     let observed = std::panic::AssertUnwindSafe(async {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        let settled = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let state = storage
                     .work_items()
@@ -611,15 +612,21 @@ async fn run_in_home(home: &FixtureHome, cut: Cut, damage: Damage) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await
-        .unwrap_or_else(|error| {
+        .await;
+        if let Err(error) = settled {
+            let history = storage.inspect_run(attempt.run).await.map(|inspection| match inspection.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => events
+                    .into_iter().rev().take(32).map(|event| (event.seq,event.kind)).collect::<Vec<_>>(),
+                surge_persistence::runs::inspection::RunDatabaseInspection::Absent => Vec::new(),
+            });
+            let active = tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await;
             panic!(
-                "recovered split did not settle: {error}; attempt={:?}; wire={}; trace={}",
-                storage.work_items().for_run(attempt.run),
+                "recovered split did not settle: {error}; elapsed={:?}; attempt={:?}; journal={history:?}; active={active:?}; wire={}; trace={}",
+                recovery_started.elapsed(), storage.work_items().for_run(attempt.run),
                 bounded_child_log(&home.path().join("commit-provider-wire.jsonl")),
                 bounded_child_log(&home.path().join("cold-1.trace.log"))
-            )
-        });
+            );
+        }
     })
     .catch_unwind()
     .await;

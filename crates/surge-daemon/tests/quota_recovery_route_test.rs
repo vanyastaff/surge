@@ -73,7 +73,15 @@ impl BridgeFacade for ObservedBridge {
         let primary = config.runtime == "quota-a";
         let secondary = config.runtime == "quota-b";
         let warmup = config.runtime == "quota-c";
+        eprintln!(
+            "WG7 quota phase=open-session-before primary={primary} at={:?}",
+            std::time::Instant::now()
+        );
         let opened = self.bridge.open_session(config).await?;
+        eprintln!(
+            "WG7 quota phase=open-session-return primary={primary} at={:?}",
+            std::time::Instant::now()
+        );
         if secondary {
             self.b_sessions.lock().await.insert(opened.session);
         }
@@ -82,6 +90,10 @@ impl BridgeFacade for ObservedBridge {
         }
         if primary {
             *self.primary_session.lock().await = Some(opened.session);
+            eprintln!(
+                "WG7 quota phase=primary-session-assigned at={:?}",
+                std::time::Instant::now()
+            );
         }
         Ok(opened)
     }
@@ -100,9 +112,17 @@ impl BridgeFacade for ObservedBridge {
             }
         };
         if first_primary {
+            eprintln!(
+                "WG7 quota phase=primary-ready-before-notify at={:?}",
+                std::time::Instant::now()
+            );
             self.primary_ready.notify_one();
             self.primary_continue.notified().await;
         }
+        eprintln!(
+            "WG7 quota phase=send-message-forward at={:?}",
+            std::time::Instant::now()
+        );
         let result = self.bridge.send_message(id, content).await;
         if matches!(&result, Err(SendMessageError::RateLimited { .. })) {
             self.quota_errors.fetch_add(1, Ordering::SeqCst);
@@ -946,10 +966,14 @@ async fn quota_dispatch_in_home(
         publish_selected_crash_boundary(&storage, home, project, item, &attempt, "opening").await;
         std::future::pending::<()>().await;
     }
+    let primary_started = std::time::Instant::now();
     if tokio::time::timeout(Duration::from_secs(5), bridge.primary_ready.notified())
         .await
         .is_err()
     {
+        let elapsed = primary_started.elapsed();
+        let active =
+            tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await;
         let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
         let journal = storage.inspect_run(attempt.run).await.unwrap();
         let failures = match journal.database {
@@ -979,7 +1003,7 @@ async fn quota_dispatch_in_home(
             .unwrap()
             .unwrap();
         panic!(
-            "actual A must reach first prompt before quota oracle: {failures:?}; {diagnostic:?}"
+            "actual A must reach first prompt before quota oracle: elapsed={elapsed:?}; active={active:?}; {failures:?}; {diagnostic:?}"
         );
     }
     if std::env::var("SURGE_QUOTA_PARK_PHASE").as_deref() == Ok("opened") {
@@ -3879,7 +3903,30 @@ async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home
                 .count(),
         )
     });
+    let journal = storage
+        .inspect_run(run)
+        .await
+        .map(|inspection| match inspection.database {
+            surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                events
+                    .into_iter()
+                    .rev()
+                    .take(32)
+                    .map(|event| {
+                        let cleanup = match event.payload.payload {
+                            surge_core::EventPayload::RunSuspended { fence } => {
+                                Some(fence.cleanup_confirmed)
+                            },
+                            _ => None,
+                        };
+                        (event.seq, event.kind, cleanup)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            surge_persistence::runs::inspection::RunDatabaseInspection::Absent => Vec::new(),
+        });
     format!(
-        "attempt={attempt:?}, registry={registry:?}, control={control:?}, capacity={capacity:?}, cycle={cycle:?}, providers(new_session,prompt)={providers:?}"
+        "at={:?}, attempt={attempt:?}, registry={registry:?}, control={control:?}, capacity={capacity:?}, cycle={cycle:?}, journal(seq,kind,cleanup)={journal:?}, providers(new_session,prompt)={providers:?}",
+        std::time::Instant::now()
     )
 }

@@ -1129,3 +1129,125 @@ mod tests {
         let _ = over; // keep variable to avoid lint
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_address_tests {
+    use super::*;
+    use interprocess::local_socket::{ListenerOptions, tokio::prelude::*};
+    use std::{path::Path, time::Duration};
+
+    async fn actual_alias_ping(listener_path: &Path, client_path: &Path) -> Result<(), String> {
+        let listener = ListenerOptions::new()
+            .name(local_socket_name_from_path(listener_path).map_err(|e| e.to_string())?)
+            .create_tokio()
+            .map_err(|e| e.to_string())?;
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let stream = tokio::select! {
+                stream = listener.accept() => stream.map_err(|e| e.to_string())?,
+                _ = stopped => return Ok::<(), String>(()),
+            };
+            let (read, mut write) = stream.split();
+            let request = read_request_frame(&mut tokio::io::BufReader::new(read))
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(DaemonRequest::Ping { request_id }) = request else {
+                return Err("actual listener received a non-Ping request".into());
+            };
+            write_frame(
+                &mut write,
+                &DaemonResponse::PingOk {
+                    request_id,
+                    version: "fixed-native-alias".into(),
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), async {
+            let name = local_socket_name_from_path(client_path).map_err(|e| e.to_string())?;
+            let stream = LocalSocketStream::connect(name)
+                .await
+                .map_err(|e| e.to_string())?;
+            let (read, mut write) = stream.split();
+            write_frame(&mut write, &DaemonRequest::Ping { request_id: 87 })
+                .await
+                .map_err(|e| e.to_string())?;
+            let response = read_response_frame(&mut tokio::io::BufReader::new(read))
+                .await
+                .map_err(|e| e.to_string())?;
+            match response {
+                Some(DaemonResponse::PingOk {
+                    request_id: 87,
+                    version,
+                }) if version == "fixed-native-alias" => Ok(()),
+                other => Err(format!("actual alias Ping response: {other:?}")),
+            }
+        })
+        .await
+        .map_err(|_| "actual alias Ping deadline".to_owned())
+        .and_then(|v| v);
+        let _ = stop.send(());
+        let joined = server.await.map_err(|e| e.to_string())?;
+        joined?;
+        result
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn public_resolver_aliases_reach_same_actual_listener_with_ping() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let ordinary = home.path().join("native-alias.sock");
+        let canonical = std::fs::canonicalize(home.path())
+            .unwrap()
+            .join("native-alias.sock");
+        let verbatim = canonical.clone(); // The OS canonicalizer supplies the native verbatim spelling.
+        let mut results = vec![(
+            "healthy canonical",
+            actual_alias_ping(&canonical, &canonical).await,
+        )];
+        for (label, path) in [
+            ("ordinary", &ordinary),
+            ("canonical", &canonical),
+            ("verbatim", &verbatim),
+        ] {
+            results.push((label, actual_alias_ping(&canonical, path).await));
+        }
+        home.close().unwrap();
+        assert!(
+            results.iter().all(|(_, result)| result.is_ok()),
+            "actual alias Ping observations: {results:?}"
+        );
+    }
+
+    #[test]
+    fn public_resolver_bare_filename_matches_current_existing_parent_without_chdir() {
+        let leaf = format!("surge-native-{}.sock", surge_core::RunId::new());
+        let absolute = std::env::current_dir().unwrap().join(&leaf);
+        let bare = local_socket_name_from_path(Path::new(&leaf)).unwrap();
+        let expected = local_socket_name_from_path(&absolute).unwrap();
+        assert_eq!(format!("{bare:?}"), format!("{expected:?}"));
+    }
+
+    #[test]
+    fn public_resolver_missing_or_nondirectory_parent_refuses_without_creation() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let absent = home.path().join("absent");
+        let file = home.path().join("parent-file");
+        std::fs::write(&file, b"fixed parent sentinel").unwrap();
+        let missing = local_socket_name_from_path(&absent.join("daemon.sock")).map(|_| ());
+        let nondirectory = local_socket_name_from_path(&file.join("daemon.sock")).map(|_| ());
+        let remains_absent = !absent.exists();
+        let bytes = std::fs::read(&file).unwrap();
+        home.close().unwrap();
+        assert!(remains_absent);
+        assert_eq!(bytes, b"fixed parent sentinel");
+        assert!(
+            matches!(missing, Err(ref e) if e.kind() == std::io::ErrorKind::NotFound),
+            "missing-parent result: {missing:?}"
+        );
+        assert!(
+            matches!(nondirectory, Err(ref e) if e.kind() == std::io::ErrorKind::NotADirectory),
+            "nondirectory-parent result: {nondirectory:?}"
+        );
+    }
+}

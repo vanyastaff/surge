@@ -542,7 +542,7 @@ async fn owned_flow_reconciliation_claim_preserves_new_manual_control() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_changing_facts() {
     let home = FixtureHome::new().unwrap();
-    {
+    let checks = {
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
         let operation = WorkItemOperationId::new();
@@ -637,41 +637,83 @@ async fn accepted_public_private_mcp_replay_refuses_unavailable_storage_without_
         // Any accidental authentication/object lookup now encounters a file,
         // rather than a directory, and cannot silently recreate the namespace.
         assert!(std::fs::read(namespace.join("host-key-v1")).is_err());
-        assert!(matches!(
-            store.replay_owned_flow(
-                operation,
-                b"public HostDefault body",
-                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
-                    crate::work_items::OrdinaryRequestPrivacy::Public
-                )
+        let replay = store.replay_owned_flow(
+            operation,
+            b"public HostDefault body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
             ),
-            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
-        ));
-        assert!(matches!(
-            store.begin_owned_flow(
-                operation,
-                b"public HostDefault body",
-                crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
-                    crate::work_items::OrdinaryRequestPrivacy::Public
-                ),
-                99
+        );
+        let replay_expected = matches!(
+            &replay,
+            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe)
+        );
+        let replay_diagnostic = replay.as_ref().err().map(|error| format!("{error:?}"));
+        drop(replay);
+        let begin = store.begin_owned_flow(
+            operation,
+            b"public HostDefault body",
+            crate::work_items::OwnedFlowPreparationPurpose::Ordinary(
+                crate::work_items::OrdinaryRequestPrivacy::Public,
             ),
-            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe),
-        ));
-        assert_eq!(
-            audit(),
-            before,
-            "replay changed an accepted operation, attempt or claim token"
+            99,
         );
-        assert_eq!(
-            std::fs::read(&namespace).unwrap(),
-            b"private namespace unavailable"
+        let begin_expected = matches!(
+            &begin,
+            Err(WorkItemError::PrivateInputsRecoveryRequired | WorkItemError::PrivateInputsUnsafe)
         );
-        assert!(displaced.join("host-key-v1").is_file());
+        let begin_diagnostic = begin.as_ref().err().map(|error| format!("{error:?}"));
+        drop(begin);
+        let after = audit();
+        let unavailable_bytes = std::fs::read(&namespace).unwrap();
+        let original_key_preserved = displaced.join("host-key-v1").is_file();
         std::fs::remove_file(&namespace).unwrap();
         std::fs::rename(displaced, namespace).unwrap();
-    }
+        #[cfg(windows)]
+        let witness = storage.registry_pool_witness().unwrap();
+        drop(store);
+        drop(storage);
+        #[cfg(windows)]
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while witness.is_retained() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        (
+            replay_expected,
+            begin_expected,
+            replay_diagnostic,
+            begin_diagnostic,
+            before,
+            after,
+            unavailable_bytes,
+            original_key_preserved,
+        )
+    };
     home.close().unwrap();
+    let (
+        replay_expected,
+        begin_expected,
+        replay_diagnostic,
+        begin_diagnostic,
+        before,
+        after,
+        unavailable_bytes,
+        original_key_preserved,
+    ) = checks;
+    assert_eq!(
+        after, before,
+        "replay changed an accepted operation, attempt or claim token"
+    );
+    assert_eq!(unavailable_bytes, b"private namespace unavailable");
+    assert!(original_key_preserved);
+    assert!(
+        replay_expected,
+        "actual replay refusal: {replay_diagnostic:?}; actual begin refusal: {begin_diagnostic:?}"
+    );
+    assert!(begin_expected, "actual begin refusal: {begin_diagnostic:?}");
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]

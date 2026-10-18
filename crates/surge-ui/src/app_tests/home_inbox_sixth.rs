@@ -1896,6 +1896,7 @@ fn seventh_current_nested_history_error_recovers_without_daemon_or_status_change
     fixture.close();
 }
 
+#[cfg(unix)]
 #[test]
 fn seventh_stale_nested_history_error_cannot_duplicate_replacement_live_failure() {
     use surge_orchestrator::engine::ipc::{
@@ -2765,6 +2766,7 @@ fn eighth_newer_terminal_operation_demand_survives_stale_success_or_error_batch(
         );
     }
 }
+#[cfg(unix)]
 #[test]
 fn eighth_rejected_actual_subscription_recovers_finished_journal_without_old_owner_resurrection() {
     for combined in [false, true] {
@@ -2976,12 +2978,14 @@ fn eighth_inbox_merge_preserves_actual_error_and_unmergeable_exact_inspection() 
     assert_eq!(queue.len(), 2);
 }
 
+#[cfg(unix)]
 struct EighthRejectPeer {
     facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
     stop: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<()>,
     requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
+#[cfg(unix)]
 impl EighthRejectPeer {
     fn new(runtime: &tokio::runtime::Runtime, home: &std::path::Path, run: RunId) -> Self {
         Self::with_response(runtime, home, run, false)
@@ -3021,6 +3025,7 @@ impl EighthRejectPeer {
         drop(self.facade);
     }
 }
+#[cfg(unix)]
 #[test]
 fn eighth_ordinary_rejected_subscription_has_four_reads_no_operation_and_inert_replacement_timer() {
     for replacement in [0, 1, 2] {
@@ -3120,6 +3125,7 @@ fn eighth_ordinary_rejected_subscription_has_four_reads_no_operation_and_inert_r
         fixture.close();
     }
 }
+#[cfg(unix)]
 #[test]
 fn eighth_latest_operation_demand_waits_for_actual_current_read_settlement() {
     for close_before_read in [false, true] {
@@ -3303,6 +3309,7 @@ fn eighth_pending_same_snapshot_demand_does_not_duplicate_or_reset_four_read_epi
     drop(h);
     fixture.close();
 }
+#[cfg(unix)]
 #[test]
 fn eighth_recovered_record_episode_demand_drains_after_live_reader_settles() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -3658,6 +3665,7 @@ fn eighth_delayed_app_replay_preserves_latest_registry_or_genuine_start_hint() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn ninth_actual_global_acceptance_renews_recovered_nonterminal_fallback() {
     use surge_orchestrator::engine::ipc::{
@@ -3768,6 +3776,7 @@ fn ninth_actual_global_acceptance_renews_recovered_nonterminal_fallback() {
     );
 }
 
+#[cfg(unix)]
 struct NinthPeer {
     facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
     global: tokio::sync::broadcast::Receiver<surge_orchestrator::engine::ipc::GlobalDaemonEvent>,
@@ -3779,6 +3788,7 @@ struct NinthPeer {
     requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     sent: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
+#[cfg(unix)]
 impl NinthPeer {
     fn new(
         runtime: &tokio::runtime::Runtime,
@@ -3863,6 +3873,7 @@ impl NinthPeer {
         drop(self.facade);
     }
 }
+#[cfg(unix)]
 fn ninth_active(fixture: &SeventhFixture, h: &mut Harness, run: RunId) {
     h.state.update(&mut h.cx, |s, _| {
         s.runs.push(crate::app_state::UiRun {
@@ -3875,6 +3886,7 @@ fn ninth_active(fixture: &SeventhFixture, h: &mut Harness, run: RunId) {
         assert_eq!(s.project_path.as_ref(), Some(&fixture.project));
     });
 }
+#[cfg(unix)]
 #[test]
 fn ninth_paused_fallback_and_duplicate_actual_admissions_have_one_renewed_publisher() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -3976,6 +3988,7 @@ fn ninth_paused_fallback_and_duplicate_actual_admissions_have_one_renewed_publis
     drop(h);
     fixture.close();
 }
+#[cfg(unix)]
 #[test]
 fn ninth_terminal_and_exhausted_fallback_require_genuine_current_admission() {
     for terminal in [true, false] {
@@ -4061,6 +4074,7 @@ fn ninth_terminal_and_exhausted_fallback_require_genuine_current_admission() {
         fixture.close();
     }
 }
+#[cfg(unix)]
 #[test]
 fn ninth_old_connection_and_scope_callbacks_cannot_mutate_state_before_current_admission() {
     for scope_change in [false, true] {
@@ -4190,6 +4204,7 @@ fn ninth_old_connection_and_scope_callbacks_cannot_mutate_state_before_current_a
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn ninth_same_global_receiver_survives_project_selection_and_current_eof() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -4269,6 +4284,7 @@ fn ninth_same_global_receiver_survives_project_selection_and_current_eof() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn ninth_replaced_actual_global_receiver_eof_cannot_disconnect_current_connection() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -4329,10 +4345,12 @@ fn ninth_replaced_actual_global_receiver_eof_cannot_disconnect_current_connectio
     fixture.close();
 }
 
+#[cfg(unix)]
 #[test]
 fn tenth_actual_related_read_settlement_services_pending_live_renewal_without_poll() {
     tenth_related_settlement(0);
 }
+#[cfg(unix)]
 fn tenth_related_settlement(mode: u8) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _entered = runtime.enter();
@@ -4587,6 +4605,7 @@ fn tenth_related_settlement(mode: u8) {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn tenth_related_error_absence_retirements_and_terminal_share_settlement_ordering() {
     for mode in [1, 2, 3, 4, 5, 7, 8, 9] {
@@ -4594,6 +4613,7 @@ fn tenth_related_error_absence_retirements_and_terminal_share_settlement_orderin
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn tenth_cold_and_live_helpers_share_current_settlement_and_reject_obsolete_completion() {
     for obsolete in [false, true] {
@@ -4798,6 +4818,7 @@ fn tenth_cold_and_live_helpers_share_current_settlement_and_reject_obsolete_comp
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn tenth_obsolete_checked_retirements_cannot_touch_new_live_read_error_or_marker() {
     let runtime = tokio::runtime::Runtime::new().unwrap();

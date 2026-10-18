@@ -861,7 +861,7 @@ mod tests {
     fn fixed_ordinary_wire() -> String {
         let value = r#"{"schema_version":1,"operation":"00000000000000000000000002","request_identity":{"kind":"plain_public","digest":"sha256:6237bce3e575db2b91926e0b27e552e14dd7cf88fd97bb26f0d34f9e37906d0b"},"binding":{"item":"00000000000000000000000001","revision":1,"requirements_hash":"sha256:a81b42f3f5ec4667ebd343091a86883409542b5ca1caa59daf064c86d0a6c4cb","generation":1},"run":"00000000000000000000000003","workspace_owner":"00000000000000000000000004","workspace":{"repository":"/repo/.git","checkout":"/repo","path":"/repo/.worktrees/flow","ownership":"flow-owner","branch":"codex/flow","base_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"mcp":{"kind":"empty","selection":"explicit"}}"#;
         if cfg!(windows) {
-            value.replace("/repo", r"C:\repo")
+            value.replace("/repo", r"C:\\repo")
         } else {
             value.into()
         }

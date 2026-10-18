@@ -999,3 +999,45 @@ real continuation NOT executed. Full receipts/classifications and independent ve
 sixth-round/readonly-getter-sixth-round-final-disposition.json and referenced logs.
 This documentation checkpoint records bounded resolution and failed gates, not
 wholeStage2 completion or approval to start Phase5b/furtherrepairs.
+
+
+### Human extension to repair7 — remaining mandatory Windows gates only
+
+Human explicitly authorizes: «Разрешаю следующий раунд: закрой оставшиеся
+обязательные Windows-гейты и review без новых улучшений UI. Затем продолжи тот
+же habit tracker через codex-acp на gpt-6.1-sol, сохранив историю и все восемь задач.»
+This extends shared limit to7, does NOT reset count or authorize unlimitedrepairs.
+Completed6/6 remains recorded; repair7 implementation NOT YET dispatched.
+Read-only owner/builder/spec diagnosis now scopes actual44nativeFAIL,6UIWindows
+UnixListener compileerrors and standard-user stale exactfilter0tests on tested
+fbaed8fb; sourceHEADfc9b5b2c adds documentationonly. ExistingCONT-S2-SPEC-01
+resolved8/8nativeGREEN remains intact. New mandatory findings will receive stable
+IDs, source-backed ownership/RED plans and independentpre-codecritique+security
+before solebuilder writelease; canonical7/7 must be recorded BEFORE thatdispatch.
+Mechanical compile/setup corrections within the same bounded attempt retain7/7,
+no reset. Existing single diagnosticcodexbranch+existingci.yml remain the native
+verification route for authorized mandatorygatework; no newworkflow/PR/merge or
+UXimprovement is inferred. Fix necessary platform testcompile without changing UI
+behavior. Preserve allnative security/identity/ownership refusals, actualcoldtests,
+fullassertions/model/session evidence, source pins and separatefutureouterRED.
+Unknowncauses require observation before classification/fix; no blanketbaseline
+exception or timeoutincrease/testskip/lintallow to manufacturegreen.
+After necessarygates/reviews and previously accepted continuationstages, resume
+same retainedhabit project/all8tasks/history through exactcodex-acp/gpt-6.1-sol.
+No userruntime/providercalls or history rewrite during gatediagnosticrepair.
+
+
+### Repair7 dispatch — mandatory Windows gate attempt 7/7
+
+Recorded BEFORE solebuilder release. Full staged plan mandatory-windows-gates-seventh-round.md
+has independent harsh-critic and domain/security ACCEPTABLE verdicts. Owner IPCB
+and empty-inventory component decisions ACCEPTABLE, actual native causal RED still
+required before either production correction. Firstlease: source-backed testfixture/
+Unix-only-test-cfg corrections plus bounded native diagnostic/RED anchors, preserving
+original assertions/refusals and resolved eight readonly cases. Private exacttyped
+result and remaining recovery phases must be observed before any semantic correction.
+Root owns Git/CI, builder owns Rust/tests/scripts; sourcefreeze/readinessreview before
+samebranch existingci.yml native dispatch. This is ongoingrepair7/7; mechanical
+compile/setup issues in thisattempt do not reset count or imply repair8.
+Full required Windows gates and independent5a→5b remain completion conditions;
+no newUI/provider/userhistoryactions/PR/merge. Buildreserve2GiB retained.

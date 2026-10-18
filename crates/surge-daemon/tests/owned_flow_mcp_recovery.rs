@@ -773,6 +773,8 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
         assert_eq!(response["method"], "owned_flow_started", "{response}");
         let receipt: OwnedFlowReceipt =
             serde_json::from_value(response["receipt"].clone()).unwrap();
+        let park_started = std::time::Instant::now();
+        let mut last_observed = (0, Vec::new());
         let cycle = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 let cycles = storage
@@ -796,6 +798,16 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
                     },
                     Err(error) => panic!("unexpected initial journal inspection error: {error:?}"),
                 };
+                last_observed = (cycles.len(), match &history.database {
+                    RunDatabaseInspection::Present { events } => events.iter().rev().take(32).map(|event| {
+                        let cleanup = match &event.payload.payload {
+                            EventPayload::RunSuspended { fence } => Some(fence.cleanup_confirmed),
+                            _ => None,
+                        };
+                        (event.seq, event.kind.clone(), cleanup)
+                    }).collect(),
+                    RunDatabaseInspection::Absent => Vec::new(),
+                });
                 if let RunDatabaseInspection::Present { events } = history.database
                     && initial_mcp_evidence_ready(
                         phase,
@@ -813,7 +825,12 @@ async fn host_probe(root: &Path, home: &Path, phase: &str) {
             }
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|error| panic!(
+            "WG7 park deadline phase={phase} elapsed={:?} error={error}; last(cycles,journal(seq,kind,cleanup))={last_observed:?}; attempt={:?}; control={:?}",
+            park_started.elapsed(),
+            storage.work_items().for_run(receipt.run).map(|row| row.map(|row| row.state)),
+            storage.work_items().execution_control(receipt.run).map(|row| row.map(|row| (row.state,row.generation))),
+        ));
         publish(
             &root.join("park.ready"),
             &json!({"receipt":receipt,

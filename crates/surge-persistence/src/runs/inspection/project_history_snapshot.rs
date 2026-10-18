@@ -413,7 +413,7 @@ fn fixed_registry_companion_oracles_reject_other_paths_mutations_headers_and_fra
 fn actual_same_byte_registry_wal_and_shm_replacements_never_inherit_identity() {
     for suffix in ["-wal", "-shm"] {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        std::fs::create_dir(home.path().join("db")).unwrap();
+        std::fs::create_dir_all(home.path().join("db")).unwrap();
         let path = home.path().join(format!("db/registry.sqlite{suffix}"));
         std::fs::write(&path, b"fixed identical companion bytes").unwrap();
         let before = files(home.path());
@@ -432,7 +432,7 @@ fn actual_same_byte_registry_wal_and_shm_replacements_never_inherit_identity() {
 fn actual_registry_companion_hardlinks_are_refused_by_native_observer_before_read() {
     for suffix in ["-wal", "-shm"] {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        std::fs::create_dir(home.path().join("db")).unwrap();
+        std::fs::create_dir_all(home.path().join("db")).unwrap();
         let target = home.path().join("original");
         std::fs::write(&target, b"original target").unwrap();
         files(home.path()); // The identical owner/security fixture is healthy before linking.

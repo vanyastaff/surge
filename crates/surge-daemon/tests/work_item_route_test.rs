@@ -877,6 +877,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
     let bridge = Arc::new(mock_bridge::MockBridge::new());
     let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
+    let cold_started = std::time::Instant::now();
     let observed = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if bridge.last_prompt().await.is_some() {
@@ -888,7 +889,8 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
     .await;
     assert!(
         observed.is_ok(),
-        "cold resume diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        "cold resume elapsed={:?}; diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
+        cold_started.elapsed(),
         storage
             .work_items()
             .for_run(attempt.run)

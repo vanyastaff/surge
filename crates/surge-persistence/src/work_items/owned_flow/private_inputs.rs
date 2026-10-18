@@ -501,12 +501,35 @@ mod tests {
     }
     #[test]
     fn empty_snapshots_never_open_private_namespace_and_keep_selection() {
-        let home = tempfile::tempdir().unwrap();
-        let store = test_store(home.path());
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let storage = runtime
+            .block_on(crate::runs::Storage::open(home.path()))
+            .unwrap();
+        let store = storage.work_items();
+        #[cfg(windows)]
+        let witness = storage.registry_pool_witness().unwrap();
         let identity = request_identity(&store, b"public body", false)
             .map(|(value, _owner)| value)
             .unwrap();
         let context = binding(identity);
+        let work_items = home.path().join("work-items");
+        let private = work_items.join("private-flow-inputs");
+        assert!(!private.exists());
+        #[cfg(windows)]
+        let anchor = crate::state_home::SnapshotRoot::capture(home.path()).unwrap();
+        #[cfg(windows)]
+        let before = (
+            anchor.observe(&work_items, true, |_| Ok(())).unwrap().0,
+            std::fs::read_dir(&work_items)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
         for selection in [
             OwnedFlowMcpSelection::Explicit,
             OwnedFlowMcpSelection::HostDefault,
@@ -522,7 +545,42 @@ mod tests {
                     .is_empty()
             );
         }
-        assert!(!home.path().join("work-items").exists());
+        let private_absent = !private.exists();
+        #[cfg(unix)]
+        let parent_absent = !work_items.exists();
+        #[cfg(windows)]
+        let after = (
+            anchor.observe(&work_items, true, |_| Ok(())).unwrap().0,
+            std::fs::read_dir(&work_items)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+        drop(store);
+        drop(storage);
+        #[cfg(windows)]
+        {
+            drop(anchor);
+            runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    while witness.is_retained() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            });
+        }
+        drop(runtime);
+        home.close().unwrap();
+        assert!(private_absent);
+        #[cfg(unix)]
+        assert!(parent_absent);
+        #[cfg(windows)]
+        assert_eq!(
+            before, after,
+            "public empty MCP changed the producer's directory"
+        );
     }
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]

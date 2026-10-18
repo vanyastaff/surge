@@ -668,3 +668,110 @@ fn process_boundary(run: RunId, phase: &str) -> Result<(), OpenError> {
     std::io::stdin().read_exact(&mut byte)?;
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod windows_inventory_tests {
+    use super::*;
+    use crate::runtime_home_fixture::FixtureHome;
+    use std::time::{Duration, Instant};
+
+    async fn actual_locked_entry(
+        bytes: &[u8],
+        artifact: bool,
+    ) -> (Result<Option<NativeEntry>, OpenError>, Vec<u8>, Vec<u8>) {
+        let home = FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let run = RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        writer.close().await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let owner = loop {
+            match control::acquire(storage.home(), &storage.registry_pool, run, true) {
+                Ok(owner) => break owner,
+                Err(OpenError::RunInUse { .. }) if Instant::now() < deadline => {
+                    std::thread::yield_now();
+                },
+                Err(error) => panic!("producer owners did not settle: {error:?}"),
+            }
+        };
+        let lock_path = storage.lock_path(&run);
+        let leaf = if artifact {
+            "artifacts/nonempty-control"
+        } else {
+            "events.sqlite.lock"
+        };
+        let path = storage.run_dir(&run).join(leaf);
+        std::fs::write(&path, bytes).unwrap();
+        let lock = super::super::FileLock::try_acquire_existing(&lock_path, run).unwrap();
+        let identity = lock.identity().unwrap();
+        let namespace = DeletionNamespace::existing(home.path(), run).unwrap();
+        let observed = namespace.entry(Path::new(leaf));
+        eprintln!(
+            "WG7 inventory phase=held-journal-leaf path={path:?} length={} result={observed:?}",
+            bytes.len()
+        );
+        drop(namespace);
+        drop(lock);
+        let unchanged = std::fs::read(&path).unwrap();
+        drop(owner);
+        let witness = storage.registry_pool_witness().unwrap();
+        drop(storage);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while witness.is_retained() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        home.close().unwrap();
+        (observed, identity, unchanged)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_owned_empty_journal_inventory_does_not_read_locked_region() {
+        let (observed, identity, bytes) = actual_locked_entry(b"", false).await;
+        assert!(bytes.is_empty());
+        let entry = observed
+            .expect("actual zero-length owned journal must not issue locked ReadFile")
+            .expect("actual producer journal must exist");
+        assert_eq!(entry.identity, identity);
+        assert!(!entry.directory);
+        assert_eq!(entry.size, 0);
+        assert_eq!(
+            entry.hash,
+            Some(vec![
+                0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+                0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+                0x78, 0x52, 0xb8, 0x55,
+            ])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_nonempty_artifacts_keep_complete_hash_and_changed_content() {
+        let (first, _, first_bytes) = actual_locked_entry(b"fixed artifact A", true).await;
+        let (second, _, second_bytes) = actual_locked_entry(b"fixed artifact B", true).await;
+        assert_eq!(first_bytes, b"fixed artifact A");
+        assert_eq!(second_bytes, b"fixed artifact B");
+        let first = first.unwrap().unwrap();
+        let second = second.unwrap().unwrap();
+        assert_eq!(first.size, 16);
+        assert_eq!(second.size, 16);
+        assert_ne!(first.hash, second.hash);
+        assert_eq!(
+            first.hash,
+            Some(sha2::Sha256::digest(b"fixed artifact A").to_vec())
+        );
+        assert_eq!(
+            second.hash,
+            Some(sha2::Sha256::digest(b"fixed artifact B").to_vec())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_owned_nonempty_journal_keeps_locked_read_refusal_and_bytes() {
+        let (observed, _, bytes) = actual_locked_entry(b"fixed nonempty journal", false).await;
+        assert_eq!(bytes, b"fixed nonempty journal");
+        assert!(matches!(observed, Err(OpenError::Io(error)) if error.raw_os_error() == Some(33)));
+    }
+}
