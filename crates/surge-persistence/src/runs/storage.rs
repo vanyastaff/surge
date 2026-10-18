@@ -453,7 +453,8 @@ impl Storage {
     fn upgrade_existing_run(
         &self,
         events_path: &Path,
-        lease: &WriterLease,
+        #[cfg(not(windows))] lease: &WriterLease,
+        #[cfg(windows)] _lease: &WriterLease,
     ) -> Result<(), OpenError> {
         use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
 

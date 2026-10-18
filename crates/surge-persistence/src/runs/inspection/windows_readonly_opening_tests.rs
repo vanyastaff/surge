@@ -302,7 +302,9 @@ async fn windows_reparse_artifacts_are_not_followed_by_inspection() {
     // Native privilege/setup failure is an explicit test failure, never a skip or RED.
     std::os::windows::fs::symlink_dir(&target, &artifacts).unwrap();
     let before = files(&target);
-    let result = Storage::inspect_existing_run(home.path().into(), run).await;
+    let result = Storage::inspect_existing_run(home.path().into(), run)
+        .await
+        .map(|_| ());
     let after = files(&target);
     let link_unchanged = std::fs::read_link(&artifacts).unwrap() == target;
     let storage = Storage::open(home.path()).await.unwrap();

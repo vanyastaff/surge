@@ -1440,7 +1440,8 @@ impl DeletionNamespace {
                 u32::try_from(size_of::<FILE_DISPOSITION_INFO_EX>())
                     .map_err(|_| refusal("deletion disposition size overflow"))?,
             )
-        }?;
+        }
+        .map_err(NativeError::from)?;
         drop(file);
         if path.as_os_str().is_empty() {
             self.directory.take();

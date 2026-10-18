@@ -858,3 +858,19 @@ Root checked gh auth/remote readonly; successfulrunner/dispatch notyetclaimed.
 Priorfull50sourceclosure and incomplete49gateprovenance retained. Samehistory/all8/
 codex-acp/exactgpt-6.1-sol remain goal afternecessarybackendstages. No repair7 or
 permissionreset inferred. Solebuilder receives test-only firstlease; root ownsGit/CI.
+
+
+### Repair6 diagnostic native SETUP failures — mechanical compile-only lease
+
+Diagnostic70ad449c published ONEauthorizedbranch, workflow39149097408 exactSHA.
+WindowsClippy117738899222 nativecompile failed beforebehavior: missing explicit
+Windows-core-error→existing native/OpenError conversion at namespace.rs1443;
+Windows-only unused lease at storage.rs456; cfg(test) observe visibilityE0603;
+new reparse-test Result payload mismatchE0308. Rawnativejoblog retained. These
+are SETUP, NOT behavioralRED; reader creating getter/caller remain unchanged.
+Root releases bounded mechanical compile correction only, preserving native
+errors/security/creator semantics/testassertions, no new publicFrom/errorAPI or
+lint suppression. Same ongoingrepair6 includes these compilation failures;
+count6/6 unchanged. Re-freeze and independent diagnostic-checkpoint review before
+newcommit/push SAMEbranch/dispatch. No production read-admission fix before actual
+WindowsbehavioralRED. No PR/merge/newworkflow/UI/habit/provider action.

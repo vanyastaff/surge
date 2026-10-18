@@ -558,7 +558,7 @@ pub(crate) mod observation {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    pub(super) fn observe(phase: Phase, file: &File) -> NativeResult<()> {
+    pub(crate) fn observe(phase: Phase, file: &File) -> NativeResult<()> {
         OBSERVER.with(|slot| match slot.borrow_mut().as_mut() {
             Some(callback) => callback(phase, file),
             None => Ok(()),
