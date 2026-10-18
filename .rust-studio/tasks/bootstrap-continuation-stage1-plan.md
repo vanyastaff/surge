@@ -911,3 +911,32 @@ ReleaseSOLEbuilder testobserver-only correction, localchecks/fullderivedmanifest
 independentdiagnosticreview before SAMEbranchpublish+existingWindowsCI. Reviewed
 unpublished3lintfixes e93b21… maysharecheckpoint. No actualgetterfix untilgenuine
 WindowsbehaviorRED. Ongoingrepair6/6 includesrequiredtestsetup, no reset/repair7.
+
+
+### Repair6 native v3 — exact producer directory roles and direct effect oracle
+
+Workflow39153752152 on5577f7b0 completed. WindowsTestSuite117752562787:
+4540run/4485PASS/55FAIL/53skip; target six fail BEFORE inspection at
+state/work-items leaf-security-pre, reparsePASS. This is SETUP, not targetRED.
+Source proves producer intentionally requires Protected{inheritable:false} there,
+while cfgtest observer hardcodes true for every directory. No production ACL defect
+is established. Owner/security independent bounded plan verdicts ACCEPTABLE.
+Exact producer-backed false relative paths ONLY: daemon, work-items, work-items/locks,
+work-items/preparation-locks, work-items/private-flow-inputs, run-controls. Sources:
+windows/mod.rs54–60, namespace.rs1037/1039, private_objects.rs20–32/60/175.
+Other paths retain true expectation; root retains independently captured owner.
+Apply same exact mapping to normal-component cumulative parent traversal and leaf
+directory validation; no prefix/suffix inference, try-both ACL, owner/ACE/protected/
+rights/nofollow/type/nlink/name-ID relaxation, native creator or Unix change.
+Add ONE direct public inspect_existing_run effect regression independent of Snapshot:
+real producer; settle actual writer/run and registry owners; remove empty artifacts;
+require exact metadata NotFound before; inspect; capture result/metadata before any
+verifying SQL; settle/cleanup; require typed native refusal and exact NotFound after.
+All existing seven native tests/assertions remain unchanged and required. This direct
+oracle proves only missing-artifacts effect, not whole-home mutation preservation.
+Release sole builder for these cfgtest changes ONLY. Actualgetter/caller remains HELD
+until actual native behavioral RED. Re-freeze/local checks and independent diagnostic
+reviews before root commits/pushes SAME diagnostic branch and existing workflow.
+Same ongoingrepair6/6, no reset/repair7/newUI/PR/merge/habit/provider changes. Other
+55 native failures and six Windows UI UnixListener compile errors remain outside
+this bounded repair; no global green claim.

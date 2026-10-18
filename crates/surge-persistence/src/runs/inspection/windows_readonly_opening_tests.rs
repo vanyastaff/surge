@@ -317,3 +317,52 @@ async fn windows_reparse_artifacts_are_not_followed_by_inspection() {
     assert!(link_unchanged);
     assert_eq!(actual, expected);
 }
+
+/// A direct effect anchor: no whole-home snapshot can prevent this assertion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_public_inspection_missing_artifacts_has_no_creation_effect() {
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let run = RunId::new();
+    let storage = actual_run(home.path(), run).await;
+    let expected = registry_rows(&storage.acquire_registry_conn().unwrap());
+    settle_storage(storage).await;
+    let artifacts = home
+        .path()
+        .join("runs")
+        .join(run.to_string())
+        .join("artifacts");
+    std::fs::remove_dir(&artifacts).unwrap();
+    let before = std::fs::symlink_metadata(&artifacts);
+    let before_missing =
+        matches!(&before, Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    let result = if before_missing {
+        Some(Storage::inspect_existing_run(home.path().into(), run).await)
+    } else {
+        None
+    };
+    // Capture the effect BEFORE verifying SQL or any cleanup can alter the path.
+    let after = std::fs::symlink_metadata(&artifacts);
+    let after_missing =
+        matches!(&after, Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    let storage = Storage::open(home.path()).await.unwrap();
+    let actual = registry_rows(&storage.acquire_registry_conn().unwrap());
+    settle_storage(storage).await;
+    home.close().unwrap();
+    assert!(
+        before_missing,
+        "SETUP: original empty artifacts must be absent: {before:?}"
+    );
+    assert!(
+        after_missing,
+        "READONLY ARTIFACTS EFFECT: before={before:?}; inspection={result:?}; after={after:?}"
+    );
+    let result = result.unwrap().map(|_| ());
+    assert!(
+        permanent_native_refusal(&result),
+        "typed permanent native refusal: {result:?}"
+    );
+    assert_eq!(
+        actual, expected,
+        "inspection changed original registry facts"
+    );
+}

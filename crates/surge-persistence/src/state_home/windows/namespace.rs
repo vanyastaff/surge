@@ -1334,7 +1334,19 @@ impl SnapshotRoot {
             namespace,
         })
     }
-    fn parent(&self, path: &Path) -> Result<(Namespace, OsString), String> {
+    fn directory_inheritable(relative: &Path) -> bool {
+        ![
+            "daemon",
+            "work-items",
+            "work-items/locks",
+            "work-items/preparation-locks",
+            "work-items/private-flow-inputs",
+            "run-controls",
+        ]
+        .iter()
+        .any(|expected| relative == Path::new(expected))
+    }
+    fn parent(&self, path: &Path) -> Result<(Namespace, OsString, bool), String> {
         let relative = path
             .strip_prefix(&self.path)
             .map_err(|error| snapshot_error(path, "relative-path", error))?;
@@ -1343,6 +1355,7 @@ impl SnapshotRoot {
             .namespace
             .retained_clone()
             .map_err(|error| snapshot_error(path, "root-clone", error))?;
+        let mut cumulative = PathBuf::new();
         loop {
             let Some(Component::Normal(name)) = components.next() else {
                 return Err(snapshot_error(
@@ -1351,11 +1364,13 @@ impl SnapshotRoot {
                     "normal child required",
                 ));
             };
+            cumulative.push(name);
+            let inheritable = Self::directory_inheritable(&cumulative);
             if components.peek().is_none() {
-                return Ok((parent, name.to_os_string()));
+                return Ok((parent, name.to_os_string(), inheritable));
             }
             parent = parent
-                .existing_child(name, true)
+                .existing_child(name, inheritable)
                 .map_err(|error| snapshot_error(path, "parent-open", error))?;
         }
     }
@@ -1431,7 +1446,7 @@ impl SnapshotRoot {
             }
             return self.root_fact(read);
         }
-        let (parent, name) = self.parent(path)?;
+        let (parent, name, inheritable) = self.parent(path)?;
         parent
             .verify()
             .map_err(|error| snapshot_error(path, "parent-pre", error))?;
@@ -1444,7 +1459,7 @@ impl SnapshotRoot {
             parent.owner.validate_directory(
                 file,
                 if directory {
-                    DirectoryPolicy::Protected { inheritable: true }
+                    DirectoryPolicy::Protected { inheritable }
                 } else {
                     DirectoryPolicy::SqliteSidefile
                 },
