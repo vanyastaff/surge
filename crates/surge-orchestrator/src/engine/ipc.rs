@@ -844,8 +844,17 @@ where
 ///
 /// This is the correct cross-platform handler for the daemon's
 /// IPC socket discovery. Both `surge-daemon::server` (listener)
-/// and `DaemonClient::connect` (client) call this function so the
-/// pipe name agrees on both ends.
+/// and [`super::daemon_facade::DaemonEngineFacade::connect`] (client) call this
+/// function so the pipe name agrees on both ends. On Windows, the existing parent
+/// directory is canonicalized before naming the pipe; the socket filename itself
+/// is unchanged. A bare filename uses the current directory. This creates no
+/// filesystem entry.
+///
+/// # Errors
+///
+/// Platform name-conversion errors are propagated. Windows also rejects a missing
+/// or non-directory parent and a filename that cannot be represented as UTF-8;
+/// current-directory, canonicalization and metadata errors are propagated.
 pub fn local_socket_name_from_path(
     path: &std::path::Path,
 ) -> std::io::Result<interprocess::local_socket::Name<'_>> {
@@ -857,12 +866,30 @@ pub fn local_socket_name_from_path(
     #[cfg(windows)]
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName};
-        let name = windows_pipe_name(path).ok_or_else(|| {
+        let invalid_filename = || {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "socket path has no valid file name",
             )
-        })?;
+        };
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(invalid_filename)?;
+        let parent = match path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            Some(parent) => std::fs::canonicalize(parent)?,
+            None => std::fs::canonicalize(std::env::current_dir()?)?,
+        };
+        if !std::fs::metadata(&parent)?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "socket parent is not a directory",
+            ));
+        }
+        let name = windows_pipe_name(&parent.join(file)).ok_or_else(invalid_filename)?;
         name.to_ns_name::<GenericNamespaced>()
     }
 }
@@ -877,8 +904,10 @@ pub fn local_socket_name_from_path(
 /// both ends must derive the same name from `C:\Users\Me\.surge` and
 /// `c:/users/me/.surge`. `None` when `path` has no UTF-8 file name.
 ///
-/// Platform-neutral (and unit-tested everywhere); only the Windows arm of
-/// [`local_socket_name_from_path`] uses it.
+/// This pure lexical mapping does no filesystem inspection. The Windows arm of
+/// [`local_socket_name_from_path`] first canonicalizes the existing parent so
+/// ordinary and verbatim spellings of the same directory derive one pipe name.
+/// This helper remains platform-neutral and unit-tested everywhere.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn windows_pipe_name(path: &std::path::Path) -> Option<String> {
     let file = path.file_name()?.to_str()?;

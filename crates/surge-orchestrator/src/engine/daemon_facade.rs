@@ -74,9 +74,9 @@ impl DaemonClient {
     }
     /// Open a connection to the daemon at `socket_path` and start
     /// the background read loop. On Unix this is a Unix-domain
-    /// socket path; on Windows it is the named-pipe path the daemon
-    /// recorded in `~/.surge/daemon/daemon.sock` (the discovery
-    /// helper resolving the file→pipe-name lives in PR 3).
+    /// socket path. On Windows the shared resolver derives the named-pipe
+    /// name from the existing parent directory and unchanged socket filename,
+    /// using the same mapping as the daemon listener.
     pub async fn connect(socket_path: PathBuf) -> Result<Arc<Self>, EngineError> {
         let name = crate::engine::ipc::local_socket_name_from_path(&socket_path)
             .map_err(|e| EngineError::Internal(format!("socket name: {e}")))?;

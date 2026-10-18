@@ -1238,3 +1238,30 @@ exact counts, exhaustion/navigation assertions and deadlines. HYDRATE uses actua
 controlled failed-read publication and same-token Incomplete+!is_reading barrier.
 No new UI behavior, production seams, timeout increases or skipped assertions.
 Same ongoing7/7; no new repair dispatch or budget reset.
+
+### Native retained-listener causal RED — release accepted IPC plan B
+
+Fixed native5 in run39172594448 actually executed5: four recovery cases PASS,
+IPC alias case FAIL. Clean synthetic merge65308188 has identical Git tree to
+published8e9e935e (46a2c6e5a2d4dff6705a28bc2ee3a141cfc0ab7f), actual source and
+five binary identities unchanged before/after. Early artifact retained under
+seventh-round/focused-native-39172594448; root verified actual JUnit/phase output.
+ONE retained listener: healthy canonical PASS, ordinary client-connect OS2
+(file not found), canonical after ordinary PASS, verbatim PASS. Actual server
+accept/read/write phases and explicit stop/join complete. Old recreation confound
+is absent. This is sufficient native causal RED for previously reviewed plan B.
+
+Sole builder may now edit only existing IPC resolver/tests/rustdoc, its inaccurate
+daemon_facade caller comment and existing getting-started IPC lifecycle docs.
+Windows resolver validates original UTF8 filename; empty relative parent resolves
+current directory; canonicalize EXISTING parent and require directory; join exact
+filename, then unchanged pure windows_pipe_name. Propagate errors, create nothing.
+No lexical namespace stripping, fallback old hash, new FFI/dependency/public API
+or namespace/auth/adoption authority. Preserve distinct homes, missing/nondirectory
+refusal, real original-listener alias Ping, foreign-PID and native security fences.
+Document mixed-version paired daemon stop/restart using matching old binary.
+Local meaningful tests, strict affected Clippy both modes/fmt/diff and frozen
+reviewable checkpoint required; actual native GREEN remains pending publication.
+Current full Windows same-SHA suite must finish for discriminator comparison;
+root holds remote push until then. No recovery production/scheduling change yet.
+Same ongoing7/7, no repair reset, no UI/provider/user-history actions.
