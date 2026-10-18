@@ -1041,3 +1041,32 @@ samebranch existingci.yml native dispatch. This is ongoingrepair7/7; mechanical
 compile/setup issues in thisattempt do not reset count or imply repair8.
 Full required Windows gates and independent5a→5b remain completion conditions;
 no newUI/provider/userhistoryactions/PR/merge. Buildreserve2GiB retained.
+
+
+### Repair7 first native Clippy — mechanical test correction released
+
+Checkpoint c885efee2d8bd6f60a4b9403cda6945885d36229, workflow39167406937,
+Windows Clippy job117793126251 completed FAIL. Retained raw/clean logs show
+exactly three new cfg(windows) test lints: excessive_nesting in private_inputs.rs
+registry-witness wait, unnecessary_debug_formatting for Path diagnostic, and
+assert_is_empty in deletion.rs anchor. Release sole builder ONLY equivalent
+test refactor/Display/empty-value assertion corrections, without lint allows or
+weakened cleanup/assertions. Production IPC/deletion/private mapping remain HELD
+until actual native causal RED. Test job117793126362 remains running; do not
+push/dispatch and cancel its native evidence. Same ongoing attempt7/7.
+
+
+### Human publication extension — current branch PR and merge
+
+Human now explicitly directs: «давай доведи до merge», after inspecting the full
+GitHub comparison (225 files, +14821/-293, 35 commits vs main6722b495). This
+authorizes publishing a PR for codex/continuation-readonly-windows-20261018 and
+merging only after fresh final-source mandatory CI, including Windows, and closed
+review. Previous no-PR/no-merge restrictions are superseded for this branch.
+No new UI improvement or history/provider mutation is inferred during gate work.
+Ongoing repair7/7 remains the same attempt, not a budget reset. Existing workflow
+concurrency separates workflow_dispatch and pull_request, so draft PR creation
+does not cancel the native diagnostic run39167406937. The PR must state actual
+open gates and incomplete continuation endpoint; no green or app-completion claim.
+Keep same retained habit tracker/all8/history/exact codex-acp/gpt-6.1-sol as the
+continuation goal. Git/remote operations remain root-owned, no force push.

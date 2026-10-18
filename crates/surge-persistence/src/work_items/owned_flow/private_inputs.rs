@@ -559,18 +559,19 @@ mod tests {
         drop(store);
         drop(storage);
         #[cfg(windows)]
-        {
-            drop(anchor);
-            runtime.block_on(async {
-                tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                    while witness.is_retained() {
-                        tokio::task::yield_now().await;
-                    }
-                })
+        drop(anchor);
+        #[cfg(windows)]
+        let released = async {
+            while witness.is_retained() {
+                tokio::task::yield_now().await;
+            }
+        };
+        #[cfg(windows)]
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), released)
                 .await
                 .unwrap();
-            });
-        }
+        });
         drop(runtime);
         home.close().unwrap();
         assert!(private_absent);

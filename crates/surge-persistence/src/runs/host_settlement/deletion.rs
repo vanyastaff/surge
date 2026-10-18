@@ -707,7 +707,8 @@ mod windows_inventory_tests {
         let namespace = DeletionNamespace::existing(home.path(), run).unwrap();
         let observed = namespace.entry(Path::new(leaf));
         eprintln!(
-            "WG7 inventory phase=held-journal-leaf path={path:?} length={} result={observed:?}",
+            "WG7 inventory phase=held-journal-leaf path={} length={} result={observed:?}",
+            path.display(),
             bytes.len()
         );
         drop(namespace);
@@ -730,7 +731,7 @@ mod windows_inventory_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actual_owned_empty_journal_inventory_does_not_read_locked_region() {
         let (observed, identity, bytes) = actual_locked_entry(b"", false).await;
-        assert!(bytes.is_empty());
+        assert_eq!(bytes, b"");
         let entry = observed
             .expect("actual zero-length owned journal must not issue locked ReadFile")
             .expect("actual producer journal must exist");
