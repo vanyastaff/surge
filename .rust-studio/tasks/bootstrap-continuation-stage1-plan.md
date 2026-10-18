@@ -962,3 +962,40 @@ native Windows GREEN and independent focused5a/then5b remain required. Same
 ongoingrepair6/6, no reset/repair7. Root owns diagnosticbranch/CI, noPR/merge/UI
 or habit/provider actions. Other29native failures and existing WindowsUIsix
 compile failures remain outside this bounded correction, no globalgreen claim.
+
+
+### Repair6 final scoped disposition — CONT-S2-SPEC-01 RESOLVED; Stage2 NEEDS WORK
+
+Code checkpoint fbaed8fb210d7f5a24f3d22fdf4598e2139b0aad / ALL52 source digest
+42fc0a36998e7aa5acd3a35c983093f065920a6c5d98b3dc302e08a740a11d7a.
+Native v4 genuineRED retained; v5 workflow39160468869/job117772518526 ALL8
+UNCHANGED target tests PASS, including full missing-bound/NULL/malformed matrices,
+direct creation-effect oracle, foreignrun/database, reparse, writer+64readers.
+Independent focused spec/security/owner re-review: CONT-S2-SPEC-01 RESOLVED.
+Local full4264/4264PASS,26skip=25existingignored+exactfutureouter; strictworkspace
+default/allfeatures PASS, history11, ignoredrecovery3/restart2 PASS, docs58baseline
+warnings eachmode, doctests5PASS+1existingignored eachmode, fmt/diff PASS. All52
+source hashes stayed identical through gates; all owned verification tasks settled.
+
+WholeStage2 Phase5a remains NEEDS WORK; Phase5b BLOCKED/not started. V5 Windows
+4541run/4497PASS/44FAIL/53skip; v4→v5 has29common,4targetresolved,15newlyobserved.
+No blanket baseline, unrelated-failure or getter-causality claim is justified.
+WindowsClippy still six UI UnixListener E0433. Standard-user probe also fails
+SETUP: stale exactfilter accepted_public_flow_replay_precedes_unavailable_private_storage
+selects0tests; do not call standard-user evidence green. FreshmacOS4553/4554 and
+Linux4947/4948 only fail authentic futureouter MISSING CONTINUATION; two priorLinux
+UIsettlement cases passed unchanged, not proof their underlying flakiness was fixed.
+
+Caller-map correction: changed directcall is control::database, ALSO reached by
+writable startup storage::upgrade_existing_run and verify_empty_initialized.
+Actual creators run(true)/existing_parts run(false) remain unchanged and establish
+artifacts before databaseowner validation. No source-level getter regression found;
+remaining nativecaller gate attribution stays open. Source/test assertions unweakened.
+
+Sharedrepair6/6 exhausted; no new repair or wider permission inferred. NoPR/merge,
+newUI/provider/user-runtime/history mutations. Same retained habit publicTOML hashes
+confirmed, all8tasks/2milestones and7exact codex-acp/gpt-6.1-sol bindings preserved;
+real continuation NOT executed. Full receipts/classifications and independent verdicts:
+sixth-round/readonly-getter-sixth-round-final-disposition.json and referenced logs.
+This documentation checkpoint records bounded resolution and failed gates, not
+wholeStage2 completion or approval to start Phase5b/furtherrepairs.
