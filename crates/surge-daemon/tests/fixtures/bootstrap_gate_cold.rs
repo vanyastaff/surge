@@ -459,6 +459,8 @@ fn git(project: &Path, args: &[&str]) {
 
 fn prepare(home: &Path, project: &Path) {
     std::fs::create_dir_all(project).unwrap();
+    git(project, &["init"]);
+    git(project, &["config", "core.autocrlf", "false"]);
     let binary = std::env::var_os("SURGE_TEST_MOCK_ACP_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -473,7 +475,6 @@ fn prepare(home: &Path, project: &Path) {
         toml::to_string(&config).unwrap(),
     )
     .unwrap();
-    git(project, &["init"]);
     git(project, &["config", "user.name", "Gate fixture"]);
     git(
         project,

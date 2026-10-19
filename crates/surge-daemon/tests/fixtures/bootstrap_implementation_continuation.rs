@@ -1103,7 +1103,20 @@ async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: b
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::TaskVerified { .. }))
         .collect();
-    assert_eq!(verified.len(), 4);
+    assert_eq!(
+        verified.len(),
+        4,
+        "four accepted task proofs required; operation={failed}; proof events={:?}",
+        before
+            .iter()
+            .filter(|event| {
+                let kind = event.payload.discriminant_str();
+                kind.contains("Verification")
+                    || kind.contains("StageOutcome")
+                    || kind.starts_with("Task")
+            })
+            .collect::<Vec<_>>()
+    );
     let last_verified = verified.last().unwrap().seq;
     let boundary = before
         .iter()

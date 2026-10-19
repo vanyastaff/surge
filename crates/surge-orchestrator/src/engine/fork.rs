@@ -1645,15 +1645,15 @@ mod tests {
     ) {
         let graph = agent_graph();
         let hash = graph.identity().unwrap();
+        let writer = storage
+            .create_run(parent, storage.home(), None)
+            .await
+            .unwrap();
         let artifact =
             surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
                 .put(parent, "spec", label.as_bytes())
                 .await
                 .unwrap();
-        let writer = storage
-            .create_run(parent, storage.home(), None)
-            .await
-            .unwrap();
         writer
             .append_events(vec![
                 VersionedEventPayload::new(EventPayload::RunStarted {

@@ -46,7 +46,7 @@ try:
             assert set(artifacts) <= {"spec.toml", "spec.md", "verification-report.toml"}
             assert all(isinstance(content, str) for content in files.values())
             for name, content in files.items():
-                pathlib.Path(name).write_text(content)
+                pathlib.Path(name).write_bytes(content.encode("utf-8"))
             args["artifacts_produced"].extend(artifacts)
             if "fixture_report" in turn:
                 args["verification_report"] = turn["fixture_report"]

@@ -143,9 +143,16 @@ mod observation_tests {
         }
         let mut events = Vec::new();
         let current = SessionId::new();
+        let parent_cwd = std::env::temp_dir().join("surge-audit-parent");
+        let child_cwd = std::env::temp_dir().join("surge-audit-child");
         for (seq, session, cwd, model) in [
-            (1, SessionId::new(), "/parent", None),
-            (2, current, "/child", Some("provider-exact-id".into())),
+            (1, SessionId::new(), parent_cwd.as_path(), None),
+            (
+                2,
+                current,
+                child_cwd.as_path(),
+                Some("provider-exact-id".into()),
+            ),
         ] {
             let descriptor = ProviderSessionDescriptor::new(
                 ProviderSessionId::new(format!("provider-{seq}")).unwrap(),
@@ -177,14 +184,7 @@ mod observation_tests {
         let surge_core::node::NodeConfig::Agent(agent) = &stage.config else {
             panic!("fixture agent")
         };
-        let context = render(
-            Some(&graph),
-            &events,
-            current,
-            std::path::Path::new("/child"),
-            &stage.id,
-            agent,
-        );
+        let context = render(Some(&graph), &events, current, &child_cwd, &stage.id, agent);
         assert!(context.len() < 70 * 1024);
         let data: serde_json::Value =
             serde_json::from_str(context.lines().nth(1).unwrap()).unwrap();

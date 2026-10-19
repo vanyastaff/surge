@@ -24,10 +24,12 @@ fn fixture() -> (
     ExecutionState,
     Vec<ReadEvent>,
 ) {
-    let mut fixture: Fixture = serde_json::from_str(include_str!(
+    let mut encoded: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/bootstrap-continuation/failed-milestone-shape.json"
     ))
     .unwrap();
+    native_fixture_paths(&mut encoded);
+    let mut fixture: Fixture = serde_json::from_value(encoded).unwrap();
     restore_frozen_items(&mut fixture.snapshot);
     let raw_graph: surge_core::Graph = toml::from_str(include_str!(
         "../../../../tests/fixtures/bootstrap-continuation/synthetic-eight-task-flow.toml"
@@ -104,6 +106,33 @@ fn fixture() -> (
     }
     latest.position = tail.last().unwrap().seq.as_u64();
     (prefix, fixture.snapshot, latest, tail)
+}
+
+// The sanitized recording uses a Unix fixture root. Translate only that known
+// root before typed path validation; all repeated identities stay identical.
+fn native_fixture_paths(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(path) => {
+            if let Some(relative) = path.strip_prefix("/fixture/") {
+                *path = std::env::temp_dir()
+                    .join("surge-milestone-shape-fixture")
+                    .join(relative)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        },
+        serde_json::Value::Array(values) => {
+            for value in values {
+                native_fixture_paths(value);
+            }
+        },
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                native_fixture_paths(value);
+            }
+        },
+        _ => {},
+    }
 }
 
 fn restore_frozen_items(snapshot: &mut EngineSnapshot) {
