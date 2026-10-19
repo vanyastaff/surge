@@ -215,6 +215,14 @@ surge daemon stop
 `surge daemon stop` acknowledges a shutdown request. Wait for the owned daemon
 to exit before starting it again; `surge daemon restart` performs that wait.
 
+On Windows, clients and the daemon derive the pipe name from the canonical
+existing socket-parent directory. This changes pipe discovery for some older
+binary versions. Before upgrading, use the matching old `surge` executable to
+stop its daemon and wait for it to exit, then replace both `surge` and
+`surge-daemon` together and start the new daemon. A new client may not be able to
+stop an older daemon through the changed name; keep the old executable until
+shutdown completes. Keep the same `SURGE_HOME` and its recorded history.
+
 Detached startup redirects daemon output to `~/.surge/daemon/daemon.log`
 (or `$SURGE_HOME/daemon/daemon.log` when `SURGE_HOME` is set). The start
 command prints this path and includes it in startup errors.

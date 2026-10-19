@@ -844,8 +844,17 @@ where
 ///
 /// This is the correct cross-platform handler for the daemon's
 /// IPC socket discovery. Both `surge-daemon::server` (listener)
-/// and `DaemonClient::connect` (client) call this function so the
-/// pipe name agrees on both ends.
+/// and [`super::daemon_facade::DaemonEngineFacade::connect`] (client) call this
+/// function so the pipe name agrees on both ends. On Windows, the existing parent
+/// directory is canonicalized before naming the pipe; the socket filename itself
+/// is unchanged. A bare filename uses the current directory. This creates no
+/// filesystem entry.
+///
+/// # Errors
+///
+/// Platform name-conversion errors are propagated. Windows also rejects a missing
+/// or non-directory parent and a filename that cannot be represented as UTF-8;
+/// current-directory, canonicalization and metadata errors are propagated.
 pub fn local_socket_name_from_path(
     path: &std::path::Path,
 ) -> std::io::Result<interprocess::local_socket::Name<'_>> {
@@ -857,12 +866,30 @@ pub fn local_socket_name_from_path(
     #[cfg(windows)]
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName};
-        let name = windows_pipe_name(path).ok_or_else(|| {
+        let invalid_filename = || {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "socket path has no valid file name",
             )
-        })?;
+        };
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(invalid_filename)?;
+        let parent = match path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            Some(parent) => std::fs::canonicalize(parent)?,
+            None => std::fs::canonicalize(std::env::current_dir()?)?,
+        };
+        if !std::fs::metadata(&parent)?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "socket parent is not a directory",
+            ));
+        }
+        let name = windows_pipe_name(&parent.join(file)).ok_or_else(invalid_filename)?;
         name.to_ns_name::<GenericNamespaced>()
     }
 }
@@ -877,8 +904,10 @@ pub fn local_socket_name_from_path(
 /// both ends must derive the same name from `C:\Users\Me\.surge` and
 /// `c:/users/me/.surge`. `None` when `path` has no UTF-8 file name.
 ///
-/// Platform-neutral (and unit-tested everywhere); only the Windows arm of
-/// [`local_socket_name_from_path`] uses it.
+/// This pure lexical mapping does no filesystem inspection. The Windows arm of
+/// [`local_socket_name_from_path`] first canonicalizes the existing parent so
+/// ordinary and verbatim spellings of the same directory derive one pipe name.
+/// This helper remains platform-neutral and unit-tested everywhere.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn windows_pipe_name(path: &std::path::Path) -> Option<String> {
     let file = path.file_name()?.to_str()?;
@@ -1127,5 +1156,168 @@ mod tests {
             "expected FrameTooLarge, got {err:?}"
         );
         let _ = over; // keep variable to avoid lint
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_address_tests {
+    use super::*;
+    use interprocess::local_socket::{ListenerOptions, tokio::prelude::*};
+    use std::{path::Path, time::Duration};
+
+    async fn serve_alias_ping(stream: LocalSocketStream) -> Result<&'static str, String> {
+        let (read, mut write) = stream.split();
+        let request = read_request_frame(&mut tokio::io::BufReader::new(read))
+            .await
+            .map_err(|e| format!("phase=server-read {e}"))?;
+        let Some(DaemonRequest::Ping { request_id: 87 }) = request else {
+            return Err("phase=server-read actual listener received a non-Ping87 request".into());
+        };
+        write_frame(
+            &mut write,
+            &DaemonResponse::PingOk {
+                request_id: 87,
+                version: "fixed-native-alias".into(),
+            },
+        )
+        .await
+        .map_err(|e| format!("phase=server-write {e}"))?;
+        Ok("phase=server-read/write complete")
+    }
+
+    async fn actual_alias_ping(client_path: &Path) -> Result<(), String> {
+        let mut phase = "client-resolve";
+        let observed = tokio::time::timeout(Duration::from_secs(2), async {
+            let name = local_socket_name_from_path(client_path)
+                .map_err(|e| format!("phase=client-resolve {e}"))?;
+            phase = "client-connect";
+            let stream = LocalSocketStream::connect(name)
+                .await
+                .map_err(|e| format!("phase=client-connect {e}"))?;
+            let (read, mut write) = stream.split();
+            phase = "client-write";
+            write_frame(&mut write, &DaemonRequest::Ping { request_id: 87 })
+                .await
+                .map_err(|e| format!("phase=client-write {e}"))?;
+            phase = "client-read";
+            let response = read_response_frame(&mut tokio::io::BufReader::new(read))
+                .await
+                .map_err(|e| format!("phase=client-read {e}"))?;
+            phase = "client-response";
+            match response {
+                Some(DaemonResponse::PingOk {
+                    request_id: 87,
+                    version,
+                }) if version == "fixed-native-alias" => Ok(()),
+                other => Err(format!(
+                    "phase=client-response actual alias Ping: {other:?}"
+                )),
+            }
+        })
+        .await;
+        match observed {
+            Ok(result) => result,
+            Err(_) => Err(format!("phase={phase} actual alias Ping deadline2s")),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn public_resolver_aliases_reach_same_actual_listener_with_ping() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let ordinary = home.path().join("native-alias.sock");
+        let canonical = std::fs::canonicalize(home.path())
+            .unwrap()
+            .join("native-alias.sock");
+        let verbatim = canonical.clone(); // The OS canonicalizer supplies the native verbatim spelling.
+        let name = local_socket_name_from_path(&canonical)
+            .expect("phase=listener-resolve canonical parent");
+        let listener = ListenerOptions::new()
+            .name(name)
+            .create_tokio()
+            .expect("phase=listener-create exactly one retained listener");
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut phases = Vec::new();
+            loop {
+                let accepted = tokio::select! {
+                    stream = listener.accept() => stream,
+                    _ = &mut stopped => { phases.push(Ok("phase=server-stop")); break; },
+                };
+                let stream = match accepted {
+                    Ok(stream) => {
+                        phases.push(Ok("phase=server-accept"));
+                        stream
+                    },
+                    Err(error) => {
+                        phases.push(Err(format!("phase=server-accept {error}")));
+                        break;
+                    },
+                };
+                let served = tokio::select! {
+                    result = serve_alias_ping(stream) => result,
+                    _ = &mut stopped => { phases.push(Ok("phase=server-stop-during-serve")); break; },
+                };
+                phases.push(served);
+            }
+            phases
+        });
+        let mut results = vec![("healthy canonical", actual_alias_ping(&canonical).await)];
+        for (label, path) in [
+            ("ordinary", &ordinary),
+            ("canonical after ordinary", &canonical),
+            ("verbatim", &verbatim),
+        ] {
+            results.push((label, actual_alias_ping(path).await));
+        }
+        let _ = stop.send(());
+        let server_phases = server.await;
+        home.close().unwrap();
+        let server_phases = server_phases.expect("actual retained listener/server task must join");
+        assert!(
+            server_phases.iter().all(Result::is_ok),
+            "actual server phases: {server_phases:?}; clients={results:?}"
+        );
+        for index in [0, 2, 3] {
+            assert!(
+                results[index].1.is_ok(),
+                "actual canonical positive control: {results:?}; server={server_phases:?}"
+            );
+        }
+        assert!(
+            results[1].1.is_ok(),
+            "actual ordinary alias Ping: {results:?}; server={server_phases:?}"
+        );
+    }
+
+    #[test]
+    fn public_resolver_bare_filename_matches_current_existing_parent_without_chdir() {
+        let leaf = format!("surge-native-{}.sock", surge_core::RunId::new());
+        let absolute = std::env::current_dir().unwrap().join(&leaf);
+        let bare = local_socket_name_from_path(Path::new(&leaf)).unwrap();
+        let expected = local_socket_name_from_path(&absolute).unwrap();
+        assert_eq!(format!("{bare:?}"), format!("{expected:?}"));
+    }
+
+    #[test]
+    fn public_resolver_missing_or_nondirectory_parent_refuses_without_creation() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let absent = home.path().join("absent");
+        let file = home.path().join("parent-file");
+        std::fs::write(&file, b"fixed parent sentinel").unwrap();
+        let missing = local_socket_name_from_path(&absent.join("daemon.sock")).map(|_| ());
+        let nondirectory = local_socket_name_from_path(&file.join("daemon.sock")).map(|_| ());
+        let remains_absent = !absent.exists();
+        let bytes = std::fs::read(&file).unwrap();
+        home.close().unwrap();
+        assert!(remains_absent);
+        assert_eq!(bytes, b"fixed parent sentinel");
+        assert!(
+            matches!(missing, Err(ref e) if e.kind() == std::io::ErrorKind::NotFound),
+            "missing-parent result: {missing:?}"
+        );
+        assert!(
+            matches!(nondirectory, Err(ref e) if e.kind() == std::io::ErrorKind::NotADirectory),
+            "nondirectory-parent result: {nondirectory:?}"
+        );
     }
 }
