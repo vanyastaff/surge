@@ -15,10 +15,7 @@ type CheckedOperation = Result<
     String,
 >;
 
-type InspectionResult = (
-    CheckedOperation,
-    [Option<crate::app_state::ReadCompletion>; 2],
-);
+type InspectionResult = (CheckedOperation, Vec<crate::app_state::ReadCompletion>);
 struct OperationPublication {
     coverage: (
         Option<surge_core::bootstrap_operation::BootstrapOperationStatus>,
@@ -31,7 +28,16 @@ struct OperationPublication {
 fn expects_related_history(record: &BootstrapOperationRecord, run: surge_core::RunId) -> bool {
     use surge_core::bootstrap_continuation::{BootstrapFailure as F, BootstrapTerminal as T};
     // This requests inspection only; an operation never supplies run lifecycle facts.
-    (record.child.is_some() && run == record.status.planning_run)
+    record.status.continuations.iter().any(|attempt| {
+        attempt.run == run
+            && matches!(
+                attempt.state,
+                surge_core::bootstrap_attempt::BootstrapAttemptState::ForkReady
+                    | surge_core::bootstrap_attempt::BootstrapAttemptState::Running
+                    | surge_core::bootstrap_attempt::BootstrapAttemptState::Completed
+                    | surge_core::bootstrap_attempt::BootstrapAttemptState::Failed
+            )
+    }) || (record.child.is_some() && run == record.status.planning_run)
         || matches!(&record.status.result,Some(T::Completed{run_id,..}|T::Failed{run_id,reason:F::RunFailed|F::RunAborted}) if *run_id==run)
 }
 
@@ -82,63 +88,37 @@ pub(super) async fn read_history(
     }
     Err("run history exceeds this bounded observation; inspect recorded history".into())
 }
+#[cfg(test)]
 pub(super) fn bound_related(
     record: &BootstrapOperationRecord,
     run: surge_core::RunId,
     events: &[ReadEvent],
 ) -> Result<(), String> {
-    let BootstrapStoredPayload::V1 { capture, .. } = &record.payload else {
-        return Err("unsupported operation payload".into());
-    };
-    let planning = run == record.status.planning_run;
-    let pins = capture.fields();
-    let path = if planning {
-        &pins.planning_worktree
-    } else {
-        &pins.implementation_worktree
-    };
-    let hash = if planning {
-        Some(pins.graph.digest)
-    } else {
-        record.child.as_ref().map(|child| child.graph().digest)
-    };
-    let starts: Vec<_> = events
+    crate::app_state::validate_bootstrap_history(record, run, events, None)
+}
+async fn bound_related_at_home(
+    record: &BootstrapOperationRecord,
+    run: surge_core::RunId,
+    events: &[ReadEvent],
+    home: &std::path::Path,
+) -> Result<(), String> {
+    crate::app_state::validate_bootstrap_history(record, run, events, Some(home))?;
+    if record
+        .status
+        .continuations
         .iter()
-        .filter_map(|event| match &event.payload.payload {
-            surge_core::EventPayload::RunStarted { project_path, .. } => {
-                Some((event.seq.as_u64(), project_path))
-            },
-            _ => None,
-        })
-        .collect();
-    let graphs: Vec<_> = events
-        .iter()
-        .filter_map(|event| match &event.payload.payload {
-            surge_core::EventPayload::PipelineMaterialized { graph, graph_hash } => {
-                Some((graph, graph_hash))
-            },
-            _ => None,
-        })
-        .collect();
-    if starts != vec![(1, path)]
-        || graphs.is_empty()
-        || hash != Some(*graphs[0].1)
-        || events.iter().any(|event| {
-            matches!(
-                event.payload.payload,
-                surge_core::EventPayload::WorkItemAttemptBound { .. }
-            )
-        })
+        .any(|attempt| attempt.run == run)
     {
-        return Err("related journal does not match the accepted run identity".into());
-    }
-    for (graph, hash) in graphs {
-        if graph.identity().map_err(|error| error.to_string())? != *hash {
-            return Err("related journal graph content differs from its recorded identity".into());
-        }
+        let events = events
+            .iter()
+            .map(|event| event.to_run_event(run))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        crate::app_state::validate_bootstrap_successor(record, home, run, &events).await?;
     }
     Ok(())
 }
+
 async fn inspect_operation(
     scope: &Scope,
     operation: surge_core::RunId,
@@ -147,7 +127,7 @@ async fn inspect_operation(
     eligible: Option<&[Token]>,
     before_recheck: impl std::future::Future<Output = ()>,
 ) -> InspectionResult {
-    let mut retired = [None, None];
+    let mut retired = Vec::new();
     let result = async {
         let Some(observation) =
             Storage::inspect_existing_bootstrap_operation(scope.home.clone(), operation)
@@ -176,7 +156,9 @@ async fn inspect_operation(
         }
         let mut histories = Vec::new();
         let mut blocked = false;
-        for run in [record.status.planning_run, record.status.implementation_run] {
+        for run in
+            crate::app_state::bootstrap_related_runs(&record.status).map_err(str::to_owned)?
+        {
             let (token, was_blocked) = cx.update(|cx| {
                 let token = state
                     .update(cx, |state, _| {
@@ -211,12 +193,12 @@ async fn inspect_operation(
                 blocked |= was_blocked;
                 continue;
             };
-            let history = read_history(&scope.home, run).await.and_then(|events| {
-                if let Some(events) = &events {
-                    bound_related(&record, run, events)?;
-                }
-                Ok(events)
-            });
+            let history = match read_history(&scope.home, run).await {
+                Ok(Some(events)) => bound_related_at_home(&record, run, &events, &scope.home)
+                    .await
+                    .map(|()| Some(events)),
+                other => other,
+            };
             histories.push((token, history));
         }
         before_recheck.await;
@@ -228,13 +210,13 @@ async fn inspect_operation(
             retired = cx.update(|cx| {
                 state
                     .update(cx, |state, _| {
-                        let mut retired = [None, None];
-                        for (slot, (token, _)) in retired.iter_mut().zip(&histories) {
-                            *slot = Some(state.retire_history_read(token));
+                        let mut retired = Vec::new();
+                        for (token, _) in &histories {
+                            retired.push(state.retire_history_read(token));
                         }
                         retired
                     })
-                    .unwrap_or([None, None])
+                    .unwrap_or_default()
             });
             return Err(current
                 .err()
@@ -519,7 +501,7 @@ impl SurgeApp {
         cx: &mut Context<Self>,
     ) -> OperationPublication {
         let (result, retired) = result;
-        let mut completions = retired.into_iter().flatten().collect::<Vec<_>>();
+        let mut completions = retired;
         let mut covered = None;
         let mut blocked = false;
         let key = (scope.clone(), operation);
@@ -739,7 +721,8 @@ impl SurgeApp {
                 .bootstrap_operations
                 .get(&key.1)
                 .is_some_and(|operation| {
-                    [operation.planning_run, operation.implementation_run]
+                    crate::app_state::bootstrap_related_runs(operation)
+                        .unwrap_or_default()
                         .into_iter()
                         .any(|run| self.state.read(cx).observations.is_reading(run))
                 });

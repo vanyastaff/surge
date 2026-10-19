@@ -101,7 +101,7 @@ pub(super) async fn load_observed(
                 crate::roadmap_source::read_run_roadmap(&home, record.status.planning_run)
                     .and_then(|bytes| String::from_utf8(bytes).ok())
                     .and_then(|text| toml::from_str(&text).ok());
-            recorded(&home, request.selected, roadmap.as_ref())
+            recorded(&home, request.selected, roadmap.as_ref(), Some(record))
                 .await
                 .map(|mut snapshot| {
                     snapshot.operation = Some(record.status.clone());
@@ -124,12 +124,13 @@ pub(super) async fn load_observed(
 }
 
 async fn ordinary(home: &Path, run: RunId) -> Result<MissionSnapshot, String> {
-    recorded(home, run, None).await
+    recorded(home, run, None, None).await
 }
 async fn recorded(
     home: &Path,
     run: RunId,
     roadmap: Option<&surge_core::roadmap::RoadmapArtifact>,
+    association: Option<&BootstrapOperationRecord>,
 ) -> Result<MissionSnapshot, String> {
     let rows = Storage::inspect_existing_run_events(home.join("runs"), run)
         .await
@@ -137,10 +138,16 @@ async fn recorded(
     if rows.is_empty() {
         return Err("Run history is incomplete; its journal contains no events".into());
     }
+    if let Some(record) = association {
+        crate::app_state::validate_bootstrap_history(record, run, &rows, Some(home))?;
+    }
     let events = rows
         .iter()
         .map(|row| row.to_run_event(run).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(record) = association {
+        crate::app_state::validate_bootstrap_successor(record, home, run, &events).await?;
+    }
     Ok(MissionSnapshot {
         mission: mission::fold(&[], run, &events, roadmap).map_err(|error| error.to_string())?,
         implementation: ImplementationHistory::Ordinary,

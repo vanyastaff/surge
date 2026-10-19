@@ -113,6 +113,22 @@ impl MissionPanel {
         panel
     }
 
+    #[cfg(all(test, unix))]
+    pub(super) fn continuation_through_for_test(&self) -> Option<u64> {
+        match self.mission.as_ref()?.recovery {
+            surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+                through,
+                ..
+            } => Some(through),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn continuation_error_for_test(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
     pub(super) fn request(&self) -> &MissionRequest {
         &self.request
     }
@@ -203,7 +219,13 @@ impl MissionPanel {
             .operation
             .as_ref()
             .map_or(self.request.selected, |status| {
-                if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
+                if status
+                    .continuations
+                    .iter()
+                    .any(|attempt| attempt.run == self.request.selected)
+                {
+                    self.request.selected
+                } else if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
                     status.implementation_run
                 } else {
                     status.planning_run

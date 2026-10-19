@@ -650,6 +650,13 @@ impl SurgeApp {
             .canonicalize()
             .unwrap_or_else(|_| root.unwrap_or(project_path).to_path_buf());
         let project_path = project_path.as_path();
+        if let Err(reason) = crate::app_state::bootstrap_related_runs(&status) {
+            self.state.update(cx, |state, cx| {
+                state.set_operation_refusal(operation_id, reason.into());
+                cx.notify();
+            });
+            return;
+        }
         if let Some((project, previous)) = self.bootstrap_operations.get(&operation_id) {
             if project != project_path
                 || status.planning_run != previous.planning_run
@@ -957,18 +964,17 @@ impl SurgeApp {
         use surge_orchestrator::engine::handle::RunStatus;
 
         // Prune bookkeeping for runs that vanished from the daemon's list.
-        let known: HashSet<surge_core::id::RunId> =
-            {
-                let state = self.state.read(cx);
-                state
-                    .runs
-                    .iter()
-                    .map(|r| r.run_id)
-                    .chain(state.bootstrap_operations.values().flat_map(|operation| {
-                        [operation.planning_run, operation.implementation_run]
-                    }))
-                    .collect()
-            };
+        let known: HashSet<surge_core::id::RunId> = {
+            let state = self.state.read(cx);
+            state
+                .runs
+                .iter()
+                .map(|r| r.run_id)
+                .chain(state.bootstrap_operations.values().flat_map(|operation| {
+                    crate::app_state::bootstrap_related_runs(operation).unwrap_or_default()
+                }))
+                .collect()
+        };
         self.stream_subscribed.retain(|id| known.contains(id));
         self.state.update(cx, |s, cx| {
             s.observations.retain_runs(&known);

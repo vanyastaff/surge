@@ -404,26 +404,39 @@ async fn checked_ownership(
             else {
                 return Ok(RunOwnership::Unknown);
             };
-            let surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload::V1 {
-                capture,
-                ..
-            } = &record.payload
-            else {
-                return Ok(RunOwnership::Unknown);
-            };
-            let expected_path = if *planning {
-                &capture.fields().planning_worktree
-            } else {
-                &capture.fields().implementation_worktree
-            };
-            let expected_hash = if *planning {
-                Some(capture.fields().graph.digest)
-            } else {
-                record.child.as_ref().map(|child| child.graph().digest)
-            };
+            if record
+                .status
+                .continuations
+                .iter()
+                .any(|attempt| attempt.run == run)
+            {
+                return Ok(
+                    if !*planning
+                        && record.status.operation_id == *operation
+                        && crate::app_state::validate_bootstrap_successor(
+                            &record,
+                            &scope.home,
+                            run,
+                            events,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        expected.clone()
+                    } else {
+                        RunOwnership::Unknown
+                    },
+                );
+            }
             if record.status.operation_id == *operation
-                && starts[0] == *expected_path
-                && expected_hash == Some(*hash)
+                && original_bootstrap_identity_matches(
+                    &record,
+                    &scope.home,
+                    run,
+                    *planning,
+                    &starts[0],
+                    *hash,
+                )
             {
                 Ok(expected.clone())
             } else {
@@ -455,4 +468,29 @@ pub(super) fn read_accepted_roadmap(
     toml::from_str::<RoadmapArtifact>(text)
         .map(Arc::new)
         .map_err(|error| format!("accepted roadmap unavailable: {error}"))
+}
+
+fn original_bootstrap_identity_matches(
+    record: &BootstrapOperationRecord,
+    home: &std::path::Path,
+    run: RunId,
+    planning: bool,
+    started: &std::path::Path,
+    hash: surge_core::ContentHash,
+) -> bool {
+    let surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload::V1 {
+        capture, ..
+    } = &record.payload
+    else {
+        return false;
+    };
+    let Ok(expected_path) = crate::app_state::bootstrap_related_path(record, home, run) else {
+        return false;
+    };
+    let expected_hash = if planning {
+        Some(capture.fields().graph.digest)
+    } else {
+        record.child.as_ref().map(|child| child.graph().digest)
+    };
+    started == expected_path.as_path() && expected_hash == Some(hash)
 }

@@ -12,6 +12,195 @@ use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 
 use crate::daemon_link::ConnectionState;
 
+/// Read-side membership only; conflicting accepted references never become ownership.
+pub(crate) fn bootstrap_related_runs(
+    status: &surge_core::bootstrap_operation::BootstrapOperationStatus,
+) -> Result<Vec<RunId>, &'static str> {
+    let mut runs = vec![status.planning_run, status.implementation_run];
+    if status.planning_run == status.implementation_run {
+        return Err("operation has conflicting original runs");
+    }
+    let mut requests = std::collections::HashSet::new();
+    let mut sources = std::collections::HashSet::new();
+    for attempt in &status.continuations {
+        if !requests.insert(attempt.continuation_id)
+            || !sources.insert(attempt.source_run)
+            || attempt.operation_id != status.operation_id
+            || runs.contains(&attempt.run)
+            || attempt.run == status.operation_id
+            || !runs.contains(&attempt.source_run)
+            || attempt.source_run == status.planning_run
+        {
+            return Err("operation has conflicting continuation associations");
+        }
+        runs.push(attempt.run);
+    }
+    Ok(runs)
+}
+
+pub(crate) fn bootstrap_related_path(
+    record: &surge_persistence::runs::bootstrap_operations::BootstrapOperationRecord,
+    home: &std::path::Path,
+    run: RunId,
+) -> Result<PathBuf, &'static str> {
+    use surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload;
+    if !bootstrap_related_runs(&record.status)?.contains(&run) {
+        return Err("run is not associated with this operation");
+    }
+    let BootstrapStoredPayload::V1 { capture, .. } = &record.payload else {
+        return Err("unsupported operation payload");
+    };
+    if run == record.status.planning_run {
+        return Ok(capture.fields().planning_worktree.clone());
+    }
+    if run == record.status.implementation_run {
+        return Ok(capture.fields().implementation_worktree.clone());
+    }
+    // The native host reserves this namespace; journal paths are checked against it.
+    let path = home.join("worktrees").join(run.to_string());
+    let repository = capture
+        .fields()
+        .git_common_dir
+        .canonicalize()
+        .map_err(|_| "accepted repository is unavailable")?;
+    if crate::project::git_common_dir(&path).as_ref() != Some(&repository) {
+        return Err("continuation worktree does not match the accepted repository");
+    }
+    Ok(path)
+}
+
+pub(crate) fn validate_bootstrap_history(
+    record: &surge_persistence::runs::bootstrap_operations::BootstrapOperationRecord,
+    run: RunId,
+    events: &[surge_persistence::runs::ReadEvent],
+    home: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload::V1 {
+        capture, ..
+    } = &record.payload
+    else {
+        return Err("unsupported operation payload".into());
+    };
+    let planning = run == record.status.planning_run;
+    let pins = capture.fields();
+    let path = if planning {
+        pins.planning_worktree.clone()
+    } else if run == record.status.implementation_run {
+        pins.implementation_worktree.clone()
+    } else {
+        crate::app_state::bootstrap_related_path(
+            record,
+            home.ok_or("continuation namespace is unavailable")?,
+            run,
+        )
+        .map_err(str::to_owned)?
+    };
+    let hash = if planning {
+        Some(pins.graph.digest)
+    } else {
+        record.child.as_ref().map(|child| child.graph().digest)
+    };
+    let starts: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload.payload {
+            surge_core::EventPayload::RunStarted { project_path, .. } => {
+                Some((event.seq.as_u64(), project_path))
+            },
+            _ => None,
+        })
+        .collect();
+    let graphs: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload.payload {
+            surge_core::EventPayload::PipelineMaterialized { graph, graph_hash } => {
+                Some((graph, graph_hash))
+            },
+            _ => None,
+        })
+        .collect();
+    if starts != vec![(1, &path)]
+        || graphs.is_empty()
+        || hash != Some(*graphs[0].1)
+        || events.iter().any(|event| {
+            matches!(
+                event.payload.payload,
+                surge_core::EventPayload::WorkItemAttemptBound { .. }
+            )
+        })
+    {
+        return Err("related journal does not match the accepted run identity".into());
+    }
+    for (graph, hash) in graphs {
+        if graph.identity().map_err(|error| error.to_string())? != *hash {
+            return Err("related journal graph content differs from its recorded identity".into());
+        }
+    }
+    Ok(())
+}
+/// Check a successor's registry and startup observations before confirming its history.
+/// This never derives a read pathname from the journal or changes lifecycle state.
+pub(crate) async fn validate_bootstrap_successor(
+    record: &surge_persistence::runs::bootstrap_operations::BootstrapOperationRecord,
+    home: &std::path::Path,
+    run: RunId,
+    events: &[surge_core::RunEvent],
+) -> Result<(), String> {
+    if !record
+        .status
+        .continuations
+        .iter()
+        .any(|attempt| attempt.run == run)
+    {
+        return Err("run is not an accepted successor".into());
+    }
+    let expected_path = bootstrap_related_path(record, home, run).map_err(str::to_owned)?;
+    let summary = surge_persistence::runs::Storage::inspect_existing_run_summary(home.into(), run)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("successor registry row is absent")?;
+    if summary.id != run || summary.project_path != expected_path {
+        return Err("successor registry workspace differs from its accepted namespace".into());
+    }
+    let starts: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            surge_core::EventPayload::RunStarted { project_path, .. } => {
+                Some((event.seq, project_path))
+            },
+            _ => None,
+        })
+        .collect();
+    let graphs: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            surge_core::EventPayload::PipelineMaterialized { graph, graph_hash } => {
+                Some((graph, graph_hash))
+            },
+            _ => None,
+        })
+        .collect();
+    let expected_hash = record.child.as_ref().map(|child| child.graph().digest);
+    if starts != vec![(1, &expected_path)]
+        || events.iter().any(|event| event.run_id != run)
+        || graphs.is_empty()
+        || expected_hash != Some(*graphs[0].1)
+        || events.iter().any(|event| {
+            matches!(
+                event.payload,
+                surge_core::EventPayload::WorkItemAttemptBound { .. }
+            )
+        })
+    {
+        return Err("successor startup does not match its accepted identity".into());
+    }
+    for (graph, hash) in graphs {
+        if graph.identity().map_err(|error| error.to_string())? != *hash {
+            return Err("successor graph content differs from its recorded identity".into());
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadDisposition {
     Obsolete,
@@ -318,7 +507,8 @@ impl AppState {
             .filter(|run| {
                 (run.is_terminal()
                     || self.bootstrap_operations.values().any(|operation| {
-                        [operation.planning_run, operation.implementation_run].contains(&run.run_id)
+                        bootstrap_related_runs(operation)
+                            .is_ok_and(|runs| runs.contains(&run.run_id))
                     }))
                     && !summaries.iter().any(|s| s.run_id == run.run_id)
             })

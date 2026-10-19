@@ -675,6 +675,28 @@ impl RunsScreen {
             .and_then(|row| row.run_id)
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn continuation_history_home_for_test(&mut self, home: PathBuf) {
+        self.results_home = Some(home);
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn continuation_overview_through_for_test(&self, cx: &App) -> Option<u64> {
+        self.mission
+            .as_ref()?
+            .read(cx)
+            .continuation_through_for_test()
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn continuation_history_error_for_test(&self, cx: &App) -> Option<String> {
+        self.mission
+            .as_ref()?
+            .read(cx)
+            .continuation_error_for_test()
+            .map(str::to_owned)
+    }
+
     /// Focus a specific run (used by Fleet → "Open run" deep links).
     pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
         self.selected = Some(run_id);
