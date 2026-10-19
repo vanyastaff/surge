@@ -122,7 +122,6 @@ fn failed_continuation_fresh_screen_opens_retained_successor_and_keeps_failed_hi
         run: successor,
         boundary: 87,
         runtime: surge_core::ContentHash::compute(b"captured runtime"),
-        binding_repair: None,
         state: BootstrapAttemptState::Running,
     });
     let state = history_state(&mut cx, status);

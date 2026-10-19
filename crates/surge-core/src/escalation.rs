@@ -14,8 +14,6 @@
 //! operator views apply this function to the persisted graph so replay sees
 //! the same nodes.
 
-pub mod binding_repair;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};

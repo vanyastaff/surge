@@ -117,7 +117,6 @@ impl Peer {
                                 run: RunId::new(),
                                 boundary: 87,
                                 runtime: ContentHash::compute(b"host capture"),
-                                binding_repair: None,
                                 state: AttemptState::Reserved,
                             });
                         }

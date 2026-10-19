@@ -95,18 +95,10 @@ pub(crate) fn validate_bootstrap_history(
         )
         .map_err(str::to_owned)?
     };
-    let repair = record
-        .status
-        .continuations
-        .iter()
-        .find(|attempt| attempt.run == run)
-        .and_then(|attempt| attempt.binding_repair.as_ref());
     let hash = if planning {
         Some(pins.graph.digest)
     } else {
-        repair
-            .map(|repair| repair.repaired())
-            .or_else(|| record.child.as_ref().map(|child| child.graph().digest))
+        record.child.as_ref().map(|child| child.graph().digest)
     };
     let starts: Vec<_> = events
         .iter()
@@ -137,14 +129,6 @@ pub(crate) fn validate_bootstrap_history(
         })
     {
         return Err("related journal does not match the accepted run identity".into());
-    }
-    if let Some(repair) = repair {
-        if record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original()) {
-            return Err("successor repair differs from accepted original graph".into());
-        }
-        repair
-            .verify_repaired(graphs[0].0)
-            .map_err(|error| error.to_string())?;
     }
     for (graph, hash) in graphs {
         if graph.identity().map_err(|error| error.to_string())? != *hash {
@@ -195,15 +179,7 @@ pub(crate) async fn validate_bootstrap_successor(
             _ => None,
         })
         .collect();
-    let repair = record
-        .status
-        .continuations
-        .iter()
-        .find(|attempt| attempt.run == run)
-        .and_then(|attempt| attempt.binding_repair.as_ref());
-    let expected_hash = repair
-        .map(|repair| repair.repaired())
-        .or_else(|| record.child.as_ref().map(|child| child.graph().digest));
+    let expected_hash = record.child.as_ref().map(|child| child.graph().digest);
     if starts != vec![(1, &expected_path)]
         || events.iter().any(|event| event.run_id != run)
         || graphs.is_empty()
@@ -216,14 +192,6 @@ pub(crate) async fn validate_bootstrap_successor(
         })
     {
         return Err("successor startup does not match its accepted identity".into());
-    }
-    if let Some(repair) = repair {
-        if record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original()) {
-            return Err("successor repair differs from accepted original graph".into());
-        }
-        repair
-            .verify_repaired(graphs[0].0)
-            .map_err(|error| error.to_string())?;
     }
     for (graph, hash) in graphs {
         if graph.identity().map_err(|error| error.to_string())? != *hash {

@@ -33,17 +33,13 @@ pub struct ForkEdits {
     pub prompt_appends: BTreeMap<NodeKey, String>,
     /// Per Agent node: replacement profile key in the child's graph.
     pub profile_overrides: BTreeMap<NodeKey, ProfileKey>,
-    /// Checked, missing-only generated runtime/model repair of child materialization.
-    pub binding_repair: Option<surge_core::escalation::binding_repair::GeneratedBindingRepair>,
 }
 
 impl ForkEdits {
     /// True when no edits are requested.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.prompt_appends.is_empty()
-            && self.profile_overrides.is_empty()
-            && self.binding_repair.is_none()
+        self.prompt_appends.is_empty() && self.profile_overrides.is_empty()
     }
 }
 
@@ -207,7 +203,10 @@ pub async fn fork_with_parent(
     // validation is pure — no run exists yet — so an unknown or non-Agent target
     // fails before any child is created (never leaving an orphan behind). With
     // edits the child intentionally diverges from a byte-for-byte copy.
-    let copied = checked_child_payloads(&prefix, &req.edits)?;
+    let mut copied: Vec<VersionedEventPayload> = prefix.iter().map(|e| e.payload.clone()).collect();
+    if !req.edits.is_empty() {
+        apply_fork_edits(&mut copied, &req.edits)?;
+    }
 
     let inherited_snapshot = reader
         .latest_snapshot_at_or_before(EventSeq(req.at_seq))
@@ -246,8 +245,7 @@ pub async fn fork_with_parent(
             )
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
-        let child_payloads = repaired_child_freshness(prepared.copied, &req.edits);
-        write_child_history(child_writer, child_payloads, inherited_snapshot).await?;
+        write_child_history(child_writer, prepared.copied, inherited_snapshot).await?;
 
         // Record lineage on the parent last (append-only; valid even after a
         // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
@@ -309,33 +307,6 @@ async fn forkable_cursor_source(
         },
     }
     Ok(parent_state.cursor_source)
-}
-
-fn checked_child_payloads(
-    prefix: &[surge_persistence::runs::ReadEvent],
-    edits: &ForkEdits,
-) -> Result<Vec<VersionedEventPayload>, EngineError> {
-    let mut copied = prefix
-        .iter()
-        .map(|event| event.payload.clone())
-        .collect::<Vec<_>>();
-    if !edits.is_empty() {
-        apply_fork_edits(&mut copied, edits)?;
-    }
-    Ok(copied)
-}
-
-fn repaired_child_freshness(
-    mut payloads: Vec<VersionedEventPayload>,
-    edits: &ForkEdits,
-) -> Vec<VersionedEventPayload> {
-    if edits.binding_repair.is_some() {
-        // Preserve the inherited prefix/cursor; a changed contract invalidates freshness.
-        payloads.push(VersionedEventPayload::new(
-            EventPayload::VerificationSubjectObserved { subject: None },
-        ));
-    }
-    payloads
 }
 
 async fn write_child_history(
@@ -589,26 +560,6 @@ fn apply_fork_edits(
 /// Mutate `graph` in place per `edits`. Validates every targeted node up front
 /// (it must exist and be an `Agent`) so the operation is all-or-nothing.
 fn apply_edits_to_graph(graph: &mut Graph, edits: &ForkEdits) -> Result<(), EngineError> {
-    if let Some(repair) = &edits.binding_repair {
-        if !edits.prompt_appends.is_empty() || !edits.profile_overrides.is_empty() {
-            return Err(EngineError::ForkInvalid(
-                "binding repair cannot mix arbitrary edits".into(),
-            ));
-        }
-        if graph
-            .identity()
-            .map_err(|error| EngineError::Internal(error.to_string()))?
-            == repair.repaired()
-        {
-            repair
-                .verify_repaired(graph)
-                .map_err(|error| EngineError::ForkInvalid(error.to_string()))?;
-        } else {
-            *graph = repair
-                .apply(graph)
-                .map_err(|error| EngineError::ForkInvalid(error.to_string()))?;
-        }
-    }
     for node_key in edits
         .prompt_appends
         .keys()

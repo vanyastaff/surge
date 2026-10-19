@@ -138,29 +138,8 @@ impl BootstrapSupervisor {
             .runtime
             .as_ref()
             .ok_or(BootstrapError::NotReady)?;
-        let mut binding_repair =
-            surge_core::escalation::binding_repair::GeneratedBindingRepair::prepare(&prefix.graph)
-                .map_err(|_| {
-                    BootstrapError::Continuation("generated binding derivation refused")
-                })?;
-        if binding_repair.is_none() {
-            binding_repair = record
-                .status
-                .continuations
-                .iter()
-                .find(|attempt| attempt.run == source)
-                .and_then(|attempt| attempt.binding_repair.clone());
-        }
-        if let Some(repair) = &binding_repair
-            && record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original())
-        {
-            return Err(BootstrapError::Continuation(
-                "binding source differs from accepted graph",
-            ));
-        }
-        let graph = checked_attempt_graph(&prefix.graph, binding_repair.as_ref())?;
         let (fingerprint, _) =
-            runtime.implementation_runtime(&capture.fields().repository, &graph)?;
+            runtime.implementation_runtime(&capture.fields().repository, &prefix.graph)?;
         let attempt = BootstrapAttempt {
             continuation_id: request,
             operation_id: operation,
@@ -168,7 +147,6 @@ impl BootstrapSupervisor {
             run: RunId::new(),
             boundary,
             runtime: fingerprint,
-            binding_repair,
             state: A::Reserved,
         };
         self.store.reserve_attempt(revision, &attempt)?;
@@ -184,11 +162,7 @@ impl BootstrapSupervisor {
             fork_with_parent(
                 &self.services.storage,
                 ForkRequest::new(attempt.source_run, attempt.run, attempt.boundary)
-                    .with_worktree(runtime.attempt_worktree(attempt.run))
-                    .with_edits(surge_orchestrator::engine::fork::ForkEdits {
-                        binding_repair: attempt.binding_repair.clone(),
-                        ..Default::default()
-                    }),
+                    .with_worktree(runtime.attempt_worktree(attempt.run)),
                 &writer,
             )
             .await
@@ -299,31 +273,6 @@ impl BootstrapSupervisor {
         let state = execution_state::load(&reader, execution_state::Position::Latest)
             .await
             .map_err(|_| BootstrapError::Continuation("successor history invalid"))?;
-        if let Some(repair) = &attempt.binding_repair {
-            if record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original()) {
-                return Err(BootstrapError::Continuation(
-                    "binding source differs from accepted graph",
-                ));
-            }
-            repair
-                .verify_repaired(&state.graph)
-                .map_err(|_| BootstrapError::Continuation("successor binding repair changed"))?;
-            let source = self
-                .services
-                .storage
-                .open_run_reader(attempt.source_run)
-                .await
-                .map_err(|_| BootstrapError::Continuation("binding source history unavailable"))?;
-            let original =
-                execution_state::load(&source, execution_state::Position::AtSeq(attempt.boundary))
-                    .await
-                    .map_err(|_| BootstrapError::Continuation("binding source history invalid"))?;
-            if checked_attempt_graph(&original.graph, Some(repair))? != state.graph {
-                return Err(BootstrapError::Continuation(
-                    "successor binding derivation differs",
-                ));
-            }
-        }
         let (fingerprint, catalog) =
             runtime.implementation_runtime(&capture.fields().repository, &state.graph)?;
         drop(reader);
@@ -468,29 +417,6 @@ async fn historically_accepted_tasks(
         }
     }
     Ok(true)
-}
-
-fn checked_attempt_graph(
-    graph: &surge_core::graph::Graph,
-    repair: Option<&surge_core::escalation::binding_repair::GeneratedBindingRepair>,
-) -> Result<surge_core::graph::Graph, BootstrapError> {
-    let Some(repair) = repair else {
-        return Ok(graph.clone());
-    };
-    if graph
-        .identity()
-        .map_err(|_| BootstrapError::Continuation("graph identity unavailable"))?
-        == repair.repaired()
-    {
-        repair
-            .verify_repaired(graph)
-            .map_err(|_| BootstrapError::Continuation("binding derivation changed"))?;
-        Ok(graph.clone())
-    } else {
-        repair
-            .apply(graph)
-            .map_err(|_| BootstrapError::Continuation("binding derivation changed"))
-    }
 }
 
 fn check_source_writers(memory: &surge_core::run_state::RunMemory) -> Result<(), BootstrapError> {

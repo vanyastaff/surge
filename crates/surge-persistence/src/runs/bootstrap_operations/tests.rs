@@ -897,7 +897,6 @@ fn failed_attempt_fixture(
         run: RunId::new(),
         boundary: 87,
         runtime: ContentHash::compute(b"current host"),
-        binding_repair: None,
         state: BootstrapAttemptState::Reserved,
     };
     (record, attempt)
@@ -990,49 +989,4 @@ fn continuation_status_read_does_not_mix_revision_and_newer_attempt_rows() {
     );
     assert_eq!(after.status.revision, before.status.revision + 1);
     assert_eq!(after.status.continuations[0].state, A::ForkReady);
-}
-
-#[test]
-fn generated_binding_repair_identity_survives_reservation_and_cold_read() {
-    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-    let expected = {
-        let store = open(home.path());
-        let (record, mut attempt) = failed_attempt_fixture(&store, home.path());
-        let mut graph = surge_core::bundled_flows::BundledFlows::by_name_latest("multi-milestone")
-            .unwrap()
-            .graph;
-        for scope in graph.subgraphs.values_mut() {
-            for node in scope.nodes.values_mut() {
-                if let surge_core::node::NodeConfig::Agent(agent) = &mut node.config {
-                    *agent = agent.with_runtime_override("codex-acp", Some("gpt-6.1-sol"));
-                }
-            }
-        }
-        let mut graph = surge_core::escalation::with_default_escalation_gates(&graph);
-        for scope in graph.subgraphs.values_mut() {
-            for node in scope.nodes.values_mut() {
-                if surge_core::escalation::is_split_planner(node)
-                    && let surge_core::node::NodeConfig::Agent(agent) = &mut node.config
-                {
-                    agent.custom_fields.remove("runtime");
-                }
-            }
-        }
-        attempt.binding_repair =
-            surge_core::escalation::binding_repair::GeneratedBindingRepair::prepare(&graph)
-                .unwrap();
-        assert!(attempt.binding_repair.is_some());
-        store
-            .reserve_attempt(record.status.revision, &attempt)
-            .unwrap();
-        attempt
-    };
-    {
-        let store = open(home.path());
-        assert_eq!(
-            store.attempt(expected.continuation_id).unwrap(),
-            Some(expected)
-        );
-    }
-    home.close().unwrap();
 }

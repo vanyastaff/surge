@@ -1580,7 +1580,6 @@ async fn reserve_collision_attempt(
         run: RunId::new(),
         boundary: 87,
         runtime: ContentHash::compute(b"host runtime"),
-        binding_repair: None,
         state: A::Reserved,
     };
     fixture

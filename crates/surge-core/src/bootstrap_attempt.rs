@@ -36,9 +36,6 @@ pub struct BootstrapAttempt {
     pub boundary: u64,
     /// Host-captured current runtime identity, never executable client input.
     pub runtime: ContentHash,
-    /// Immutable, independently rederived child-only generated binding repair.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binding_repair: Option<crate::escalation::binding_repair::GeneratedBindingRepair>,
     /// Current confirmed ownership state.
     pub state: BootstrapAttemptState,
 }

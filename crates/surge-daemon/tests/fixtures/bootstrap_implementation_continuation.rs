@@ -1023,7 +1023,7 @@ fn report_turn(prompt: &str, report: Value) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn failed_milestone_continuation_selects_completed_task_boundary_and_repairs_only_child() {
+async fn failed_milestone_continuation_selects_completed_task_boundary_and_preserves_history() {
     let home = FixtureHome::new().unwrap();
     let result = std::panic::AssertUnwindSafe(run_failed_milestone_continuation(&home, false))
         .catch_unwind()
@@ -1038,19 +1038,6 @@ async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: b
     let mut turns: Vec<Value> =
         serde_json::from_slice(&std::fs::read(&script_path).unwrap()).unwrap();
     turns.truncate(4);
-    let mut retained = surge_core::escalation::with_default_escalation_gates(&fixture_graph());
-    for node in retained
-        .subgraphs
-        .values_mut()
-        .flat_map(|body| body.nodes.values_mut())
-    {
-        if surge_core::escalation::is_split_planner(node)
-            && let NodeConfig::Agent(agent) = &mut node.config
-        {
-            agent.custom_fields.remove("runtime");
-        }
-    }
-    turns[2]["bootstrap_artifacts"]["flow.toml"] = toml::to_string(&retained).unwrap().into();
     let roadmap: surge_core::roadmap::RoadmapArtifact = toml::from_str(ORIGINAL_ROADMAP).unwrap();
     for task in &roadmap.milestones[0].tasks {
         turns.push(
@@ -1130,7 +1117,7 @@ async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: b
     let mut success = report_turn(
         "",
         json!({"schema_version":1,"task_id":"m1","outcome":"passed",
-        "summary":"Controlled repaired milestone", "checks":[{"command":"controlled audit", "result":"passed"}]}),
+        "summary":"Controlled continued milestone", "checks":[{"command":"controlled audit", "result":"passed"}]}),
     );
     success["fixture_node"] = "app_milestone".into();
     turns.push(success);
@@ -1214,19 +1201,30 @@ async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: b
         }
     });
     assert_eq!(first_new, Some("app_milestone"));
-    let repair: surge_core::escalation::binding_repair::GeneratedBindingRepair =
-        serde_json::from_value(attempt["binding_repair"].clone()).unwrap();
-    let graph = child
+    let source_graph = before
         .iter()
         .find_map(|event| {
-            if let EventPayload::PipelineMaterialized { graph, .. } = &event.payload {
-                Some(graph)
+            if let EventPayload::PipelineMaterialized { graph, graph_hash } = &event.payload {
+                Some((graph, graph_hash))
             } else {
                 None
             }
         })
         .unwrap();
-    repair.verify_repaired(graph).unwrap();
+    let child_graph = child
+        .iter()
+        .find_map(|event| {
+            if let EventPayload::PipelineMaterialized { graph, graph_hash } = &event.payload {
+                Some((graph, graph_hash))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        child_graph, source_graph,
+        "ordinary continuation preserves authoritative graph identity"
+    );
     let storage = Storage::open(home.path()).await.unwrap();
     let reader = storage.open_run_reader(successor).await.unwrap();
     let cold = surge_orchestrator::engine::execution_state::load(
@@ -1252,17 +1250,9 @@ async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: b
         assert_eq!(task.status, surge_core::roadmap::RoadmapStatus::Completed);
         assert!(
             !task.verified,
-            "freshness remains invalidated on the changed child"
+            "current execution preserves freshness invalidation"
         );
     }
-    assert!(matches!(
-        child
-            .iter()
-            .find(|event| event.seq == boundary + 1)
-            .unwrap()
-            .payload,
-        EventPayload::VerificationSubjectObserved { subject: None }
-    ));
     drop(reader);
     drop(storage);
     let after = read_events(home.path(), source);
