@@ -13,12 +13,11 @@ pub(crate) struct WriterSlotError;
 
 /// Shared actual actor and wrapper lifetime, including cancelled caller futures.
 pub(crate) struct WriterLease {
+    pub(crate) authority: super::host_settlement::HeldOpening,
     pub(crate) _token: Arc<WriterToken>,
     pub(crate) file_lock: FileLock,
     #[cfg(windows)]
     pub(crate) namespace: Arc<crate::state_home::SqliteNamespaceOwner>,
-    // The outside shared control is released only after these native handles.
-    pub(crate) authority: super::host_settlement::HeldOpening,
 }
 
 impl WriterLease {

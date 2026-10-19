@@ -1269,7 +1269,7 @@ async fn prompt(
 ///
 /// Common patterns:
 /// - HTTP 401 status code
-/// - "Unauthorized", "authentication failed", or "authentication required"
+/// - "Unauthorized" or "authentication failed"
 /// - API key errors
 ///
 /// Shared with the bridge worker, which uses it to map a failed
@@ -1279,7 +1279,6 @@ pub(crate) fn is_auth_failure(error_msg: &str) -> bool {
     msg_lower.contains("401")
         || msg_lower.contains("unauthorized")
         || msg_lower.contains("authentication failed")
-        || msg_lower.contains("authentication required")
         || msg_lower.contains("invalid api key")
         || msg_lower.contains("invalid_api_key")
         || msg_lower.contains("authentication_error")
@@ -1938,18 +1937,6 @@ mod tests {
         assert!(is_auth_failure("authentication failed"));
         assert!(is_auth_failure("Authentication Failed"));
         assert!(is_auth_failure("Error: authentication_error"));
-    }
-
-    #[test]
-    fn test_is_auth_failure_authentication_required() {
-        for details in [
-            "Authentication required",
-            "AUTHENTICATION REQUIRED",
-            "Internal error: Authentication required",
-            r#"Error { code: -32000, message: "Authentication required" }"#,
-        ] {
-            assert!(is_auth_failure(details), "auth failure missed: {details}");
-        }
     }
 
     #[test]

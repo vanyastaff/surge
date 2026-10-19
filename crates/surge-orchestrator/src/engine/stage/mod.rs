@@ -8,8 +8,6 @@ pub mod loop_stage;
 pub mod notify;
 pub(crate) mod outcome_acceptance;
 mod session_lease;
-#[cfg(test)]
-pub(crate) use session_lease::tests::mock_bridge as predicate_mock_bridge;
 pub mod skill_binding;
 pub(crate) mod stage_tools;
 pub mod subgraph_stage;
@@ -37,9 +35,6 @@ pub type StageResult = Result<OutcomeKey, StageError>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StageError {
-    /// Semantic input did not belong to the selected source lineage.
-    #[error(transparent)]
-    SemanticPosition(#[from] surge_core::execution_recovery::semantic_position::PositionError),
     /// A `LoopGuard` trip ended this stage (`.autopilot/competitive-waves/spec.md`
     /// §15). Distinct from `AgentCrashed`: nothing crashed — the engine
     /// deliberately stops a node that stopped making progress ("escalating

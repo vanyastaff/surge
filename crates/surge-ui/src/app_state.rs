@@ -12,55 +12,11 @@ use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 
 use crate::daemon_link::ConnectionState;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReadDisposition {
-    Obsolete,
-    Confirmed,
-    Absent,
-    Incomplete,
-    Retired,
-}
-pub(crate) struct ReadCompletion {
-    pub(crate) token: crate::run_observation::Token,
-    pub(crate) disposition: ReadDisposition,
-    diagnostic: Option<(u64, String)>,
-}
-impl ReadCompletion {
-    pub(crate) fn obsolete(token: &crate::run_observation::Token) -> Self {
-        Self {
-            token: token.clone(),
-            disposition: ReadDisposition::Obsolete,
-            diagnostic: None,
-        }
-    }
-    pub(crate) fn confirmed(&self) -> bool {
-        self.disposition == ReadDisposition::Confirmed
-    }
-}
-#[derive(Default)]
-pub(crate) struct OperationInspection {
-    record: Option<String>,
-    histories: HashMap<RunId, HistoryInspection>,
-}
-struct HistoryInspection {
-    token: crate::run_observation::Token,
-    error_revision: u64,
-    reason: String,
-    exhausted: bool,
-}
-
 /// Central application state shared across all UI screens.
 ///
 /// Screens hold `Entity<AppState>` and read data from it.
 /// When data changes, `cx.notify()` triggers UI re-render.
 pub struct AppState {
-    pub(crate) runtime_home: Option<PathBuf>,
-    pub(crate) observations: crate::run_observation::Observations,
-    pub(crate) rejected_inspections: HashMap<RunId, (crate::run_observation::Token, String)>,
-    #[cfg(test)]
-    pub(crate) rejected_history_reads: HashMap<RunId, usize>,
-    #[cfg(test)]
-    pub(crate) related_history_reads: HashMap<RunId, usize>,
     pub(crate) tasks: crate::work_items::TaskCache,
     pub(crate) project_history: crate::project_lifecycle::ProjectHistory,
     // ── Project ──
@@ -118,7 +74,6 @@ pub struct AppState {
     /// whose flow gate is waiting. Sent with the approval.
     pub plan_edits: HashMap<RunId, surge_core::node_overrides::NodeOverrides>,
     /// Latest durable bootstrap operation snapshots observed by this UI session.
-    pub(crate) operation_inspections: HashMap<RunId, OperationInspection>,
     pub bootstrap_operations:
         HashMap<RunId, surge_core::bootstrap_operation::BootstrapOperationStatus>,
 }
@@ -189,15 +144,7 @@ impl AppState {
             run_streams: HashMap::new(),
             dismissed_runs: crate::dismissed::DismissedRuns::load(),
             plan_edits: HashMap::new(),
-            operation_inspections: HashMap::new(),
             bootstrap_operations: HashMap::new(),
-            runtime_home: surge_core::home::surge_home_dir(),
-            observations: Default::default(),
-            rejected_inspections: HashMap::new(),
-            #[cfg(test)]
-            rejected_history_reads: HashMap::new(),
-            #[cfg(test)]
-            related_history_reads: HashMap::new(),
             tasks: crate::work_items::TaskCache::default(),
             project_history: crate::project_lifecycle::ProjectHistory::default(),
         }
@@ -315,13 +262,7 @@ impl AppState {
         let history: Vec<_> = self
             .runs
             .iter()
-            .filter(|run| {
-                (run.is_terminal()
-                    || self.bootstrap_operations.values().any(|operation| {
-                        [operation.planning_run, operation.implementation_run].contains(&run.run_id)
-                    }))
-                    && !summaries.iter().any(|s| s.run_id == run.run_id)
-            })
+            .filter(|run| run.is_terminal() && !summaries.iter().any(|s| s.run_id == run.run_id))
             .cloned()
             .collect();
         self.runs = summaries
@@ -374,15 +315,6 @@ impl AppState {
         self.pending_decisions().len()
             + self.unacknowledged_failures().len()
             + self.inspection_runs().len()
-            + self.operation_problems().len()
-            + self
-                .operation_inspections
-                .keys()
-                .filter(|id| {
-                    !self.bootstrap_operations.contains_key(id)
-                        && self.operation_inspection_reason(**id).is_some()
-                })
-                .count()
     }
 
     /// Runs requiring inspection, including crash evidence absent from coarse lifecycle rows.
@@ -399,7 +331,6 @@ impl AppState {
                 {
                     return None;
                 }
-                if self.bootstrap_operations.values().any(|operation| matches!(operation.state, surge_core::bootstrap_operation::BootstrapState::NeedsAttention { run_id: Some(run), .. } if run == *id) && self.operation_related_links(operation).contains(id)) { return None; }
                 matches!(
                     display,
                     surge_core::run_display::RunDisplayState::Unknown
@@ -417,408 +348,9 @@ impl AppState {
     pub fn unacknowledged_failures(&self) -> Vec<&UiRun> {
         self.project_runs()
             .into_iter()
-            .filter(|r| self.failure_terminal(r.run_id).is_some())
+            .filter(|r| matches!(r.status, RunStatus::Failed | RunStatus::Aborted))
             .filter(|r| !self.dismissed_runs.contains(&r.run_id))
             .collect()
-    }
-
-    pub(crate) fn failure_terminal(&self, run: RunId) -> Option<surge_core::TerminalReason> {
-        use surge_core::{TerminalReason, run_display::RunDisplayState};
-        match self.run_streams.get(&run)?.display() {
-            RunDisplayState::Done(kind @ (TerminalReason::Failed | TerminalReason::Aborted)) => {
-                Some(kind)
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn operation_related_links(
-        &self,
-        operation: &surge_core::bootstrap_operation::BootstrapOperationStatus,
-    ) -> Vec<RunId> {
-        [operation.planning_run, operation.implementation_run]
-            .into_iter()
-            .filter(|run| {
-                self.run_in_project(run)
-                    && self
-                        .run_streams
-                        .get(run)
-                        .is_some_and(|stream| stream.session_history_confirmed())
-            })
-            .collect()
-    }
-    pub(crate) fn run_inspection_evidence(&self, run: RunId) -> Vec<(String, String)> {
-        let Some(stream) = self.run_streams.get(&run) else {
-            return Vec::new();
-        };
-        let display = stream.display();
-        let mut facts = vec![
-            ("Run state".into(), display.label().into()),
-            (
-                "Next action".into(),
-                display.next_action().unwrap_or_default().into(),
-            ),
-        ];
-        if let Some(error) = &stream.observation_error {
-            facts.push(("Run observation".into(), error.clone()));
-        }
-        if stream.current_registry_hint() == Some(surge_core::RunStatus::Crashed)
-            && !matches!(display, surge_core::run_display::RunDisplayState::Done(_))
-        {
-            facts.push((
-                "Recorded host loss".into(),
-                "Recorded loss of daemon ownership; current run outcome is unconfirmed".into(),
-            ));
-        }
-        if let Some((token, reason)) = self.rejected_inspections.get(&run)
-            && self.observations.last_read_is_current(token)
-        {
-            facts.push(("History recovery".into(), reason.clone()));
-        }
-        let mut selected = Vec::new();
-        for (label, text) in facts {
-            if !text.is_empty() && !selected.iter().any(|(_, previous)| previous == &text) {
-                selected.push((label, text));
-            }
-        }
-        selected
-    }
-
-    pub(crate) fn operation_problems(
-        &self,
-    ) -> Vec<&surge_core::bootstrap_operation::BootstrapOperationStatus> {
-        use surge_core::{
-            TerminalReason,
-            bootstrap_continuation::{BootstrapFailure as F, BootstrapTerminal as T},
-            bootstrap_operation::BootstrapState as S,
-        };
-        self.bootstrap_operations.values().filter(|operation| {
-            if self.operation_inspection_reason(operation.operation_id).is_some() { return true; }
-            match &operation.state {
-                S::NeedsAttention { .. } => true,
-                S::Failed => !matches!(&operation.result,
-                    Some(T::Failed { run_id, reason: F::RunFailed }) if self.failure_terminal(*run_id) == Some(TerminalReason::Failed))
-                    && !matches!(&operation.result,
-                    Some(T::Failed { run_id, reason: F::RunAborted }) if self.failure_terminal(*run_id) == Some(TerminalReason::Aborted)),
-                _ => false,
-            }
-        }).collect()
-    }
-
-    pub(crate) fn observation_scope(&mut self) -> Option<crate::run_observation::Scope> {
-        let home = self.runtime_home.clone()?;
-        let project = self
-            .project_scope
-            .as_ref()
-            .map(|scope| scope.root().to_path_buf())
-            .or_else(|| self.project_path.clone())?;
-        let project = project.canonicalize().unwrap_or(project);
-        let repository = self
-            .project_scope
-            .as_ref()
-            .and_then(|scope| scope.repository().map(std::path::Path::to_path_buf));
-        Some(self.observations.scope(home, project, repository))
-    }
-
-    pub(crate) fn accepts_observation(
-        &mut self,
-        token: &crate::run_observation::Token,
-        read: bool,
-    ) -> bool {
-        let Some(scope) = self.observation_scope() else {
-            return false;
-        };
-        scope == token.scope
-            && if read {
-                self.observations.accepts_read(token)
-            } else {
-                self.observations.accepts(token)
-            }
-    }
-
-    pub(crate) fn begin_history_read(
-        &mut self,
-        owner: &crate::run_observation::Token,
-    ) -> Option<crate::run_observation::Token> {
-        if !self.accepts_observation(owner, false) {
-            return None;
-        }
-        let error_revision = self
-            .run_streams
-            .get(&owner.run)
-            .map_or(0, crate::run_stream::RunStreamState::observation_revision);
-        self.observations.begin_read(owner, error_revision)
-    }
-
-    pub(crate) fn retire_history_read(
-        &mut self,
-        token: &crate::run_observation::Token,
-    ) -> ReadCompletion {
-        let mut completion = ReadCompletion::obsolete(token);
-        if self.accepts_observation(token, true) {
-            self.observations.finish_read(token, false);
-            completion.disposition = ReadDisposition::Retired;
-        }
-        completion
-    }
-
-    pub(crate) fn complete_history_read(
-        &mut self,
-        token: &crate::run_observation::Token,
-        result: Result<Option<Vec<surge_persistence::runs::ReadEvent>>, String>,
-    ) -> ReadCompletion {
-        let mut completion = ReadCompletion {
-            token: token.clone(),
-            disposition: ReadDisposition::Obsolete,
-            diagnostic: None,
-        };
-        if !self.accepts_observation(token, true) {
-            return completion;
-        }
-        let prior_revision = self
-            .run_streams
-            .get(&token.run)
-            .map_or(0, crate::run_stream::RunStreamState::observation_revision);
-        let read_error = result
-            .as_ref()
-            .err()
-            .map(|error| surge_core::recovery_observation::recovery_diagnostic(error));
-        completion.disposition = match result {
-            Ok(Some(events)) if self.publish_history(token, &events) => ReadDisposition::Confirmed,
-            Ok(Some(_)) => ReadDisposition::Incomplete,
-            Ok(None) => ReadDisposition::Absent,
-            Err(message) => {
-                if let Some(stream) = self.run_streams.get_mut(&token.run) {
-                    stream.history_unconfirmed_if_unchanged(&message, token.error_revision);
-                }
-                ReadDisposition::Incomplete
-            },
-        };
-        if let Some(stream) = self.run_streams.get_mut(&token.run) {
-            if completion.confirmed() {
-                stream.clear_observation_error_if_unchanged(token.error_revision);
-            }
-            if completion.disposition == ReadDisposition::Incomplete {
-                let revision = stream.observation_revision();
-                // A read-owned publication advances the stream revision; the captured
-                // token remains the original last-read identity after finish_read.
-                if prior_revision == token.error_revision
-                    && revision == token.error_revision.saturating_add(1)
-                    && token.error_revision != u64::MAX
-                {
-                    completion.diagnostic = stream
-                        .observation_error
-                        .clone()
-                        .map(|error| (revision, error));
-                } else if revision == token.error_revision && stream.observation_error.is_none() {
-                    completion.diagnostic = Some((
-                        revision,
-                        "Related run history is incomplete; inspection retry required".into(),
-                    ));
-                }
-            }
-        }
-        if completion.disposition == ReadDisposition::Incomplete
-            && !self.run_streams.contains_key(&token.run)
-        {
-            completion.diagnostic = Some((
-                0,
-                read_error.unwrap_or_else(|| {
-                    "Related run history is incomplete; inspection retry required".into()
-                }),
-            ));
-        }
-        let terminal = completion.confirmed()
-            && matches!(
-                self.run_streams
-                    .get(&token.run)
-                    .map(|stream| stream.display()),
-                Some(surge_core::run_display::RunDisplayState::Done(_))
-            );
-        self.observations.finish_read(token, terminal);
-        completion
-    }
-
-    pub(crate) fn set_operation_refusal(&mut self, operation: RunId, reason: String) {
-        self.operation_inspections
-            .entry(operation)
-            .or_default()
-            .record = Some(reason);
-    }
-    pub(crate) fn confirm_operation_record(&mut self, operation: RunId) {
-        if let Some(inspection) = self.operation_inspections.get_mut(&operation) {
-            inspection.record = None;
-        }
-        self.prune_operation_inspections();
-    }
-    fn prune_operation_inspections(&mut self) {
-        self.operation_inspections.retain(|_, inspection| {
-            inspection.record.is_some() || !inspection.histories.is_empty()
-        });
-    }
-    pub(crate) fn complete_related_read(
-        &mut self,
-        operation: RunId,
-        token: &crate::run_observation::Token,
-        result: Result<Option<Vec<surge_persistence::runs::ReadEvent>>, String>,
-        expected_started: bool,
-    ) -> ReadCompletion {
-        let result = if expected_started && matches!(result, Ok(None)) {
-            Err("Expected related run journal is absent".into())
-        } else {
-            result
-        };
-        let completion = self.complete_history_read(token, result);
-        match completion.disposition {
-            ReadDisposition::Confirmed | ReadDisposition::Absent => {
-                if let Some(inspection) = self.operation_inspections.get_mut(&operation) {
-                    inspection.histories.remove(&token.run);
-                }
-                self.prune_operation_inspections();
-            },
-            ReadDisposition::Incomplete => {
-                if let Some((revision, reason)) = &completion.diagnostic {
-                    self.operation_inspections
-                        .entry(operation)
-                        .or_default()
-                        .histories
-                        .insert(
-                            token.run,
-                            HistoryInspection {
-                                token: token.clone(),
-                                error_revision: *revision,
-                                reason: reason.clone(),
-                                exhausted: false,
-                            },
-                        );
-                }
-            },
-            ReadDisposition::Obsolete | ReadDisposition::Retired => {},
-        }
-        completion
-    }
-    pub(crate) fn exhaust_related_retries(
-        &mut self,
-        operation: RunId,
-        tokens: &[crate::run_observation::Token],
-    ) {
-        if let Some(inspection) = self.operation_inspections.get_mut(&operation) {
-            for token in tokens {
-                if self.observations.last_read_is_current(token)
-                    && let Some(history) = inspection.histories.get_mut(&token.run)
-                    && history.token == *token
-                {
-                    history.exhausted = true;
-                }
-            }
-        }
-    }
-    pub(crate) fn operation_inspection_reason(&self, operation: RunId) -> Option<String> {
-        let inspection = self.operation_inspections.get(&operation)?;
-        let mut reasons: Vec<_> = inspection
-            .histories
-            .values()
-            .filter(|history| {
-                self.observations.last_read_is_current(&history.token)
-                    && self
-                        .run_streams
-                        .get(&history.token.run)
-                        .map_or(history.error_revision == 0, |stream| {
-                            stream.observation_revision() == history.error_revision
-                        })
-            })
-            .map(|history| {
-                (
-                    history.token.run,
-                    format!(
-                        "{}{}",
-                        history.reason,
-                        if history.exhausted {
-                            "; inspection retries exhausted"
-                        } else {
-                            ""
-                        }
-                    ),
-                )
-            })
-            .collect();
-        reasons.sort_by_key(|(run, _)| run.to_string());
-        let mut selected: Vec<_> = inspection.record.iter().cloned().collect();
-        selected.extend(reasons.into_iter().map(|(_, reason)| reason));
-        (!selected.is_empty()).then(|| selected.join("; "))
-    }
-
-    pub(crate) fn publish_history(
-        &mut self,
-        token: &crate::run_observation::Token,
-        events: &[surge_persistence::runs::ReadEvent],
-    ) -> bool {
-        if !self.accepts_observation(token, true) {
-            return false;
-        }
-        let candidate = crate::run_stream::RunStreamState::replay_candidate(token.run, events);
-        let result = self
-            .run_streams
-            .entry(token.run)
-            .or_default()
-            .publish_candidate(candidate);
-        match result {
-            Err("older prefix") => return false,
-            Err(message) => {
-                let stream = self.run_streams.entry(token.run).or_default();
-                stream.invalidate_display();
-                stream.history_unconfirmed_if_unchanged(message, token.error_revision);
-                return false;
-            },
-            Ok(()) => {},
-        }
-        let Some(first) = events.first().filter(|event| {
-            event.seq.as_u64() == 1
-                && matches!(
-                    event.payload.payload,
-                    surge_core::EventPayload::RunStarted { .. }
-                )
-        }) else {
-            return false;
-        };
-        let Some(started_at) = chrono::DateTime::from_timestamp_millis(first.timestamp_ms) else {
-            return false;
-        };
-        let display = self.run_streams[&token.run].display();
-        let status = match display {
-            surge_core::run_display::RunDisplayState::Done(
-                surge_core::TerminalReason::Completed,
-            ) => RunStatus::Completed,
-            surge_core::run_display::RunDisplayState::Done(surge_core::TerminalReason::Failed) => {
-                RunStatus::Failed
-            },
-            surge_core::run_display::RunDisplayState::Done(surge_core::TerminalReason::Aborted) => {
-                RunStatus::Aborted
-            },
-            _ => RunStatus::Active,
-        };
-        let verdict = surge_core::run_verdict::TerminalVerdict::of(
-            events
-                .iter()
-                .map(|event| (event.seq.as_u64(), &event.payload.payload)),
-        );
-        let ended_at = verdict
-            .terminal()
-            .and_then(|claim| events.iter().find(|event| event.seq.as_u64() == claim.seq))
-            .and_then(|event| chrono::DateTime::from_timestamp_millis(event.timestamp_ms));
-        let row = UiRun {
-            run_id: token.run,
-            status,
-            started_at,
-            ended_at,
-            last_event_seq: events.last().map(|event| event.seq.as_u64()),
-        };
-        if let Some(existing) = self.runs.iter_mut().find(|run| run.run_id == token.run) {
-            *existing = row;
-        } else {
-            self.runs.push(row);
-        }
-        true
     }
 
     /// Operator's request for a run, when its `RunStarted` was observed.
@@ -847,12 +379,36 @@ impl AppState {
         title.or(stream.prompt.as_deref())
     }
 
+    /// Merge durable terminal history; live state is supplied by the daemon.
+    pub fn restore_finished_runs(&mut self, summaries: &[surge_persistence::runs::RunSummary]) {
+        for summary in summaries {
+            let status = match summary.status {
+                surge_core::RunStatus::Completed => RunStatus::Completed,
+                surge_core::RunStatus::Failed => RunStatus::Failed,
+                surge_core::RunStatus::Aborted => RunStatus::Aborted,
+                _ => continue,
+            };
+            if self.runs.iter().any(|run| run.run_id == summary.id) {
+                continue;
+            }
+            let Some(started_at) = chrono::DateTime::from_timestamp_millis(summary.started_at_ms)
+            else {
+                continue;
+            };
+            self.runs.push(UiRun {
+                run_id: summary.id,
+                status,
+                started_at,
+                last_event_seq: None,
+                ended_at: summary
+                    .ended_at_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+            });
+        }
+    }
+
     /// Load project from a directory path.
     pub fn load_project(&mut self, path: &std::path::Path) {
-        self.observations.clear();
-        self.bootstrap_operations.clear();
-        self.operation_inspections.clear();
-        self.rejected_inspections.clear();
         self.tasks.clear_project();
         self.project_history.clear();
         self.config = None;

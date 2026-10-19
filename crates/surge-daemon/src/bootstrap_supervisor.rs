@@ -536,7 +536,6 @@ impl BootstrapSupervisor {
                     .await;
             },
             RunOutcome::Parked { .. } => return Ok(()),
-            RunOutcome::RecoveryRequired { .. } => return Err(Attention::RecoveryRequired),
             _ => return Err(Attention::StorageUnconfirmed),
         };
         self.store

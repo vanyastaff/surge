@@ -130,7 +130,6 @@ impl WorkItemStore {
         update: ReconciliationUpdate<'_>,
     ) -> Result<ReconciliationSettlement> {
         claim.verify_lock()?;
-        super::owned_flow::refuse_execution(self, claim.run())?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = attempt(&tx, claim.run())?;
@@ -146,7 +145,7 @@ impl WorkItemStore {
                 ));
             }
         }
-        claim.verify_lock_in(&tx)?;
+        claim.verify_lock()?;
         if serde_json::to_value(&current)? != serde_json::to_value(observed)?
             || control.as_ref() != observed_control
             || !reconciliation_state_eligible(current.state, control.as_ref())
@@ -155,7 +154,7 @@ impl WorkItemStore {
         }
         self.validate_claim_in(&tx, claim)?;
         write_reconciliation_result(&tx, claim, current, control, update)?;
-        claim.verify_lock_in(&tx)?;
+        claim.verify_lock()?;
         tx.commit()?;
         Ok(ReconciliationSettlement::Settled)
     }

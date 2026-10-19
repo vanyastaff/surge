@@ -52,9 +52,6 @@ pub struct TaskLedgerIndexUpsert {
     pub last_authority_node: Option<String>,
     /// Seq of the last event that touched this task.
     pub updated_seq: u64,
-    /// Qualified source observation; never a successor-local event index.
-    pub inherited_provenance:
-        Option<surge_core::execution_recovery::semantic_position::InheritedProvenance>,
     /// Observation timestamp in unix epoch milliseconds.
     pub observed_at_ms: i64,
     /// A human accepted the task after its retry ladder was exhausted; never
@@ -87,10 +84,6 @@ pub struct TaskLedgerIndexRecord {
     pub last_authority_node: Option<String>,
     /// Seq of the last event that touched this task.
     pub updated_seq: u64,
-    /// Qualified source observation; never a successor-local occurrence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inherited_provenance:
-        Option<surge_core::execution_recovery::semantic_position::InheritedProvenance>,
     /// Last time this row was updated in unix epoch milliseconds.
     pub updated_at_ms: i64,
     /// A human accepted the task after its retry ladder was exhausted; never
@@ -143,24 +136,6 @@ impl TaskLedgerIndexRecord {
     }
 }
 
-pub(crate) const UPSERT_SQL: &str = "INSERT INTO task_ledger_index
-                (run_id, task_id, project_path, status, verified, discovered_from,
-                 last_authority_node, updated_seq, updated_at, accepted_by_human,
-                 requirement_revised, projection_semantics, inherited_provenance_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-             ON CONFLICT(run_id, task_id) DO UPDATE SET
-                project_path = excluded.project_path,
-                status = excluded.status,
-                verified = excluded.verified,
-                projection_semantics = excluded.projection_semantics,
-                accepted_by_human = excluded.accepted_by_human,
-                requirement_revised = excluded.requirement_revised,
-                discovered_from = COALESCE(excluded.discovered_from, discovered_from),
-                last_authority_node = excluded.last_authority_node,
-                updated_seq = excluded.updated_seq,
-                updated_at = excluded.updated_at,
-                inherited_provenance_json = excluded.inherited_provenance_json";
-
 /// Registry-backed store for cross-run task-ledger lookups.
 #[derive(Clone)]
 pub struct TaskLedgerStore {
@@ -187,7 +162,21 @@ impl TaskLedgerStore {
             .get()
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         conn.execute(
-            UPSERT_SQL,
+            "INSERT INTO task_ledger_index
+                (run_id, task_id, project_path, status, verified, discovered_from,
+                 last_authority_node, updated_seq, updated_at, accepted_by_human,
+                 requirement_revised)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(run_id, task_id) DO UPDATE SET
+                project_path = excluded.project_path,
+                status = excluded.status,
+                verified = excluded.verified,
+                accepted_by_human = excluded.accepted_by_human,
+                requirement_revised = excluded.requirement_revised,
+                discovered_from = COALESCE(excluded.discovered_from, discovered_from),
+                last_authority_node = excluded.last_authority_node,
+                updated_seq = excluded.updated_seq,
+                updated_at = excluded.updated_at",
             params![
                 input.run_id.to_string(),
                 input.task_id,
@@ -200,10 +189,6 @@ impl TaskLedgerStore {
                 input.observed_at_ms,
                 i64::from(input.accepted_by_human),
                 i64::from(input.requirement_revised),
-                input
-                    .inherited_provenance
-                    .map(|origin| serde_json::to_string(&origin))
-                    .transpose()?,
             ],
         )?;
         self.get(input.run_id, &input.task_id)?
@@ -225,7 +210,7 @@ impl TaskLedgerStore {
         let mut sql = String::from(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
                     last_authority_node, updated_seq, updated_at, accepted_by_human,
-                    requirement_revised, projection_semantics, inherited_provenance_json
+                    requirement_revised
              FROM task_ledger_index WHERE 1=1",
         );
         let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -273,7 +258,7 @@ impl TaskLedgerStore {
         conn.query_row(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
                     last_authority_node, updated_seq, updated_at, accepted_by_human,
-                    requirement_revised, projection_semantics, inherited_provenance_json
+                    requirement_revised
              FROM task_ledger_index WHERE run_id = ? AND task_id = ?",
             params![run_id.to_string(), task_id],
             row_to_record,
@@ -284,13 +269,6 @@ impl TaskLedgerStore {
 }
 
 fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
-    if row.get::<_, i64>(11)? != 1 {
-        return Err(rusqlite::Error::FromSqlConversionFailure(
-            11,
-            rusqlite::types::Type::Integer,
-            "unsupported task ledger projection semantics".into(),
-        ));
-    }
     let run_id_str: String = row.get(0)?;
     let status_str: String = row.get(3)?;
     let verified_int: i64 = row.get(4)?;
@@ -315,7 +293,6 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
         discovered_from: row.get(5)?,
         last_authority_node: row.get(6)?,
         updated_seq: row.get::<_, i64>(7)? as u64,
-        inherited_provenance: crate::runs::provenance::read(row, 12)?,
         updated_at_ms: row.get(8)?,
         accepted_by_human: row.get::<_, i64>(9)? != 0,
         requirement_revised: row.get::<_, i64>(10)? != 0,
@@ -374,7 +351,6 @@ mod tests {
         discovered_from: Option<&str>,
     ) -> TaskLedgerIndexUpsert {
         TaskLedgerIndexUpsert {
-            inherited_provenance: None,
             run_id: run,
             task_id: task.into(),
             project_path: PathBuf::from("/proj"),
@@ -387,81 +363,6 @@ mod tests {
             accepted_by_human: false,
             requirement_revised: false,
         }
-    }
-
-    #[test]
-    fn source_origin_survives_registry_reopen_and_local_update_clears_it() {
-        use surge_core::execution_recovery::semantic_position::{
-            ContinuationSeedId, InheritedProvenance, SourceEventRef,
-        };
-        let (home, store) = store();
-        let run = RunId::new();
-        let source = SourceEventRef::new(RunId::new(), 87).unwrap();
-        let origin = InheritedProvenance::new(
-            ContinuationSeedId::new(surge_core::ContentHash::compute(b"ledger-seed")),
-            source,
-        );
-        let mut input = upsert(run, "m1-t1", RoadmapStatus::Completed, true, None);
-        input.updated_seq = 0;
-        input.inherited_provenance = Some(origin);
-        let row = store.upsert(&input).unwrap();
-        assert_eq!(
-            row.updated_seq, 0,
-            "source 87 must never become a successor row index"
-        );
-        assert_eq!(row.inherited_provenance, Some(origin));
-        drop(store);
-        let pool = open_registry_pool(home.path(), &MockClock::new(1_700_000_000_000)).unwrap();
-        let store = TaskLedgerStore::new(pool);
-        assert_eq!(
-            store
-                .get(run, "m1-t1")
-                .unwrap()
-                .unwrap()
-                .inherited_provenance,
-            Some(origin)
-        );
-        let mut local = upsert(run, "m1-t1", RoadmapStatus::Pending, false, None);
-        local.updated_seq = 5;
-        local.inherited_provenance = None;
-        let row = store.upsert(&local).unwrap();
-        assert_eq!(row.updated_seq, 5);
-        assert_eq!(row.inherited_provenance, None);
-        {
-            let conn = store.pool.get().unwrap();
-            conn.execute("UPDATE task_ledger_index SET inherited_provenance_json = ? WHERE task_id = 'm1-t1'", ["{\"source\":0}"]).unwrap();
-        }
-        assert!(
-            store.get(run, "m1-t1").is_err(),
-            "malformed present provenance must not become None"
-        );
-        assert!(store.list(&TaskLedgerIndexFilter::default()).is_err());
-        drop(store);
-        home.close().unwrap();
-    }
-
-    #[test]
-    fn current_readers_refuse_unsupported_projection_semantics() {
-        let (home, store) = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(
-                run,
-                "unsupported",
-                RoadmapStatus::Completed,
-                true,
-                None,
-            ))
-            .unwrap();
-        {
-            let conn = store.pool.get().unwrap();
-            // Model a future writer's row without weakening the installed schema.
-            conn.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE task_ledger_index SET projection_semantics=99 WHERE task_id='unsupported'; PRAGMA ignore_check_constraints=OFF;").unwrap();
-        }
-        assert!(store.get(run, "unsupported").is_err());
-        assert!(store.list(&TaskLedgerIndexFilter::default()).is_err());
-        drop(store);
-        home.close().unwrap();
     }
 
     #[test]

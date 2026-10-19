@@ -55,11 +55,7 @@ impl MemoryStore {
             namespace.clone(),
         )?;
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::open_controlled(
-            path,
-            rusqlite::OpenFlags::default(),
-            None,
-        )?;
+        let conn = Connection::open(path)?;
         // Same hardening the run and registry databases get. Without it this
         // store runs on the default rollback journal with no busy timeout,
         // and the several independent openers (memory writeback, project
@@ -81,7 +77,7 @@ impl MemoryStore {
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory()?;
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::in_memory()?;
+        let conn = Connection::open_in_memory()?;
         let mut store = Self {
             conn,
             path: PathBuf::from(":memory:"),
@@ -2109,7 +2105,7 @@ mod tests {
     #[test]
     fn migration_v1_to_v2_backfills_all_four_legacy_tables_with_and_without_optional_fields() {
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);
@@ -2237,7 +2233,7 @@ mod tests {
     #[test]
     fn migration_v1_to_v2_reuses_legacy_ulid_and_records_legacy_source() {
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);
@@ -2277,7 +2273,7 @@ mod tests {
         // then hits a genuine SQL error scanning the missing `patterns`
         // table, partway through the same migration step.
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         conn.execute(crate::memory::schema::CREATE_SCHEMA_VERSION_TABLE, [])
@@ -2338,7 +2334,7 @@ mod tests {
         // share a ULID (simulating the astronomically unlikely but
         // possible case of two independently generated ids colliding).
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         #[cfg(windows)]
         let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);

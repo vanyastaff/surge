@@ -25,10 +25,6 @@ pub struct TaskLedgerRow {
     pub last_authority_node: Option<String>,
     /// Seq of the last event that touched this task.
     pub updated_seq: EventSeq,
-    /// Qualified source observation, independent of the local row index.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inherited_provenance:
-        Option<surge_core::execution_recovery::semantic_position::InheritedProvenance>,
     /// A human accepted the task after its retry ladder was exhausted; never
     /// implies `verified`.
     #[serde(default)]
@@ -81,10 +77,6 @@ pub struct ArtifactRecord {
     pub produced_by_node: Option<NodeKey>,
     /// Event seq at which the artifact was first recorded.
     pub produced_at_seq: EventSeq,
-    /// Qualified source production, independent of the local materialization index.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inherited_provenance:
-        Option<surge_core::execution_recovery::semantic_position::InheritedProvenance>,
     /// Logical name (e.g., "spec.toml", "patch.diff").
     pub name: String,
     /// Path on disk relative to the artifacts directory.

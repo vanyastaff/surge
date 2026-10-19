@@ -52,42 +52,13 @@ pub(crate) fn verification_in_play(
     }
 }
 
-/// Keep prompt selection under the same owner and declaration rule as capture.
-fn node_verifies(outcomes: &[surge_core::node::OutcomeDecl]) -> bool {
-    outcomes
-        .iter()
-        .any(|outcome| outcome.ledger_effect == surge_core::node::LedgerEffect::Verified)
-}
-
-/// Accepted criteria inform every task stage; only verifier effects request
-/// inline evidence for host sealing. Profile artifact requirements still apply
-/// to all other stages, including application testing and implementation.
-pub(super) fn append_guidance(
-    prompt: &mut String,
-    p: &AgentStageParams<'_>,
-    input: Option<&VerificationBinding>,
-) {
-    use std::fmt::Write as _;
-    let Some(input) = input else {
-        return;
-    };
-    let _ = write!(
-        prompt,
-        "\nCurrent accepted task criteria (every ID required): {:?}. Task ID: {:?}.\n",
-        input.criteria.definitions,
-        p.active_task_id.as_ref().map_or("", |id| id.as_str())
-    );
-    if node_verifies(p.declared_outcomes) {
-        prompt.push_str("Submit verification_report inline to report_stage_outcome with task_id, the honest passed or failed outcome, summary and checks (command, result, covers=[IDs]); do not write a report file or supply binding. Passed requires passing checks for every current criterion; skipped or cancelled checks cannot pass. Report concrete failures with the failed outcome.\n");
-    } else {
-        prompt.push_str("Follow your profile's declared artifacts and outcomes for this task. Use these current criterion IDs and definitions when recording evidence; do not supply host binding or claim verification authority. Choose the outcome supported by your observations, including failure or inability to run where declared.\n");
-    }
-}
-
 pub(super) async fn begin(
     p: &AgentStageParams<'_>,
 ) -> Result<Option<VerificationBinding>, StageError> {
-    let verifying = node_verifies(p.declared_outcomes);
+    let verifying = p
+        .declared_outcomes
+        .iter()
+        .any(|outcome| outcome.ledger_effect == surge_core::node::LedgerEffect::Verified);
     if !verification_in_play(
         VerificationPoint::Begin {
             node_verifies: verifying,

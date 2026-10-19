@@ -1,16 +1,17 @@
-//! `verification-report`: application evidence, audits and sealed verification.
-//! Unbound evidence reports do not prove task verification.
+//! `verification-report`: checks recorded by a verifier. Bound reports prove
+//! accepted tasks; generic workflow audits remain explicitly unbound.
 
 use super::*;
 
-/// The `verification-report.toml` artifact records checks and their outcome.
-/// Application testers and generic audits produce unbound evidence. Only the
-/// host-sealed verifier path can bind a report to accepted task criteria and
-/// carry its hash as evidence on a `TaskVerified` ledger event.
+/// The `verification-report.toml` artifact — a sealed verifier's record of
+/// the checks it ran against a task and the outcome it reached. Produced only
+/// by verifier nodes (read-only sandbox + verification authority); the hash of
+/// this artifact is the `evidence` carried on the matching `TaskVerified`
+/// ledger event.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(
     title = "VerificationReportArtifact",
-    description = "Surge `verification-report.toml` artifact: evidence or a host-sealed record of checks run against a task."
+    description = "Surge `verification-report.toml` artifact: a sealed verifier's record of the checks run against a task."
 )]
 pub struct VerificationReportArtifact {
     /// Artifact contract schema version.
@@ -18,15 +19,15 @@ pub struct VerificationReportArtifact {
     pub schema_version: u32,
     /// The task this report covers.
     pub task_id: String,
-    /// Observed report outcome.
+    /// Verifier outcome.
     pub outcome: VerificationReportOutcome,
     /// Short human-readable summary of the verification.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
-    /// Checks actually run.
+    /// Checks the verifier ran.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<VerificationCheck>,
-    /// Host-owned binding; absent on application evidence and unbound audits.
+    /// Host-owned binding; absent on historical reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<crate::verification_evidence::VerificationBinding>,
     /// References to evidence (content hashes or artifact paths).
@@ -88,19 +89,16 @@ impl VerificationReportArtifact {
     }
 }
 
-/// Observed outcome recorded in application evidence, an audit or a sealed
-/// verification report. This value alone has no ledger effect. Task ledger
-/// transitions require a declared, host-accepted verification effect through
-/// the sealed verifier path.
+/// Outcome a sealed verifier reached for a task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VerificationReportOutcome {
-    /// The reported checks passed. Unbound evidence does not certify a task;
-    /// `TaskVerified` requires the host-accepted sealed verification path.
+    /// The task passed verification; the engine maps this to a `TaskVerified`
+    /// ledger transition.
     #[default]
     Passed,
-    /// The report records failed or unfulfilled checks. A `FailedVerification`
-    /// status requires the corresponding declared, host-accepted ledger effect.
+    /// The task failed verification; the engine maps this to a
+    /// `FailedVerification` status.
     Failed,
 }
 

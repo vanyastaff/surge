@@ -9,18 +9,6 @@ use thiserror::Error;
 /// Failure modes for opening or creating a `Storage`, run reader, or run writer.
 #[derive(Debug, Error)]
 pub enum OpenError {
-    /// The authentic latest creation opening has not yet published its database identity.
-    #[error("run database opening is not ready: {run_id}")]
-    OpeningNotReady {
-        /// Run whose original creation owner has not finished publication.
-        run_id: RunId,
-    },
-    /// An unknown shared owner currently retains the controlled run.
-    #[error("run still in use: {run_id}")]
-    RunInUse {
-        /// Run whose outside control is contended.
-        run_id: RunId,
-    },
     /// Durable run authority refused an opening without journal mutation.
     #[error("run opening refused: {0}")]
     Authority(String),
@@ -74,39 +62,6 @@ pub enum OpenError {
 /// Failure modes for reads and writes against an open run.
 #[derive(Debug, Error)]
 pub enum StorageError {
-    /// Original run opening authority refused inspection before SQLite access.
-    #[error("run opening: {0}")]
-    RunOpening(#[source] OpenError),
-    /// A durable continuation depends on this source run in any lifecycle state.
-    #[error("run is referenced: {run_id}")]
-    RunReferenced {
-        /// Source run whose history must be retained.
-        run_id: RunId,
-    },
-    /// Historical runs lack deletion-safe lifetime coordination.
-    #[error("deletion coordination unavailable for legacy run {run_id}")]
-    DeletionCoordinationUnavailable {
-        /// Legacy run preserved without namespace or registry mutation.
-        run_id: RunId,
-    },
-    /// An unknown shared process or reader retains the original outside control.
-    #[error("run still in use: {run_id}")]
-    RunInUse {
-        /// Controlled run whose native shared owner is still live.
-        run_id: RunId,
-    },
-    /// Original native deletion ownership or its durable inventory was refused.
-    #[error("deletion ownership for {run_id}: {source}")]
-    DeletionOwnership {
-        /// Run whose original namespace could not be authenticated.
-        run_id: RunId,
-        /// Typed original opening or native failure.
-        source: OpenError,
-    },
-
-    /// Semantic input was rejected before any in-memory projection mutation.
-    #[error(transparent)]
-    Fold(#[from] surge_core::run_state::FoldError),
     /// The in-process writer ownership registry is poisoned.
     #[error("writer ownership registry is poisoned")]
     WriterOwnershipPoisoned,
@@ -253,13 +208,4 @@ pub enum FeedLifecycleError {
     /// A closed channel still reported Running; settlement is unconfirmed.
     #[error("writer lifecycle owner lost before terminal receipt")]
     WriterLost,
-}
-
-impl From<OpenError> for StorageError {
-    fn from(error: OpenError) -> Self {
-        match error {
-            OpenError::Sqlite(error) => Self::Sqlite(error),
-            other => Self::RunOpening(other),
-        }
-    }
 }

@@ -238,7 +238,7 @@ impl Engine {
         let retirement_gate = self.completion_retirement_gate.lock().unwrap().take();
         Self::spawn_completion(
             async move {
-                let outcome = Box::pin(execution.execute()).await;
+                let outcome = execution.execute().await;
                 #[cfg(test)]
                 if let Some(gate) = retirement_gate {
                     let _ = gate.entered.send(());

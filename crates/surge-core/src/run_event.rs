@@ -251,10 +251,6 @@ pub enum EventPayload {
         memory_receipt: Option<crate::context_pack::PackReceipt>,
     },
     /// Host-owned immutable task association, committed in the startup batch.
-    /// Public seed marker. Its private body must be hydrated before semantics.
-    ContinuationSeedBound {
-        manifest: Box<crate::work_item::ContinuationSeedManifest>,
-    },
     WorkItemAttemptBound {
         context: crate::work_item::WorkItemContext,
     },
@@ -878,7 +874,6 @@ impl EventPayload {
             Self::QuotaStagePlanned { .. } => "QuotaStagePlanned",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
             Self::WorkItemAttemptBound { .. } => "WorkItemAttemptBound",
-            Self::ContinuationSeedBound { .. } => "ContinuationSeedBound",
             Self::OwnedFlowInputsBound { .. } => "OwnedFlowInputsBound",
             Self::OwnedFlowWakeRefused { .. } => "OwnedFlowWakeRefused",
             Self::ExecutionWriterIntent { .. } => "execution_writer_intent",

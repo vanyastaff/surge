@@ -99,8 +99,6 @@ fn resolve_artifact_source(
                         "artifact '{artifact}' not produced by node '{node}'"
                     ))
                 })?;
-            aref.recorded_position()?
-                .validate(memory.semantic_lineage.as_ref())?;
             Ok(serde_json::json!({
                 "path": aref.path.to_string_lossy(),
                 "hash": aref.hash.to_string(),
@@ -110,8 +108,6 @@ fn resolve_artifact_source(
             let aref = memory.artifacts.get(name).ok_or_else(|| {
                 StageError::Internal(format!("run artifact '{name}' not in RunMemory"))
             })?;
-            aref.recorded_position()?
-                .validate(memory.semantic_lineage.as_ref())?;
             Ok(serde_json::json!({
                 "path": aref.path.to_string_lossy(),
                 "hash": aref.hash.to_string(),
@@ -132,8 +128,6 @@ fn resolve_artifact_source(
                         .into(),
                 )
             })?;
-            aref.recorded_position()?
-                .validate(memory.semantic_lineage.as_ref())?;
             Ok(serde_json::json!({
                 "path": aref.path.to_string_lossy(),
                 "hash": aref.hash.to_string(),
@@ -473,10 +467,7 @@ mod tests {
             path: inner_artifact_path,
             name: "review.md".into(),
             produced_by: NodeKey::try_from("review_inner").unwrap(),
-            produced_at_seq: Some(
-                surge_core::execution_recovery::semantic_position::SemanticPosition::local(1)
-                    .unwrap(),
-            ),
+            produced_at_seq: 1,
         };
         memory.artifacts.insert("review.md".into(), aref.clone());
         memory
@@ -516,164 +507,5 @@ mod tests {
         writer.close().await.unwrap();
         drop(storage);
         dir.close().unwrap();
-    }
-
-    struct ArtifactPositionCase {
-        label: &'static str,
-        position: Option<surge_core::execution_recovery::semantic_position::SemanticPosition>,
-        error: Option<surge_core::execution_recovery::semantic_position::PositionError>,
-    }
-
-    fn artifact_position_cases() -> (
-        surge_core::execution_recovery::semantic_position::SeedLineage,
-        Vec<ArtifactPositionCase>,
-    ) {
-        use surge_core::execution_recovery::semantic_position::{
-            ContinuationSeedId, PositionError, SeedLineage, SemanticPosition, SourceEventRef,
-        };
-        let source = surge_core::RunId::new();
-        let seed = ContinuationSeedId::new(surge_core::ContentHash::compute(b"selected seed"));
-        let selected = SeedLineage::new(seed, SourceEventRef::new(source, 100).unwrap());
-        let inherited = |seed, run, seq| {
-            Some(SemanticPosition::inherited(
-                seed,
-                SourceEventRef::new(run, seq).unwrap(),
-            ))
-        };
-        let positions = [
-            ("local", Some(SemanticPosition::local(7).unwrap()), None),
-            ("inherited", inherited(seed, source, 87), None),
-            ("unrecorded", None, Some(PositionError::Unrecorded)),
-            (
-                "foreign seed",
-                inherited(
-                    ContinuationSeedId::new(surge_core::ContentHash::compute(b"foreign seed")),
-                    source,
-                    87,
-                ),
-                Some(PositionError::ForeignLineage),
-            ),
-            (
-                "foreign run",
-                inherited(seed, surge_core::RunId::new(), 87),
-                Some(PositionError::ForeignLineage),
-            ),
-            (
-                "beyond boundary",
-                inherited(seed, source, 101),
-                Some(PositionError::ForeignLineage),
-            ),
-        ];
-        (
-            selected,
-            positions
-                .into_iter()
-                .map(|(label, position, error)| ArtifactPositionCase {
-                    label,
-                    position,
-                    error,
-                })
-                .collect(),
-        )
-    }
-
-    fn check_subgraph_provenance(source: &ArtifactSource, positives: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let content = "tasks = [7, 11]\n";
-        let path = dir.path().join("data.toml");
-        std::fs::write(&path, content).unwrap();
-        let hash = surge_core::ContentHash::compute(content.as_bytes());
-        let expected_value =
-            serde_json::json!({"path": path.to_string_lossy(), "hash": hash.to_string()});
-        let node = NodeKey::try_from("producer").unwrap();
-        let (lineage, cases) = artifact_position_cases();
-        let mut mismatches = Vec::new();
-        for case in cases
-            .into_iter()
-            .filter(|case| case.error.is_none() == positives)
-        {
-            let mut memory = RunMemory {
-                semantic_lineage: Some(lineage),
-                ..RunMemory::default()
-            };
-            let artifact = surge_core::run_state::ArtifactRef {
-                hash,
-                path: path.clone(),
-                name: "data.toml".into(),
-                produced_by: node.clone(),
-                produced_at_seq: case.position,
-            };
-            memory
-                .artifacts
-                .insert("data.toml".into(), artifact.clone());
-            memory
-                .artifacts
-                .insert("user_prompt".into(), artifact.clone());
-            memory
-                .artifacts_by_node
-                .insert(node.clone(), vec![artifact]);
-            match (resolve_artifact_source(source, &memory), case.error) {
-                (Ok(value), None) if value == expected_value => {},
-                (Err(StageError::SemanticPosition(actual)), Some(expected))
-                    if actual == expected => {},
-                (actual, expected) => mismatches.push(format!(
-                    "{}: expected {expected:?}, got {actual:?}",
-                    case.label
-                )),
-            }
-        }
-        assert!(mismatches.is_empty(), "{mismatches:#?}");
-    }
-
-    #[test]
-    fn node_output_provenance_refuses_unrecorded_and_foreign() {
-        check_subgraph_provenance(
-            &ArtifactSource::NodeOutput {
-                node: NodeKey::try_from("producer").unwrap(),
-                artifact: "data.toml".into(),
-            },
-            false,
-        );
-    }
-
-    #[test]
-    fn node_output_provenance_accepts_local_and_inherited() {
-        check_subgraph_provenance(
-            &ArtifactSource::NodeOutput {
-                node: NodeKey::try_from("producer").unwrap(),
-                artifact: "data.toml".into(),
-            },
-            true,
-        );
-    }
-
-    #[test]
-    fn run_artifact_provenance_refuses_unrecorded_and_foreign() {
-        check_subgraph_provenance(
-            &ArtifactSource::RunArtifact {
-                name: "data.toml".into(),
-            },
-            false,
-        );
-    }
-
-    #[test]
-    fn run_artifact_provenance_accepts_local_and_inherited() {
-        check_subgraph_provenance(
-            &ArtifactSource::RunArtifact {
-                name: "data.toml".into(),
-            },
-            true,
-        );
-    }
-
-    #[test]
-    fn initial_prompt_provenance_refuses_unrecorded_and_foreign() {
-        check_subgraph_provenance(&ArtifactSource::InitialPrompt, false);
-    }
-
-    #[test]
-    fn initial_prompt_provenance_accepts_local_and_inherited() {
-        check_subgraph_provenance(&ArtifactSource::InitialPrompt, true);
     }
 }

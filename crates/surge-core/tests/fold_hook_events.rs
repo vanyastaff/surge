@@ -1,6 +1,6 @@
 //! Locks the invariant that hook-related events are deterministic
 //! pass-throughs: `HookExecuted` and `OutcomeRejectedByHook` may interleave
-//! with stage events without changing semantic output maps.
+//! with stage events without mutating `RunMemory`.
 //!
 //! `RunMemory.outcomes` only grows on `OutcomeReported`; rejected outcomes
 //! never reach the fold because the orchestrator drops them before persisting
@@ -90,7 +90,7 @@ fn minimal_graph() -> Graph {
 
 #[test]
 fn hook_events_are_pass_through_in_fold() {
-    let run_id = RunId::from_str("run-00000000000000000000000001").unwrap();
+    let run_id = RunId::new();
     let agent_node = NodeKey::try_from("impl_1").unwrap();
     let outcome_done = OutcomeKey::from_str("done").unwrap();
     let outcome_pass = OutcomeKey::from_str("pass").unwrap();
@@ -223,7 +223,7 @@ fn hook_events_are_pass_through_in_fold() {
     };
 
     // Replay-determinism guard: incremental `apply()` must equal one-shot fold.
-    let mut incremental = RunState::not_started();
+    let mut incremental = RunState::NotStarted;
     for e in &events {
         incremental = surge_core::run_state::apply(incremental, e).expect("apply");
     }

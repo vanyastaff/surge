@@ -638,7 +638,6 @@ pub(crate) async fn resume_parked_work_item(
                 },
                 surge_persistence::work_items::OwnedFlowWakeAdmission::Ready(claim) => *claim,
                 surge_persistence::work_items::OwnedFlowWakeAdmission::Refused
-                | surge_persistence::work_items::OwnedFlowWakeAdmission::PrivateInputsUnavailable
                 | surge_persistence::work_items::OwnedFlowWakeAdmission::Obsolete => {
                     return Ok(true);
                 },

@@ -1,4 +1,5 @@
 //! SQLite connections retaining native ownership through checked final close.
+#[cfg(windows)]
 use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, OpenFlags, Transaction};
 use std::{ops::Deref, path::Path};
@@ -8,14 +9,15 @@ use std::{ops::Deref, path::Path};
 pub struct RetainedConnection {
     connection: Option<Connection>,
     #[cfg(windows)]
-    namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
-    // Last field: native namespace handles close before shared outside use releases.
-    run_owner: Option<std::sync::Arc<super::host_settlement::control::RunDatabaseOwner>>,
+    _namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
 }
 impl RetainedConnection {
     #[cfg(all(windows, any(test, feature = "test-support")))]
     pub(crate) fn settlement_marker(&self) -> Option<std::sync::Weak<()>> {
-        let Self { namespace, .. } = self;
+        let Self {
+            _namespace: namespace,
+            ..
+        } = self;
         namespace.as_ref().map(|owner| owner.settlement_marker())
     }
 
@@ -25,14 +27,6 @@ impl RetainedConnection {
             .map(|owner| PoolSettlement { owner })
     }
 
-    #[cfg(windows)]
-    pub(crate) fn verify_namespace(&self) -> rusqlite::Result<()> {
-        #[cfg(windows)]
-        if let Some(namespace) = &self.namespace {
-            namespace.verify().map_err(native_error)?;
-        }
-        Ok(())
-    }
     pub(crate) fn read_only(path: &Path) -> rusqlite::Result<Self> {
         Self::open_existing(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
     }
@@ -43,25 +37,17 @@ impl RetainedConnection {
         )
     }
     fn open_existing(path: &Path, flags: OpenFlags) -> rusqlite::Result<Self> {
-        Self::open_admitted(path, flags).map_err(control_error)
-    }
-    pub(crate) fn read_only_admitted(path: &Path) -> Result<Self, super::error::OpenError> {
-        Self::open_admitted(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-    }
-    fn open_admitted(path: &Path, flags: OpenFlags) -> Result<Self, super::error::OpenError> {
-        let control = super::host_settlement::control::use_from_path(path)?;
-        let owner = control
-            .as_ref()
-            .map(crate::runs::host_settlement::control::RunUseOwner::database)
-            .transpose()?;
         #[cfg(windows)]
         {
-            let namespace = crate::state_home::SqliteNamespaceOwner::existing(path)?;
-            Ok(Self::open_owned(path, flags, namespace)?.attach_run_owner(owner)?)
+            let namespace =
+                crate::state_home::SqliteNamespaceOwner::existing(path).map_err(native_error)?;
+            Self::open_owned(path, flags, namespace)
         }
         #[cfg(not(windows))]
         {
-            Ok(Self::open_controlled(path, flags, owner)?)
+            Ok(Self {
+                connection: Some(Connection::open_with_flags(path, flags)?),
+            })
         }
     }
     pub(crate) fn connection_mut(&mut self) -> &mut Connection {
@@ -81,6 +67,7 @@ impl RetainedConnection {
     ///
     /// # Errors
     /// Returns SQLite errors without releasing namespace ownership.
+    #[cfg(windows)]
     pub fn transaction_with_behavior(
         &mut self,
         behavior: TransactionBehavior,
@@ -105,6 +92,13 @@ impl Deref for RetainedConnection {
         }
     }
 }
+#[cfg(not(windows))]
+impl std::ops::DerefMut for RetainedConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.connection_mut()
+    }
+}
+
 #[cfg(windows)]
 fn native_error(error: crate::state_home::NativeError) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(error.to_string())
@@ -118,8 +112,7 @@ impl RetainedConnection {
         surge_process::owner_panic::install_owner_panic_protection();
         Self {
             connection: Some(connection),
-            run_owner: None,
-            namespace,
+            _namespace: namespace,
         }
     }
     pub(crate) fn open_owned(
@@ -134,8 +127,6 @@ impl RetainedConnection {
     pub(crate) fn in_memory() -> rusqlite::Result<Self> {
         Ok(Self::owned(Connection::open_in_memory()?, None))
     }
-}
-impl RetainedConnection {
     /// Close SQLite completely before releasing the native namespace.
     ///
     /// # Errors
@@ -160,6 +151,7 @@ impl RetainedConnection {
         }
     }
 }
+#[cfg(windows)]
 impl Drop for RetainedConnection {
     fn drop(&mut self) {
         // The namespace stays in the outer owner throughout close, logging and
@@ -168,11 +160,6 @@ impl Drop for RetainedConnection {
             let Some(connection) = self.connection.take() else {
                 return;
             };
-            #[cfg(unix)]
-            if self.run_owner.is_none() {
-                drop(connection);
-                return;
-            }
             if let Err((connection, error)) = connection.close() {
                 std::mem::forget(connection);
                 tracing::error!(code = ?error.sqlite_error_code(), "owned SQLite close failed; terminating protected owner");
@@ -188,7 +175,6 @@ pub struct OwnedSqliteConnectionManager {
     inner: r2d2_sqlite::SqliteConnectionManager,
     namespace: std::sync::Arc<crate::state_home::SqliteNamespaceOwner>,
     init: Option<Box<ConnectionInit>>,
-    run_owner: Option<std::sync::Arc<super::host_settlement::control::RunDatabaseOwner>>,
 }
 // A pool drop does not join an already running r2d2 connection worker.
 // Observe the manager AND all actual connections without keeping either alive.
@@ -235,19 +221,7 @@ impl OwnedSqliteConnectionManager {
             inner: r2d2_sqlite::SqliteConnectionManager::file(path),
             namespace,
             init: None,
-            run_owner: None,
         }
-    }
-    pub(crate) fn with_run_owner(
-        mut self,
-        owner: Option<std::sync::Arc<super::host_settlement::control::RunUseOwner>>,
-    ) -> rusqlite::Result<Self> {
-        self.run_owner = owner
-            .as_ref()
-            .map(crate::runs::host_settlement::control::RunUseOwner::database)
-            .transpose()
-            .map_err(control_error)?;
-        Ok(self)
     }
     pub(crate) fn with_flags(mut self, flags: OpenFlags) -> Self {
         self.inner = self.inner.with_flags(flags);
@@ -275,13 +249,9 @@ impl r2d2::ManageConnection for OwnedSqliteConnectionManager {
     type Error = rusqlite::Error;
     fn connect(&self) -> rusqlite::Result<RetainedConnection> {
         self.namespace.verify().map_err(native_error)?;
-        if let Some(owner) = &self.run_owner {
-            owner.verify().map_err(control_error)?;
-        }
         let raw = self.inner.connect()?;
         // No callback/SQL runs until checked close and native ownership are bound.
-        let mut connection = RetainedConnection::owned(raw, Some(self.namespace.clone()))
-            .attach_run_owner(self.run_owner.clone())?;
+        let mut connection = RetainedConnection::owned(raw, Some(self.namespace.clone()));
         if let Some(init) = &self.init {
             init(connection.connection_mut())?;
         }
@@ -289,9 +259,6 @@ impl r2d2::ManageConnection for OwnedSqliteConnectionManager {
     }
     fn is_valid(&self, connection: &mut RetainedConnection) -> rusqlite::Result<()> {
         self.namespace.verify().map_err(native_error)?;
-        if let Some(owner) = &self.run_owner {
-            owner.verify().map_err(control_error)?;
-        }
         self.inner.is_valid(connection.connection_mut())
     }
     fn has_broken(&self, connection: &mut RetainedConnection) -> bool {
@@ -302,7 +269,7 @@ impl r2d2::ManageConnection for OwnedSqliteConnectionManager {
 #[cfg(windows)]
 pub(crate) type ManagedConnection = RetainedConnection;
 #[cfg(not(windows))]
-pub(crate) type ManagedConnection = RetainedConnection;
+pub(crate) type ManagedConnection = Connection;
 
 pub(crate) fn raw_mut(connection: &mut ManagedConnection) -> &mut Connection {
     #[cfg(windows)]
@@ -311,56 +278,10 @@ pub(crate) fn raw_mut(connection: &mut ManagedConnection) -> &mut Connection {
     }
     #[cfg(not(windows))]
     {
-        connection.connection_mut()
+        connection
     }
 }
 
 #[cfg(all(test, windows))]
 #[path = "connection/windows_tests.rs"]
 mod windows_tests;
-
-fn control_error(error: super::error::OpenError) -> rusqlite::Error {
-    rusqlite::Error::InvalidParameterName(error.to_string())
-}
-impl RetainedConnection {
-    #[cfg(windows)]
-    pub(crate) fn attach_run_owner(
-        mut self,
-        owner: Option<std::sync::Arc<super::host_settlement::control::RunDatabaseOwner>>,
-    ) -> rusqlite::Result<Self> {
-        self.run_owner = owner;
-        if let Some(owner) = &self.run_owner {
-            owner.verify().map_err(control_error)?;
-        }
-        Ok(self)
-    }
-    #[cfg(unix)]
-    pub(crate) fn in_memory() -> rusqlite::Result<Self> {
-        Ok(Self {
-            connection: Some(Connection::open_in_memory()?),
-            run_owner: None,
-        })
-    }
-    #[cfg(unix)]
-    pub(crate) fn open_controlled(
-        path: &Path,
-        flags: OpenFlags,
-        owner: Option<std::sync::Arc<super::host_settlement::control::RunDatabaseOwner>>,
-    ) -> rusqlite::Result<Self> {
-        if let Some(owner) = &owner {
-            owner.verify().map_err(control_error)?;
-        }
-        let connection = Self {
-            connection: Some(Connection::open_with_flags(path, flags)?),
-            run_owner: owner,
-        };
-        if let Some(owner) = &connection.run_owner {
-            owner.verify().map_err(control_error)?;
-        }
-        Ok(connection)
-    }
-}
-#[cfg(unix)]
-mod unix;
-#[cfg(unix)]
-pub use unix::OwnedSqliteConnectionManager;

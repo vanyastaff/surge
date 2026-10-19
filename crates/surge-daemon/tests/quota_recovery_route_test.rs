@@ -1,12 +1,6 @@
 //! Controlled ACP protocol oracle; it does not establish production containment.
 #[path = "support/runtime_home.rs"]
 mod runtime_home_fixture;
-mod mock_acp_binary {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/test-support/mock_acp_binary.rs"
-    ));
-}
 use runtime_home_fixture::FixtureHome;
 #[path = "support/cold_host.rs"]
 mod cold_host;
@@ -48,7 +42,6 @@ use tokio_util::sync::CancellationToken;
 const NORMAL_START_COMPLETION_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct ObservedBridge {
-    observed_started: std::time::Instant,
     bridge: AcpBridge,
     quota_errors: AtomicUsize,
     primary_session: tokio::sync::Mutex<Option<SessionId>>,
@@ -74,17 +67,7 @@ impl BridgeFacade for ObservedBridge {
         let primary = config.runtime == "quota-a";
         let secondary = config.runtime == "quota-b";
         let warmup = config.runtime == "quota-c";
-        eprintln!(
-            "WG7_OBS phase=quota-open-start result=pending elapsed_ms={} primary={primary}",
-            self.observed_started.elapsed().as_millis()
-        );
-        let result = self.bridge.open_session(config).await;
-        eprintln!(
-            "WG7_OBS phase=quota-open-end result={} elapsed_ms={} primary={primary}",
-            if result.is_ok() { "ok" } else { "error" },
-            self.observed_started.elapsed().as_millis()
-        );
-        let opened = result?;
+        let opened = self.bridge.open_session(config).await?;
         if secondary {
             self.b_sessions.lock().await.insert(opened.session);
         }
@@ -93,10 +76,6 @@ impl BridgeFacade for ObservedBridge {
         }
         if primary {
             *self.primary_session.lock().await = Some(opened.session);
-            eprintln!(
-                "WG7_OBS phase=quota-primary-assigned result=ok elapsed_ms={}",
-                self.observed_started.elapsed().as_millis()
-            );
         }
         Ok(opened)
     }
@@ -115,23 +94,10 @@ impl BridgeFacade for ObservedBridge {
             }
         };
         if first_primary {
-            eprintln!(
-                "WG7_OBS phase=quota-primary-notify result=pending elapsed_ms={}",
-                self.observed_started.elapsed().as_millis()
-            );
             self.primary_ready.notify_one();
             self.primary_continue.notified().await;
         }
-        eprintln!(
-            "WG7_OBS phase=quota-send-start result=pending elapsed_ms={}",
-            self.observed_started.elapsed().as_millis()
-        );
         let result = self.bridge.send_message(id, content).await;
-        eprintln!(
-            "WG7_OBS phase=quota-send-end result={} elapsed_ms={}",
-            if result.is_ok() { "ok" } else { "error" },
-            self.observed_started.elapsed().as_millis()
-        );
         if matches!(&result, Err(SendMessageError::RateLimited { .. })) {
             self.quota_errors.fetch_add(1, Ordering::SeqCst);
         }
@@ -255,7 +221,10 @@ fn engine_config(home: &Path, all_exhausted: bool) -> EngineConfig {
         write_profile(&profiles, "quota-fallback", "quota-b");
         write_profile(&profiles, "quota-warmup", "quota-c");
     }
-    let binary = mock_acp_binary::path();
+    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     assert!(binary.exists(), "build real mock_acp_agent prerequisite");
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
@@ -657,9 +626,7 @@ async fn quota_dispatch_in_home(
     }
     let storage = Storage::open(home).await.unwrap();
     let cancel = CancellationToken::new();
-    eprintln!("WG7_OBS phase=quota-fixture-start result=ok elapsed_ms=0");
     let bridge = Arc::new(ObservedBridge {
-        observed_started: std::time::Instant::now(),
         bridge: AcpBridge::with_defaults().unwrap(),
         quota_errors: AtomicUsize::new(0),
         primary_session: tokio::sync::Mutex::new(None),
@@ -717,10 +684,6 @@ async fn quota_dispatch_in_home(
     })
     .await
     .unwrap();
-    eprintln!(
-        "WG7_OBS phase=quota-server-ready result=ok elapsed_ms={}",
-        bridge.observed_started.elapsed().as_millis()
-    );
     let requirements = WorkItemRequirements::new(
         "Preserve quota task".into(),
         vec!["Same task and workspace after fallback".into()],
@@ -760,7 +723,10 @@ async fn quota_dispatch_in_home(
             AccountEvidence, FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage,
             QuotaRoutingMode,
         };
-        let binary = mock_acp_binary::path();
+        let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/debug/mock_acp_agent{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         let candidate = |runtime: &str, scenario: &str, stage_mcp: bool| {
             let mut args = vec![
                 "--scenario".to_owned(),
@@ -963,10 +929,6 @@ async fn quota_dispatch_in_home(
     let WorkItemResult::Attempt(attempt) = result else {
         panic!("actual start must return attempt")
     };
-    eprintln!(
-        "WG7_OBS phase=quota-start-response result=ok elapsed_ms={}",
-        bridge.observed_started.elapsed().as_millis()
-    );
     let host_config: Value = serde_json::from_str(&attempt.config).unwrap();
     let frozen_policy: surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy =
         serde_json::from_value(host_config["quota_recovery"].clone()).unwrap();
@@ -984,14 +946,10 @@ async fn quota_dispatch_in_home(
         publish_selected_crash_boundary(&storage, home, project, item, &attempt, "opening").await;
         std::future::pending::<()>().await;
     }
-    let primary_started = std::time::Instant::now();
     if tokio::time::timeout(Duration::from_secs(5), bridge.primary_ready.notified())
         .await
         .is_err()
     {
-        let elapsed = primary_started.elapsed();
-        let active =
-            tokio::time::timeout(Duration::from_secs(1), engine.snapshot_active_runs()).await;
         let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
         let journal = storage.inspect_run(attempt.run).await.unwrap();
         let failures = match journal.database {
@@ -1021,7 +979,7 @@ async fn quota_dispatch_in_home(
             .unwrap()
             .unwrap();
         panic!(
-            "actual A must reach first prompt before quota oracle: elapsed={elapsed:?}; active={active:?}; {failures:?}; {diagnostic:?}"
+            "actual A must reach first prompt before quota oracle: {failures:?}; {diagnostic:?}"
         );
     }
     if std::env::var("SURGE_QUOTA_PARK_PHASE").as_deref() == Ok("opened") {
@@ -1475,13 +1433,8 @@ async fn quota_dispatch_in_home(
                 let ready =
                     std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_PARK_READY").unwrap());
                 let temporary = ready.with_extension("publishing");
-                observe_quota_ready(&storage, next.run, &bridge, journal_tail.len());
                 std::fs::write(&temporary,serde_json::to_vec(&json!({"home":home,"project":project,"item":next_item,"run":next.run,"attempt":parked,"control":before_control,"due":due,"workspace":parked_workspace,"a_count":before_a,"b_count":before_b})).unwrap()).unwrap();
                 std::fs::rename(temporary, ready).unwrap();
-                eprintln!(
-                    "WG7_OBS phase=quota-ready-after result=ok elapsed_ms={}",
-                    bridge.observed_started.elapsed().as_millis()
-                );
                 std::future::pending::<()>().await;
             }
             bridge.primary_continue.notify_one();
@@ -1869,7 +1822,10 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task_in_home(hom
     std::fs::create_dir_all(&profiles).unwrap();
     write_profile(&profiles, "quota-primary", "quota-a");
     write_profile(&profiles, "quota-fallback", "quota-b");
-    let binary = mock_acp_binary::path();
+    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
         ("quota-a", "prompt_error=429_no_reset"),
@@ -3882,34 +3838,6 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
     drop(storage);
 }
 
-fn observe_quota_ready(
-    storage: &Storage,
-    run: surge_core::RunId,
-    bridge: &ObservedBridge,
-    events: usize,
-) {
-    let store = storage.work_items();
-    let cycles = store.due_recovery_wakes_for_run(run, i64::MAX, 10);
-    let mut read_errors = usize::from(cycles.is_err());
-    let mut reservations = 0;
-    for cycle in cycles.as_deref().unwrap_or_default() {
-        match store.recovery_reservations(run, &cycle.invocation, cycle.generation) {
-            Ok(rows) => reservations += rows.len(),
-            Err(_) => read_errors += 1,
-        }
-    }
-    let control = store.execution_control(run);
-    let attempt = store.for_run(run);
-    read_errors += usize::from(control.is_err()) + usize::from(attempt.is_err());
-    eprintln!(
-        "WG7_OBS phase=quota-ready-before result=observed elapsed_ms={} cycles={} reservations={reservations} events={events} control={} attempt={} read_errors={read_errors}",
-        bridge.observed_started.elapsed().as_millis(),
-        cycles.as_ref().map_or(0, Vec::len),
-        control.ok().flatten().is_some(),
-        attempt.ok().flatten().is_some()
-    );
-}
-
 /// Keep refusal evidence bounded and avoid printing the frozen provider configuration.
 async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home: &Path) -> String {
     let store = storage.work_items();
@@ -3954,30 +3882,7 @@ async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home
                 .count(),
         )
     });
-    let journal = storage
-        .inspect_run(run)
-        .await
-        .map(|inspection| match inspection.database {
-            surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
-                events
-                    .into_iter()
-                    .rev()
-                    .take(32)
-                    .map(|event| {
-                        let cleanup = match event.payload.payload {
-                            surge_core::EventPayload::RunSuspended { fence } => {
-                                Some(fence.cleanup_confirmed)
-                            },
-                            _ => None,
-                        };
-                        (event.seq, event.kind, cleanup)
-                    })
-                    .collect::<Vec<_>>()
-            },
-            surge_persistence::runs::inspection::RunDatabaseInspection::Absent => Vec::new(),
-        });
     format!(
-        "at={:?}, attempt={attempt:?}, registry={registry:?}, control={control:?}, capacity={capacity:?}, cycle={cycle:?}, journal(seq,kind,cleanup)={journal:?}, providers(new_session,prompt)={providers:?}",
-        std::time::Instant::now()
+        "attempt={attempt:?}, registry={registry:?}, control={control:?}, capacity={capacity:?}, cycle={cycle:?}, providers(new_session,prompt)={providers:?}"
     )
 }

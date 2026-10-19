@@ -102,14 +102,12 @@ async fn start_run_seeds_project_context_artifact() {
                 assert_eq!(std::fs::read(path).unwrap(), seed.content.as_bytes());
                 saw_seed = true;
             }
-            memory
-                .apply_event(&RunEvent {
-                    run_id,
-                    seq: event.seq.as_u64(),
-                    timestamp: chrono::Utc::now(),
-                    payload,
-                })
-                .unwrap();
+            memory.apply_event(&RunEvent {
+                run_id,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::Utc::now(),
+                payload,
+            });
         }
 
         assert!(
@@ -181,14 +179,12 @@ async fn start_run_seeds_configured_run_artifacts() {
                 );
                 saw_seed = true;
             }
-            memory
-                .apply_event(&RunEvent {
-                    run_id,
-                    seq: event.seq.as_u64(),
-                    timestamp: chrono::Utc::now(),
-                    payload,
-                })
-                .unwrap();
+            memory.apply_event(&RunEvent {
+                run_id,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::Utc::now(),
+                payload,
+            });
         }
 
         assert!(

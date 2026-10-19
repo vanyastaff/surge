@@ -304,7 +304,7 @@ impl PendingDecisions {
             run,
             last_seq: 0,
             status: FoldStatus::Complete,
-            state: RunState::not_started(),
+            state: RunState::NotStarted,
             entered: None,
             open: Vec::new(),
             retired: Vec::new(),
@@ -408,7 +408,7 @@ impl PendingDecisions {
             });
             return Fed::Incomplete;
         }
-        let state = std::mem::replace(&mut self.state, RunState::not_started());
+        let state = std::mem::replace(&mut self.state, RunState::NotStarted);
         match surge_core::run_state::apply(state, event) {
             Ok(state) => self.state = state,
             Err(error) => {

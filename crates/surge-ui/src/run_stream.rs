@@ -207,16 +207,7 @@ pub struct RunStreamState {
     session_history_valid: bool,
     display_run_id: Option<surge_core::RunId>,
     display_state: Option<surge_core::RunState>,
-    recovery_observer: surge_core::recovery_observation::RecoveryObserver,
     display_seq: u64,
-    semantic_guard: surge_core::execution_recovery::seed_guard::SeedStartupGuard,
-    semantic_unavailable: bool,
-    semantic_observed_seq: u64,
-    semantic_contiguous: bool,
-    semantic_refusal_boundary: Option<(u64, surge_core::ContentHash)>,
-    semantic_terminal: surge_core::run_verdict::TerminalHistory,
-    prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
-    recorded_prefix_evidence: VecDeque<(u64, surge_core::ContentHash)>,
     trusted_work_item: Option<surge_core::id::WorkItemId>,
     ownership_startup_open: bool,
     ownership_prompt: Option<String>,
@@ -227,10 +218,6 @@ pub struct RunStreamState {
     pub artifacts: std::collections::HashMap<String, std::path::PathBuf>,
     /// Subscription currently attached and pumping.
     pub live: bool,
-    /// Last observation failure, independent of recorded outcome history.
-    pub observation_error: Option<String>,
-    observation_revision: u64,
-    observation_error_from_read: bool,
     pub log: VecDeque<RunLogRow>,
     pub stages: Vec<StageRow>,
     /// Open decisions, published from `decisions` only while the stream's
@@ -259,20 +246,6 @@ pub struct RunStreamState {
 }
 
 impl RunStreamState {
-    pub(crate) fn registry_hint(
-        run: surge_core::RunId,
-        status: surge_core::RunStatus,
-        path: std::path::PathBuf,
-    ) -> Self {
-        Self {
-            display_run_id: Some(run),
-            registry_status: Some(status),
-            git_common_dir: crate::project::git_common_dir(&path),
-            run_path: Some(path),
-            ..Self::default()
-        }
-    }
-
     /// Start replaying a trusted full history for this actual run identity.
     pub fn begin_display_history(
         &mut self,
@@ -280,17 +253,8 @@ impl RunStreamState {
         status: Option<surge_core::RunStatus>,
     ) {
         self.display_run_id = Some(run_id);
-        self.display_state = Some(surge_core::RunState::not_started());
-        self.recovery_observer = Default::default();
+        self.display_state = Some(surge_core::RunState::NotStarted);
         self.display_seq = 0;
-        self.semantic_guard = Default::default();
-        self.semantic_unavailable = false;
-        self.semantic_observed_seq = 0;
-        self.semantic_contiguous = true;
-        self.semantic_refusal_boundary = None;
-        self.semantic_terminal = Default::default();
-        self.prefix_evidence.clear();
-        self.recorded_prefix_evidence.clear();
         self.sessions.clear();
         self.session_history_valid = true;
         self.trusted_work_item = None;
@@ -327,109 +291,6 @@ impl RunStreamState {
         self.pending_replay = false;
     }
 
-    pub(crate) fn replay_candidate(
-        run: surge_core::RunId,
-        events: &[surge_persistence::runs::ReadEvent],
-    ) -> Self {
-        let mut candidate = Self::default();
-        candidate.begin_display_history(run, None);
-        for event in events {
-            candidate.apply_recorded(
-                &EngineRunEvent::Persisted {
-                    seq: event.seq.as_u64(),
-                    payload: Box::new(event.payload.payload.clone()),
-                },
-                event.timestamp_ms,
-            );
-        }
-        candidate.finish_display_history(events.last().map_or(0, |event| event.seq.as_u64()));
-        candidate
-    }
-
-    /// Reject a stale prefix before mutating any published fold or decisions.
-    pub(crate) fn publish_candidate(&mut self, mut candidate: Self) -> Result<(), &'static str> {
-        if candidate.semantic_observed_seq
-            < self
-                .semantic_observed_seq
-                .max(self.display_seq)
-                .max(self.pending_watermark)
-        {
-            return Err("older prefix");
-        }
-        if self.semantic_refusal_boundary.is_some()
-            && candidate.semantic_refusal_boundary != self.semantic_refusal_boundary
-        {
-            return Err("conflicting semantic refusal boundary");
-        }
-        if let Some((seq, digest)) = self.prefix_evidence.back()
-            && candidate
-                .prefix_evidence
-                .iter()
-                .find(|(candidate_seq, _)| candidate_seq == seq)
-                .map(|(_, digest)| digest)
-                != Some(digest)
-        {
-            return Err("conflicting retained prefix");
-        }
-        // The wire feed has no durable timestamp. Separately retain the exact
-        // timestamped prefix already authenticated by disk, alongside live payloads.
-        if let Some((seq, digest)) = self.recorded_prefix_evidence.back()
-            && candidate
-                .recorded_prefix_evidence
-                .iter()
-                .find(|(candidate_seq, _)| candidate_seq == seq)
-                .map(|(_, digest)| digest)
-                != Some(digest)
-        {
-            return Err("conflicting recorded prefix");
-        }
-        if !candidate.semantic_unavailable
-            && (!candidate.session_history_confirmed() || !candidate.recovery().is_complete())
-        {
-            return Err("unconfirmed history");
-        }
-        candidate.registry_status = self.registry_status;
-        candidate.live = self.live;
-        if candidate.semantic_unavailable {
-            candidate.observation_revision = self.observation_revision.saturating_add(1);
-            candidate.observation_error_from_read = false;
-        } else {
-            candidate.observation_error = self.observation_error.clone();
-            candidate.observation_revision = self.observation_revision;
-            candidate.observation_error_from_read = self.observation_error_from_read;
-        }
-        candidate.pending_watermark = candidate.pending_watermark.max(self.pending_watermark);
-        *self = candidate;
-        Ok(())
-    }
-
-    /// Called only after a replacement publisher's SubscribeOk, before its first read.
-    pub(crate) fn attach_live_owner(&mut self) {
-        self.live = true;
-        if self.observation_error.is_some() {
-            self.history_unconfirmed("New live connection attached; restoring run history");
-        }
-    }
-
-    pub(crate) fn current_registry_hint(&self) -> Option<surge_core::RunStatus> {
-        self.registry_status
-    }
-
-    pub(crate) fn observation_revision(&self) -> u64 {
-        self.observation_revision
-    }
-    pub(crate) fn clear_observation_error_if_unchanged(&mut self, revision: u64) {
-        if revision != u64::MAX
-            && self.observation_revision == revision
-            && self.observation_error.is_some()
-            && self.observation_error_from_read
-        {
-            self.observation_error = None;
-            self.observation_error_from_read = false;
-            self.observation_revision = self.observation_revision.saturating_add(1);
-        }
-    }
-
     /// A daemon-confirmed start supersedes old registry crash evidence.
     pub fn mark_started(&mut self) {
         self.registry_status = Some(surge_core::RunStatus::Running);
@@ -437,7 +298,6 @@ impl RunStreamState {
 
     /// Missing/gapped history is not evidence of either work or daemon death.
     pub fn invalidate_display(&mut self) {
-        self.recovery_observer.invalidate();
         self.display_state = None;
         self.trusted_work_item = None;
         self.session_history_valid = false;
@@ -498,67 +358,12 @@ impl RunStreamState {
             && (!self.ownership_startup_open || self.trusted_work_item.is_some())
     }
 
-    /// Shared recorded recovery history, retained when current observation is unavailable.
-    pub fn recovery(&self) -> &surge_core::recovery_observation::RecoveryObservation {
-        self.recovery_observer.observation()
-    }
-
-    /// Whether the exact run has an attached, trusted current observation.
-    pub fn observation_available_for(&self, run: surge_core::RunId) -> bool {
-        self.display_run_id == Some(run)
-            && self.live
-            && self.observation_error.is_none()
-            && self.session_history_confirmed()
-            && self.recovery().is_complete()
-    }
-
-    /// Independent recorded host loss retained while current observation is unavailable.
-    pub(crate) fn recorded_host_loss_detail(&self) -> Option<&'static str> {
-        (self.registry_status == Some(surge_core::RunStatus::Crashed)
-            && self.observation_error.is_some()).then_some(
-                "Recorded loss of daemon ownership; current observation is unconfirmed. Run outcome and cleanup remain unconfirmed. Inspect recorded history before recovery."
-            )
-    }
-
     /// Canonical display projection; existing pending decisions remain independent.
     pub fn display(&self) -> surge_core::run_display::RunDisplayState {
-        if self.semantic_unavailable {
-            return match self.semantic_terminal.verdict() {
-                surge_core::run_verdict::TerminalVerdict::Terminal(claim) => {
-                    use surge_core::run_verdict::TerminalOutcome;
-                    let kind = match &claim.outcome {
-                        TerminalOutcome::Completed { .. } => {
-                            surge_core::run_state::TerminalReason::Completed
-                        },
-                        TerminalOutcome::Failed { .. } => {
-                            surge_core::run_state::TerminalReason::Failed
-                        },
-                        TerminalOutcome::Aborted { .. } => {
-                            surge_core::run_state::TerminalReason::Aborted
-                        },
-                    };
-                    surge_core::run_display::RunDisplayState::Done(kind)
-                },
-                _ => surge_core::run_display::RunDisplayState::Unknown,
-            };
-        }
-        if self.observation_error.is_some()
-            && !matches!(
-                self.display_state,
-                Some(surge_core::RunState::Terminal { .. })
-            )
-        {
-            return surge_core::run_display::RunDisplayState::Unknown;
-        }
         let state = (self.display_seq > 0)
             .then_some(self.display_state.as_ref())
             .flatten();
-        surge_core::run_display::RunDisplayState::from_state_with_observation(
-            state,
-            self.registry_status,
-            self.display_run_id
-                .is_some_and(|run| self.observation_available_for(run)),
-        )
+        surge_core::run_display::RunDisplayState::from_state(state, self.registry_status)
     }
 
     fn observe_display(&mut self, event: &EngineRunEvent) {
@@ -576,20 +381,10 @@ impl RunStreamState {
             self.invalidate_display();
             return;
         }
-        let previous = self.prefix_evidence.back().map(|(_, hash)| *hash);
-        let Ok(bytes) = serde_json::to_vec(&(previous, seq, payload)) else {
-            self.invalidate_display();
-            return;
-        };
-        self.prefix_evidence
-            .push_back((*seq, surge_core::ContentHash::compute(&bytes)));
-        if self.prefix_evidence.len() > 4096 {
-            self.prefix_evidence.pop_front();
-        }
         let (Some(run_id), Some(state)) = (self.display_run_id, self.display_state.take()) else {
             return;
         };
-        let next_state = surge_core::run_state::apply(
+        self.display_state = surge_core::run_state::apply(
             state,
             &surge_core::RunEvent {
                 run_id,
@@ -597,18 +392,8 @@ impl RunStreamState {
                 timestamp: chrono::Utc::now(),
                 payload: payload.as_ref().clone(),
             },
-        );
-        self.display_state = match next_state {
-            Ok(state) => Some(state),
-            Err(error) => {
-                self.record_observation_error(
-                    &error.to_string(),
-                    chrono::Local::now().format("%H:%M:%S").to_string(),
-                );
-                self.session_history_valid = false;
-                None
-            },
-        };
+        )
+        .ok();
         if self.display_state.is_some() {
             match payload.as_ref() {
                 EventPayload::SessionOpened {
@@ -679,116 +464,26 @@ impl RunStreamState {
     /// Fold one wire event into the view state: log row, stage
     /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
-        self.apply_at(event, chrono::Utc::now(), false);
+        self.apply_at(event, chrono::Utc::now());
     }
 
     /// Fold durable history using its recorded time rather than replay time.
     pub fn apply_recorded(&mut self, event: &EngineRunEvent, timestamp_ms: i64) {
         match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-            Some(at) => self.apply_at(event, at, true),
+            Some(at) => self.apply_at(event, at),
             None => {
+                // An unreadable durable time cannot date a decision.
                 self.invalidate_display();
-                self.apply_at(event, chrono::Utc::now(), false);
+                self.apply_at(event, chrono::Utc::now());
             },
         }
     }
 
-    fn semantic_preflight(
-        &mut self,
-        event: &EngineRunEvent,
-        at: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let (Some(run_id), EngineRunEvent::Persisted { seq, payload }) =
-            (self.display_run_id, event)
-        else {
-            return true;
-        };
-        if *seq <= self.semantic_observed_seq {
-            return !self.semantic_unavailable;
-        }
-        let contiguous = *seq == self.semantic_observed_seq.saturating_add(1);
-        let observed = surge_core::RunEvent {
-            run_id,
-            seq: *seq,
-            timestamp: at,
-            payload: payload.as_ref().clone(),
-        };
-        let result = self
-            .semantic_guard
-            .observe(&observed)
-            .and_then(|()| self.semantic_guard.finish());
-        self.semantic_observed_seq = *seq;
-        self.semantic_contiguous &= contiguous;
-        if self.semantic_contiguous {
-            self.semantic_terminal.observe(*seq, payload);
-        }
-        if let Err(error) = result {
-            if self.semantic_refusal_boundary.is_none() {
-                match serde_json::to_vec(&(seq, payload)) {
-                    Ok(bytes) => {
-                        self.semantic_refusal_boundary =
-                            Some((*seq, surge_core::ContentHash::compute(&bytes)))
-                    },
-                    Err(encoding) => {
-                        self.record_observation_error(
-                            &encoding.to_string(),
-                            at.format("%H:%M:%S").to_string(),
-                        );
-                        self.invalidate_display();
-                        return false;
-                    },
-                }
-            }
-            self.semantic_unavailable = true;
-            self.record_observation_error(&error.to_string(), at.format("%H:%M:%S").to_string());
-            self.invalidate_display();
-        }
-        !self.semantic_unavailable
-    }
-
-    fn apply_at(
-        &mut self,
-        event: &EngineRunEvent,
-        at: chrono::DateTime<chrono::Utc>,
-        recorded: bool,
-    ) {
-        if !self.semantic_preflight(event, at) {
-            return;
-        }
-        if recorded && let EngineRunEvent::Persisted { seq, payload } = event {
-            let previous = self.recorded_prefix_evidence.back().copied();
-            if *seq == previous.map_or(1, |(seq, _)| seq.saturating_add(1)) {
-                let Ok(bytes) = serde_json::to_vec(&(
-                    previous.map(|(_, hash)| hash),
-                    seq,
-                    at.timestamp_millis(),
-                    payload,
-                )) else {
-                    self.invalidate_display();
-                    return;
-                };
-                self.recorded_prefix_evidence
-                    .push_back((*seq, surge_core::ContentHash::compute(&bytes)));
-                if self.recorded_prefix_evidence.len() > 4096 {
-                    self.recorded_prefix_evidence.pop_front();
-                }
-            }
-        }
+    fn apply_at(&mut self, event: &EngineRunEvent, at: chrono::DateTime<chrono::Utc>) {
         let now = at
             .with_timezone(&chrono::Local)
             .format("%H:%M:%S")
             .to_string();
-        if let (Some(run_id), EngineRunEvent::Persisted { seq, payload }) =
-            (self.display_run_id, event)
-            && *seq > self.display_seq
-        {
-            self.recovery_observer.observe(&surge_core::RunEvent {
-                run_id,
-                seq: *seq,
-                timestamp: at,
-                payload: payload.as_ref().clone(),
-            });
-        }
         self.observe_display(event);
         if self.pending_replay
             && let EngineRunEvent::Persisted { seq, payload } = event
@@ -847,7 +542,15 @@ impl RunStreamState {
             },
             EngineRunEvent::StreamError { message } => {
                 self.live = false;
-                self.record_observation_error(message, now);
+                self.log.push_back(RunLogRow {
+                    time: now,
+                    kind: "STREAM",
+                    tone: Tone::Err,
+                    text: format!("Run outcome unconfirmed: {message}"),
+                });
+                while self.log.len() > MAX_LOG_ROWS {
+                    self.log.pop_front();
+                }
             },
             EngineRunEvent::Terminal {
                 outcome:
@@ -860,11 +563,9 @@ impl RunStreamState {
                         message: format!("resource settlement failed: {failures:?}"),
                     },
                     at,
-                    false,
                 );
             },
             EngineRunEvent::Terminal { outcome } => {
-                self.live = false;
                 // Suspension and quota parking close an observation stream,
                 // but keep the durable run and its pending operator decision.
                 // Only final outcomes retire the queue.
@@ -878,37 +579,6 @@ impl RunStreamState {
                 }
             },
             _ => {},
-        }
-    }
-
-    /// A failed durable read does not end an independently attached subscription.
-    pub(crate) fn history_unconfirmed(&mut self, message: &str) {
-        self.record_observation_error(message, chrono::Local::now().format("%H:%M:%S").to_string());
-        self.observation_error_from_read = true;
-    }
-
-    pub(crate) fn history_unconfirmed_if_unchanged(&mut self, message: &str, revision: u64) {
-        if revision != u64::MAX
-            && self.observation_revision == revision
-            && (self.observation_error.is_none() || self.observation_error_from_read)
-        {
-            self.history_unconfirmed(message);
-        }
-    }
-
-    fn record_observation_error(&mut self, message: &str, time: String) {
-        let message = surge_core::recovery_observation::recovery_diagnostic(message);
-        self.observation_revision = self.observation_revision.saturating_add(1);
-        self.observation_error = Some(message.clone());
-        self.observation_error_from_read = false;
-        self.log.push_back(RunLogRow {
-            time,
-            kind: "STREAM",
-            tone: Tone::Err,
-            text: format!("Run outcome unconfirmed: {message}"),
-        });
-        while self.log.len() > MAX_LOG_ROWS {
-            self.log.pop_front();
         }
     }
 
@@ -1019,13 +689,6 @@ impl RunStreamState {
 /// One-line log description of a payload. `None` = don't log (noise).
 #[allow(clippy::too_many_lines)]
 fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
-    if let EventPayload::RunRecoveryRequired { diagnostic, .. } = payload {
-        return Some((
-            "RECOVERY",
-            Tone::Warn,
-            surge_core::recovery_observation::recovery_diagnostic(diagnostic),
-        ));
-    }
     use EventPayload as P;
     Some(match payload {
         P::RunStarted { initial_prompt, .. } => {
@@ -1210,196 +873,6 @@ mod tests {
 
     use super::*;
 
-    mod seed_fixture {
-        use surge_core as domain;
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../scripts/test-support/continuation_seed.rs"
-        ));
-    }
-    #[test]
-    fn semantic_marker_live_and_recorded_invalidate_before_prefix_or_ownership_mutation() {
-        for recorded in [false, true] {
-            let run = surge_core::RunId::new();
-            let (startup, manifest) = seed_fixture::startup(run);
-            let mut stream = RunStreamState::default();
-            stream.begin_display_history(run, None);
-            for event in &startup {
-                let wire = persisted(event.seq, event.payload.clone());
-                if recorded {
-                    stream.apply_recorded(&wire, event.timestamp.timestamp_millis());
-                } else {
-                    stream.apply(&wire);
-                }
-            }
-            stream.finish_display_history(3);
-            assert!(
-                stream.trusted_work_item().is_some(),
-                "ordinary positive ownership control"
-            );
-            let prefix = stream.prefix_evidence.clone();
-            let through = stream.display_seq;
-            let marker = EventPayload::ContinuationSeedBound {
-                manifest: Box::new(manifest),
-            };
-            if recorded {
-                stream.apply_recorded(&persisted(4, marker.clone()), 1_760_000_000_004);
-            } else {
-                stream.apply(&persisted(4, marker.clone()));
-            }
-            assert_eq!(
-                stream.prefix_evidence, prefix,
-                "unhydrated marker must not enter trusted prefix"
-            );
-            assert_eq!(stream.display_seq, through);
-            assert_eq!(stream.trusted_work_item(), None);
-            assert!(!stream.task_ownership_confirmed());
-            assert!(!stream.session_history_confirmed());
-            assert!(stream.pending.is_empty());
-            assert!(
-                stream
-                    .observation_error
-                    .as_deref()
-                    .is_some_and(|error| error.contains("semantic history unavailable"))
-            );
-            stream.apply(&persisted(5, marker));
-            assert!(
-                stream
-                    .observation_error
-                    .as_deref()
-                    .is_some_and(|error| error.contains("duplicate"))
-            );
-            stream.apply(&persisted(
-                6,
-                EventPayload::RunCompleted {
-                    terminal_node: node("end"),
-                },
-            ));
-            assert_eq!(
-                stream.display(),
-                surge_core::run_display::RunDisplayState::Done(
-                    surge_core::run_state::TerminalReason::Completed
-                ),
-                "true local terminal claim remains independently visible"
-            );
-            assert!(stream.pending.is_empty());
-            assert_eq!(stream.trusted_work_item(), None);
-        }
-    }
-    #[test]
-    fn semantic_marker_cold_candidate_publication_stays_unavailable_and_keeps_terminal_fact() {
-        let run = surge_core::RunId::new();
-        let (startup, manifest) = seed_fixture::startup(run);
-        let mut events = startup.clone();
-        events.push(seed_fixture::event(
-            run,
-            4,
-            EventPayload::ContinuationSeedBound {
-                manifest: Box::new(manifest),
-            },
-        ));
-        events.extend(seed_fixture::positive_tail(run, 4));
-        let rows = events
-            .iter()
-            .map(|event| surge_persistence::runs::ReadEvent {
-                seq: surge_persistence::runs::EventSeq(event.seq),
-                timestamp_ms: event.timestamp.timestamp_millis(),
-                kind: event.payload.discriminant_str().into(),
-                payload: surge_core::VersionedEventPayload::new(event.payload.clone()),
-            })
-            .collect::<Vec<_>>();
-        let candidate = RunStreamState::replay_candidate(run, &rows);
-        assert_eq!(
-            candidate.display(),
-            surge_core::run_display::RunDisplayState::Done(
-                surge_core::run_state::TerminalReason::Completed
-            )
-        );
-        assert!(!candidate.session_history_confirmed());
-        assert!(!candidate.task_ownership_confirmed());
-        assert!(candidate.pending.is_empty());
-        let mut published = RunStreamState::default();
-        published.begin_display_history(run, None);
-        for event in startup {
-            published.apply_recorded(
-                &persisted(event.seq, event.payload),
-                event.timestamp.timestamp_millis(),
-            );
-        }
-        published.finish_display_history(3);
-        published.publish_candidate(candidate).unwrap();
-        let (mut erased, _) = seed_fixture::startup(run);
-        erased.push(seed_fixture::event(
-            run,
-            4,
-            EventPayload::OutcomeReported {
-                node: NodeKey::try_from("verify").unwrap(),
-                outcome: surge_core::OutcomeKey::try_from("passed").unwrap(),
-                summary: "Different ordinary history at the same final sequence".into(),
-            },
-        ));
-        erased.extend(seed_fixture::positive_tail(run, 4));
-        let erased_rows: Vec<_> = erased
-            .into_iter()
-            .map(|event| surge_persistence::runs::ReadEvent {
-                seq: surge_persistence::runs::EventSeq(event.seq),
-                timestamp_ms: event.timestamp.timestamp_millis(),
-                kind: event.payload.discriminant_str().into(),
-                payload: surge_core::VersionedEventPayload::new(event.payload),
-            })
-            .collect();
-        let erased_candidate = RunStreamState::replay_candidate(run, &erased_rows);
-        assert!(
-            erased_candidate.session_history_confirmed(),
-            "ordinary candidate must be otherwise publishable"
-        );
-        assert!(
-            published.publish_candidate(erased_candidate).is_err(),
-            "same-length replacement must not erase a recorded seed refusal boundary"
-        );
-        assert_eq!(
-            published.display(),
-            surge_core::run_display::RunDisplayState::Done(
-                surge_core::run_state::TerminalReason::Completed
-            )
-        );
-        assert!(published.observation_error.is_some());
-        assert!(published.pending.is_empty());
-        assert_eq!(published.trusted_work_item(), None);
-    }
-    #[test]
-    fn semantic_marker_after_stage_is_diagnosed_as_late_before_next_decision() {
-        let run = surge_core::RunId::new();
-        let (startup, manifest) = seed_fixture::startup(run);
-        let mut stream = RunStreamState::default();
-        stream.begin_display_history(run, None);
-        for event in startup {
-            stream.apply(&persisted(event.seq, event.payload));
-        }
-        stream.apply(&persisted(
-            4,
-            EventPayload::StageEntered {
-                node: node("verify"),
-                attempt: 1,
-            },
-        ));
-        stream.apply(&persisted(
-            5,
-            EventPayload::ContinuationSeedBound {
-                manifest: Box::new(manifest),
-            },
-        ));
-        assert!(
-            stream
-                .observation_error
-                .as_deref()
-                .is_some_and(|error| error.contains("after executable"))
-        );
-        stream.apply(&persisted(6, human_input("verify", None)));
-        assert!(stream.pending.is_empty());
-        assert_eq!(stream.trusted_work_item(), None);
-    }
-
     #[test]
     fn display_replays_capacity_keeps_parked_terminal_and_invalidates_gaps() {
         use surge_core::run_display::{RunDisplayState, WaitingReason};
@@ -1488,8 +961,8 @@ mod tests {
         });
         assert_eq!(
             stream.display().label(),
-            "Run state is unconfirmed",
-            "disconnect does not confirm current capacity or crash state"
+            "Waiting for capacity",
+            "disconnect is not crash evidence"
         );
         stream.apply(&persisted(5, EventPayload::RunWokeFromPark {}));
         assert_eq!(stream.display(), RunDisplayState::Unknown);
@@ -1502,20 +975,7 @@ mod tests {
         assert_eq!(stream.display(), RunDisplayState::Unknown);
         stream.begin_display_history(id, Some(surge_core::RunStatus::Crashed));
         stream.invalidate_display();
-        assert!(stream.observation_error.is_some());
-        assert_eq!(
-            stream.display().label(),
-            "Run state is unconfirmed",
-            "a registry refresh does not resolve the earlier observation error"
-        );
-        let mut crash_only = RunStreamState::default();
-        crash_only.begin_display_history(id, Some(surge_core::RunStatus::Crashed));
-        crash_only.invalidate_display();
-        assert_eq!(
-            crash_only.display().label(),
-            "Recovery requires an operator",
-            "registry crash evidence remains visible independently of an observation error"
-        );
+        assert_eq!(stream.display().label(), "Recovery requires an operator");
         let mut untrusted = RunStreamState::default();
         untrusted.begin_display_history(id, None);
         untrusted.apply(&persisted(
@@ -1740,313 +1200,6 @@ mod tests {
             prompt: "answer me".into(),
             schema: None,
         }
-    }
-
-    #[test]
-    fn recovery_repair_buffered_history_overlap_preserves_complete_projection() {
-        let run = surge_core::RunId::new();
-        let events = [
-            EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: "/project".into(),
-                initial_prompt: "buffered overlap".into(),
-                config: surge_core::RunConfig {
-                    budget: Default::default(),
-                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                    auto_pr: false,
-                    mcp_servers: Vec::new(),
-                    bootstrap_edit_loop_cap: None,
-                },
-            },
-            EventPayload::StageEntered {
-                node: node("work"),
-                attempt: 1,
-            },
-            EventPayload::StageEntered {
-                node: node("next"),
-                attempt: 1,
-            },
-        ];
-        let mut stream = RunStreamState::default();
-        stream.begin_display_history(run, None);
-        for (index, payload) in events[..2].iter().enumerate() {
-            stream.apply_recorded(&persisted(index as u64 + 1, payload.clone()), 0);
-        }
-        stream.finish_display_history(2);
-        stream.live = true;
-        for (index, payload) in events.iter().enumerate() {
-            stream.apply(&persisted(index as u64 + 1, payload.clone()));
-        }
-        assert!(
-            stream.recovery().is_complete(),
-            "already hydrated broadcast envelopes are transport overlap, not corrupt journal ordering"
-        );
-        assert!(stream.observation_available_for(run));
-        assert_eq!(stream.display().label(), "Running");
-        assert_eq!(stream.last_seq, 3);
-        stream.begin_display_history(run, None);
-        for (index, payload) in events.iter().enumerate() {
-            stream.apply_recorded(&persisted(index as u64 + 1, payload.clone()), 0);
-        }
-        stream.finish_display_history(3);
-        assert!(
-            stream.recovery().is_complete(),
-            "full rehydration must not be deduplicated against retained transport last_seq"
-        );
-        assert!(stream.observation_available_for(run));
-        stream.apply(&persisted(
-            5,
-            EventPayload::StageEntered {
-                node: node("gap"),
-                attempt: 1,
-            },
-        ));
-        assert!(!stream.recovery().is_complete());
-        assert!(!stream.observation_available_for(run));
-        assert_eq!(stream.display().label(), "Run state is unconfirmed");
-    }
-
-    #[test]
-    fn recovery_observability_availability_requires_exact_run_error_free_complete_feed() {
-        let mut stream = trusted_stream();
-        let run = stream.display_run_id.unwrap();
-        stream.live = true;
-        assert!(stream.observation_available_for(run));
-        assert!(!stream.observation_available_for(surge_core::RunId::new()));
-        stream.apply(&EngineRunEvent::StreamError {
-            message: "failed read".into(),
-        });
-        assert!(!stream.observation_available_for(run));
-        stream.live = true;
-        assert!(
-            !stream.observation_available_for(run),
-            "an old error remains unconfirmed until actual reattachment"
-        );
-        stream.observation_error = None;
-        assert!(stream.observation_available_for(run));
-        stream.apply(&persisted(
-            3,
-            EventPayload::StageEntered {
-                node: node("work"),
-                attempt: 1,
-            },
-        ));
-        assert!(!stream.observation_available_for(run));
-    }
-
-    #[test]
-    fn recovery_observability_cold_progress_needs_attached_observation_for_working() {
-        let mut stream = trusted_stream();
-        assert_eq!(stream.display().label(), "Run state is unconfirmed");
-        stream.live = true;
-        assert_eq!(stream.display().label(), "Running");
-        stream.apply(&EngineRunEvent::StreamError {
-            message: "disconnected".into(),
-        });
-        assert_eq!(stream.display().label(), "Run state is unconfirmed");
-        assert!(!stream.live);
-    }
-
-    #[test]
-    fn recovery_observability_cold_and_gap_keep_bounded_literal_history() {
-        let mut stream = trusted_stream();
-        let diagnostic = format!(
-            "<tag>[link](https://example.test)\u{001b}{}",
-            "界".repeat(5000)
-        );
-        stream.apply(&persisted(
-            2,
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: diagnostic.clone(),
-            },
-        ));
-        stream.finish_display_history(2);
-        assert!(!stream.live);
-        assert_eq!(stream.display().label(), "Recovery requires an operator");
-        let row = stream.log.back().unwrap();
-        assert_eq!(row.kind, "RECOVERY");
-        assert!(row.text.starts_with("<tag>[link](https://example.test)�"));
-        assert!(row.text.ends_with("[diagnostic truncated]"));
-        assert!(row.text.len() <= surge_core::recovery_observation::RECOVERY_DIAGNOSTIC_BYTES);
-        assert_eq!(stream.recovery().latest().unwrap().diagnostic, diagnostic);
-        stream.apply(&persisted(
-            4,
-            EventPayload::StageEntered {
-                node: node("work"),
-                attempt: 1,
-            },
-        ));
-        assert_eq!(stream.display().label(), "Run state is unconfirmed");
-        assert!(stream.recovery().active().is_none());
-        assert_eq!(stream.recovery().latest().unwrap().diagnostic, diagnostic);
-    }
-
-    #[test]
-    fn recovery_observability_incremental_every_prefix_matches_shared_compiler() {
-        let run = surge_core::RunId::new();
-        let mut stream = RunStreamState::default();
-        stream.begin_display_history(run, None);
-        let payloads = [
-            EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: "/project".into(),
-                initial_prompt: "parity".into(),
-                config: surge_core::RunConfig {
-                    budget: Default::default(),
-                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                    auto_pr: false,
-                    mcp_servers: Vec::new(),
-                    bootstrap_edit_loop_cap: None,
-                },
-            },
-            EventPayload::RunRecoveryRequired {
-                control_generation: 2,
-                diagnostic: "first".into(),
-            },
-            EventPayload::RunContinued {
-                control_generation: 3,
-            },
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: "latest lower generation".into(),
-            },
-            EventPayload::StageEntered {
-                node: node("work"),
-                attempt: 1,
-            },
-            EventPayload::RunAborted {
-                reason: "stopped".into(),
-            },
-        ];
-        let mut events = Vec::new();
-        for (index, payload) in payloads.into_iter().enumerate() {
-            let event = surge_core::RunEvent {
-                run_id: run,
-                seq: index as u64 + 1,
-                timestamp: chrono::DateTime::UNIX_EPOCH,
-                payload,
-            };
-            stream.apply(&persisted(event.seq, event.payload.clone()));
-            events.push(event);
-            let compiled =
-                surge_core::task_execution::TaskExecutionView::compile(run, &events).unwrap();
-            assert_eq!(
-                stream.recovery(),
-                &compiled.recovery,
-                "prefix {}",
-                index + 1
-            );
-        }
-        let before = stream.recovery().latest().cloned();
-        stream.apply(&persisted(
-            2,
-            EventPayload::RunRecoveryRequired {
-                control_generation: 99,
-                diagnostic: "stale duplicate".into(),
-            },
-        ));
-        assert_eq!(stream.recovery().latest(), before.as_ref());
-        assert!(
-            stream.recovery().is_complete(),
-            "transport overlap does not invalidate a previously accepted prefix"
-        );
-        assert_eq!(
-            stream.recovery().latest().unwrap().diagnostic,
-            "latest lower generation"
-        );
-        assert!(stream.recovery().active().is_none());
-    }
-
-    #[test]
-    fn recovery_observability_pre_materialization_bound_owner_survives_transition() {
-        use surge_core::work_item::{WorkItemBinding, WorkItemContext, WorkItemRequirements};
-        let mut stream = trusted_stream();
-        let requirements = WorkItemRequirements::new("build".into(), vec!["works".into()]).unwrap();
-        let context = WorkItemContext::new(
-            WorkItemBinding {
-                item: "00000000000000000000000001".parse().unwrap(),
-                revision: 1,
-                requirements_hash: requirements.hash().unwrap(),
-                generation: 1,
-            },
-            requirements,
-        )
-        .unwrap();
-        stream.apply(&persisted(
-            2,
-            EventPayload::WorkItemAttemptBound { context },
-        ));
-        stream.apply(&persisted(
-            3,
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: "bound owner refused".into(),
-            },
-        ));
-        assert_eq!(stream.display().label(), "Recovery requires an operator");
-        let graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../../../examples/flow_terminal_only.toml")).unwrap();
-        stream.apply(&persisted(
-            4,
-            EventPayload::PipelineMaterialized {
-                graph: Box::new(graph),
-                graph_hash: surge_core::ContentHash::compute(b"graph"),
-            },
-        ));
-        stream.apply(&persisted(
-            5,
-            EventPayload::StageEntered {
-                node: node("end"),
-                attempt: 1,
-            },
-        ));
-        assert_eq!(
-            stream.display().label(),
-            "Recovery requires an operator",
-            "stage progress cannot bypass the bound owner's Continue fence"
-        );
-        stream.apply(&persisted(
-            6,
-            EventPayload::RunContinued {
-                control_generation: 1,
-            },
-        ));
-        assert_ne!(stream.display().label(), "Recovery requires an operator");
-    }
-
-    #[test]
-    fn recovery_observability_terminal_keeps_decision_and_literal_diagnostic() {
-        let mut stream = trusted_stream();
-        stream.live = true;
-        stream.apply(&persisted(2, human_input("review", Some("call-1"))));
-        stream.apply(&persisted(
-            3,
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: "conflicting durable gate occurrences".into(),
-            },
-        ));
-        stream.apply(&EngineRunEvent::Terminal {
-            outcome: surge_orchestrator::engine::handle::RunOutcome::RecoveryRequired {
-                control_generation: 0,
-                diagnostic: "conflicting durable gate occurrences".into(),
-            },
-        });
-        assert!(
-            !stream.live,
-            "an ended observation is not a live subscription"
-        );
-        assert_eq!(stream.pending.len(), 1);
-        let row = stream
-            .log
-            .iter()
-            .find(|row| row.kind == "RECOVERY")
-            .unwrap();
-        assert_eq!(row.text, "conflicting durable gate occurrences");
-        assert_eq!(stream.display().label(), "Recovery requires an operator");
     }
 
     #[test]

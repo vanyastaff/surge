@@ -109,14 +109,12 @@ async fn start_run_seeds_profile_catalog_artifact_when_registry_wired() {
                 assert_eq!(node.as_ref(), "profile_catalog_seed");
                 seeded_content = Some(std::fs::read_to_string(worktree.path().join(path)).unwrap());
             }
-            memory
-                .apply_event(&RunEvent {
-                    run_id,
-                    seq: event.seq.as_u64(),
-                    timestamp: chrono::Utc::now(),
-                    payload,
-                })
-                .unwrap();
+            memory.apply_event(&RunEvent {
+                run_id,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::Utc::now(),
+                payload,
+            });
         }
 
         let content = seeded_content.expect("profile_catalog ArtifactProduced event is missing");

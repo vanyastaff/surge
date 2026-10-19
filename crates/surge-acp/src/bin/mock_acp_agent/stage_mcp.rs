@@ -287,17 +287,11 @@ impl Peer {
                 format!("turn {index}: expected prompt {expected:?}; got {prompt}"),
             ));
         }
-        // Validate the entire bootstrap fixture payload before writing any file.
-        let authored = bootstrap_artifacts(turn)?;
         let mut artifacts = Vec::new();
         if let Some(content) = turn.get("split_artifact").and_then(Value::as_str) {
             std::fs::write("discovered-tasks.toml", content)
                 .map_err(|_| Error::internal_error())?;
             artifacts.push("discovered-tasks.toml");
-        }
-        for (name, content) in &authored {
-            std::fs::write(name, content).map_err(|_| Error::internal_error())?;
-            artifacts.push(name.as_str());
         }
         std::fs::write(cursor, (index + 1).to_string()).map_err(|_| Error::internal_error())?;
         let reply = self.call("report_stage_outcome", json!({
@@ -311,50 +305,5 @@ impl Peer {
             ));
         }
         Ok(())
-    }
-}
-
-fn bootstrap_artifacts(turn: &Value) -> Result<Vec<(String, String)>, Error> {
-    let Some(value) = turn.get("bootstrap_artifacts") else {
-        return Ok(Vec::new());
-    };
-    let entries = value.as_object().ok_or_else(Error::internal_error)?;
-    entries
-        .iter()
-        .map(|(name, content)| {
-            if !matches!(
-                name.as_str(),
-                "description.md" | "roadmap.md" | "roadmap.toml" | "flow.toml"
-            ) {
-                return Err(Error::new(-32000, "invalid bootstrap fixture filename"));
-            }
-            let content = content.as_str().ok_or_else(Error::internal_error)?;
-            Ok((name.clone(), content.to_owned()))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod bootstrap_artifact_tests {
-    use super::*;
-
-    #[test]
-    fn bootstrap_fixture_artifacts_are_allowlisted_before_any_write() {
-        assert!(bootstrap_artifacts(&json!({})).unwrap().is_empty());
-        assert_eq!(
-            bootstrap_artifacts(&json!({"bootstrap_artifacts":{"flow.toml":"flow"}})).unwrap(),
-            [("flow.toml".into(), "flow".into())]
-        );
-        for invalid in [
-            "/flow.toml",
-            "../flow.toml",
-            "nested/flow.toml",
-            "C:\\flow.toml",
-            "unexpected.md",
-        ] {
-            assert!(bootstrap_artifacts(&json!({"bootstrap_artifacts":{invalid:"bad"}})).is_err());
-        }
-        assert!(bootstrap_artifacts(&json!({"bootstrap_artifacts":{"flow.toml":null}})).is_err());
-        assert!(bootstrap_artifacts(&json!({"bootstrap_artifacts":[]})).is_err());
     }
 }

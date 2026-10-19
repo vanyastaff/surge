@@ -183,7 +183,7 @@ fn one_shot_fold(events: &[RunEvent]) -> RunState {
 }
 
 fn incremental_fold(events: &[RunEvent]) -> RunState {
-    let mut state = RunState::not_started();
+    let mut state = RunState::NotStarted;
     for ev in events {
         state = apply(state, ev).expect("apply must succeed for canonical sequence");
     }

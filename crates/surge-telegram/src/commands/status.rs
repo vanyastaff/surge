@@ -151,7 +151,7 @@ pub(crate) fn render_snapshot_for(run_id: &RunId, snap: &RunStatusSnapshot) -> S
     let outcome = escape_code(outcome);
     format!(
         "📊 *Run status* — `{run_id}`\n\n\
-         last recorded node: `{active}`\n\
+         active node: `{active}`\n\
          last outcome: `{outcome}` (attempt {attempt})\n\
          elapsed: {elapsed_s}\n\
          events: {events}\n\
@@ -168,16 +168,6 @@ fn escape_code(text: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-
-    #[test]
-    fn recovery_observability_snapshot_names_node_as_recorded_history() {
-        let mut snapshot = RunStatusSnapshot::empty(RunId::new());
-        snapshot.active_node = Some("last-stage".into());
-        let rendered = render_snapshot(&snapshot);
-        assert!(rendered.contains("last recorded node: `last-stage`"));
-        assert!(rendered.contains("Run state is unconfirmed"));
-        assert!(!rendered.contains("active node:"));
-    }
 
     #[test]
     fn status_command_and_card_explain_waits_with_identical_safe_text() {

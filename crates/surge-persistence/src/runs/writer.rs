@@ -214,16 +214,9 @@ async fn writer_loop(
         lease.namespace.clone(),
     )?;
     #[cfg(not(windows))]
-    let mut conn = super::connection::RetainedConnection::open_controlled(
+    let mut conn = Connection::open_with_flags(
         &cfg.events_db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        lease
-            .authority
-            .use_owner()
-            .as_ref()
-            .map(crate::runs::host_settlement::control::RunUseOwner::database)
-            .transpose()
-            .map_err(|error| WriterError::Io(std::io::Error::other(error.to_string())))?,
     )?;
     crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)?;
     let mut checkpoint_interval = tokio::time::interval(std::time::Duration::from_secs(
@@ -393,17 +386,16 @@ async fn handle_command(
 
                 if exists {
                     tracing::debug!(hash = %hash, "artifact dedup: skipping FS write");
-                    let row = tx.query_row(
-                        "SELECT path, name, inherited_provenance_json FROM artifacts WHERE id = ? LIMIT 1",
+                    let row: (String, String) = tx.query_row(
+                        "SELECT path, name FROM artifacts WHERE id = ? LIMIT 1",
                         params![hash.to_string()],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, super::provenance::read(row, 2)?)),
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                     )?;
                     tx.commit()?;
                     return Ok(ArtifactRecord {
                         id: hash,
                         produced_by_node: produced_by,
                         produced_at_seq,
-                        inherited_provenance: row.2,
                         name: row.1,
                         path: dir.join(row.0),
                         size_bytes: size,
@@ -437,7 +429,6 @@ async fn handle_command(
                     id: hash,
                     produced_by_node: produced_by,
                     produced_at_seq,
-                    inherited_provenance: None,
                     name,
                     path: target,
                     size_bytes: size,
@@ -467,7 +458,31 @@ async fn handle_command(
             let _ = reply.send(result);
         },
         WriterCommand::RebuildViews { reply } => {
-            let result = super::projection::rebuild_owned(conn);
+            let result = (|| -> Result<(), WriterError> {
+                let tx = conn.transaction()?;
+                views::rebuild(&tx)?;
+
+                // Replay all events through views::maintain.
+                let mut stmt =
+                    tx.prepare("SELECT seq, timestamp, payload FROM events ORDER BY seq")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        EventSeq(row.get::<_, i64>(0)? as u64),
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                })?;
+                let collected: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+                drop(stmt);
+
+                for (seq, ts, blob) in collected {
+                    let versioned: VersionedEventPayload = serde_json::from_slice(&blob)?;
+                    views::maintain(&tx, seq, ts, versioned.payload())?;
+                }
+
+                tx.commit()?;
+                Ok(())
+            })();
             let _ = reply.send(result);
         },
         WriterCommand::Shutdown { reply } => return Some(Stop::Shutdown(reply)),

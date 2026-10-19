@@ -116,43 +116,12 @@ async fn run_stage_steered(
     (Result<OutcomeKey, String>, Vec<EventPayload>),
     Arc<fixtures::mock_bridge::MockBridge>,
 ) {
-    run_stage_with_criteria(
-        dir,
-        cfg,
-        declared,
-        node_name,
-        outcome,
-        artifacts_produced,
-        active_task_id,
-        steers,
-        verification_report,
-        false,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_stage_with_criteria(
-    dir: &std::path::Path,
-    cfg: &AgentConfig,
-    declared: &[OutcomeDecl],
-    node_name: &str,
-    outcome: &str,
-    artifacts_produced: Vec<String>,
-    active_task_id: Option<surge_core::roadmap::RoadmapTaskId>,
-    steers: Vec<surge_orchestrator::engine::steer::QueuedSteer>,
-    verification_report: Option<surge_core::roadmap::VerificationReportArtifact>,
-    accepted_task_context: bool,
-) -> (
-    (Result<OutcomeKey, String>, Vec<EventPayload>),
-    Arc<fixtures::mock_bridge::MockBridge>,
-) {
     let storage_home = FixtureHome::new().unwrap();
     let fixture_result = {
         let storage = Storage::open(storage_home.path()).await.unwrap();
         let frames = if let Some(task) = active_task_id
             .as_ref()
-            .filter(|_| verification_report.is_some() || accepted_task_context)
+            .filter(|_| verification_report.is_some())
         {
             for args in [
                 vec!["init"],
@@ -218,11 +187,6 @@ async fn run_stage_with_criteria(
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        if accepted_task_context {
-            let custom = include_str!("../../surge-core/bundled/profiles/app-tester-1.0.toml")
-                .replace("id = \"app-tester\"", "id = \"evidence-runner\"");
-            std::fs::write(storage_home.path().join("evidence-runner.toml"), custom).unwrap();
-        }
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(storage_home.path().join("runs"));
 
@@ -246,20 +210,7 @@ async fn run_stage_with_criteria(
         });
 
         let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-        let mut memory = surge_core::run_state::RunMemory::default();
-        if accepted_task_context {
-            let observed = surge_git::fingerprint::observe(dir).unwrap().unwrap();
-            let checkpoint = surge_git::checkpoint::capture_record(dir, run_id, 999)
-                .unwrap()
-                .unwrap();
-            memory.verification.subject =
-                Some(surge_core::verification_evidence::VerificationSubject {
-                    repository: observed.repository,
-                    worktree: observed.worktree,
-                    tree: observed.tree,
-                    checkpoint: checkpoint.commit,
-                });
-        }
+        let memory = surge_core::run_state::RunMemory::default();
         let node = NodeKey::try_from(node_name).unwrap();
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
@@ -293,16 +244,10 @@ async fn run_stage_with_criteria(
                 mcp_servers: Vec::new(),
                 tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
                 output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-                profile_registry: if accepted_task_context
-                    || cfg.profile.as_str() == "verifier@2.0"
-                    || cfg.profile.as_str() == "app-tester@1.0"
-                {
+                profile_registry: if cfg.profile.as_str() == "verifier@2.0" {
                     Some(Arc::new(
                         surge_orchestrator::profile_loader::ProfileRegistry::new(
-                            surge_orchestrator::profile_loader::DiskProfileSet::scan(
-                                storage_home.path(),
-                            )
-                            .unwrap(),
+                            surge_orchestrator::profile_loader::DiskProfileSet::empty(),
                         ),
                     ))
                 } else {
@@ -330,9 +275,6 @@ async fn run_stage_with_criteria(
             .unwrap();
         let payloads: Vec<EventPayload> =
             events.iter().map(|e| e.payload.payload().clone()).collect();
-        if accepted_task_context {
-            assert_captured_artifact_identity(&payloads, dir);
-        }
         writer.close().await.unwrap();
 
         if result.is_err() {
@@ -345,24 +287,6 @@ async fn run_stage_with_criteria(
     };
     storage_home.close().unwrap();
     fixture_result
-}
-
-fn assert_captured_artifact_identity(payloads: &[EventPayload], dir: &std::path::Path) {
-    for payload in payloads {
-        if let EventPayload::ArtifactProduced {
-            artifact,
-            path,
-            source_path,
-            ..
-        } = payload
-        {
-            let bytes = std::fs::read(path).expect("captured blob survives until owner cleanup");
-            assert_eq!(*artifact, surge_core::ContentHash::compute(&bytes));
-            if let Some(source) = source_path {
-                assert_eq!(bytes, std::fs::read(dir.join(source)).unwrap());
-            }
-        }
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -982,307 +906,4 @@ async fn generic_bundled_failed_audit_routes_without_task_proof() {
             .iter()
             .any(|payload| matches!(payload, EventPayload::TaskVerified { .. }))
     );
-}
-
-/// Inspect the actual SendPrompt text, with accepted loop criteria and a
-/// remembered source-bound subject, rather than a disconnected renderer.
-async fn assert_task_prompt_contract(profile: &str) {
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = generic_verifier_config();
-    cfg.profile = profile.parse().unwrap();
-    cfg.sandbox_override = None;
-    let verifies = profile == "verifier@2.0";
-    let declared = [outcome_decl(
-        if verifies {
-            "passed"
-        } else if profile == "implementer@2.0" {
-            "implemented"
-        } else {
-            "cannot_run"
-        },
-        if verifies {
-            LedgerEffect::Verified
-        } else {
-            LedgerEffect::None
-        },
-    )];
-    let ((_, payloads), mock) = run_stage_with_criteria(
-        dir.path(),
-        &cfg,
-        &declared,
-        "evidence",
-        declared[0].id.as_str(),
-        vec![],
-        Some("m1-t1".into()),
-        vec![],
-        None,
-        true,
-    )
-    .await;
-    let criteria = payloads
-        .iter()
-        .find_map(|event| match event {
-            EventPayload::VerificationCriteriaAccepted {
-                criteria: Some(criteria),
-                ..
-            } => Some(criteria),
-            _ => None,
-        })
-        .expect("real task criteria must be accepted");
-    assert!(!criteria.required.is_empty());
-    let prompt = mock.last_prompt().await.expect("actual SessionSendPrompt");
-    for id in &criteria.required {
-        assert!(
-            prompt.contains(id.as_str()),
-            "criterion {id:?} absent: {prompt}"
-        );
-    }
-    assert!(prompt.contains("Acceptance works"));
-    if verifies {
-        assert!(prompt.contains("do not write a report file"), "{prompt}");
-        assert!(prompt.contains("inline"), "{prompt}");
-        assert!(prompt.contains("or supply binding"), "{prompt}");
-        assert!(!prompt.contains("outcome=passed"), "{prompt}");
-        assert!(prompt.contains("failed outcome"), "{prompt}");
-    } else {
-        assert!(
-            !prompt.contains("do not write a report file"),
-            "{profile}: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Submit verification_report inline"),
-            "{profile}: {prompt}"
-        );
-        assert!(!prompt.contains("outcome=passed"), "{profile}: {prompt}");
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tester_task_prompt_follows_declared_evidence_contract() {
-    assert_task_prompt_contract("app-tester@1.0").await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn implementer_task_prompt_follows_declared_evidence_contract() {
-    assert_task_prompt_contract("implementer@2.0").await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn custom_task_prompt_follows_declared_evidence_contract() {
-    assert_task_prompt_contract("evidence-runner@1.0").await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn verifier_task_prompt_follows_declared_evidence_contract() {
-    assert_task_prompt_contract("verifier@2.0").await;
-}
-
-fn tester_config() -> AgentConfig {
-    let mut cfg = generic_verifier_config();
-    cfg.profile = "app-tester@1.0".parse().unwrap();
-    cfg.sandbox_override = None;
-    cfg
-}
-
-fn application_report(outcome: &str) -> surge_core::roadmap::VerificationReportArtifact {
-    toml::from_str(&format!("schema_version=1\ntask_id='m1-t1'\noutcome='{outcome}'\nsummary='Observed application behaviour'\n[[checks]]\ncommand='app --acceptance'\nresult='{outcome}'\ncovers=['criterion:1']\n")).unwrap()
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tester_captures_valid_passed_and_failed_files_without_task_verification() {
-    for outcome in ["passed", "failed"] {
-        let dir = tempfile::tempdir().unwrap();
-        let bytes = toml::to_string(&application_report(outcome)).unwrap();
-        std::fs::write(dir.path().join("verification-report.toml"), &bytes).unwrap();
-        let ((result, payloads), _) = run_stage_with_criteria(
-            dir.path(),
-            &tester_config(),
-            &[outcome_decl(outcome, LedgerEffect::None)],
-            "app_test",
-            outcome,
-            vec!["verification-report.toml".into()],
-            Some("m1-t1".into()),
-            vec![],
-            None,
-            true,
-        )
-        .await;
-        assert_eq!(result.unwrap().as_str(), outcome);
-        assert!(
-            !payloads
-                .iter()
-                .any(|event| matches!(event, EventPayload::TaskVerified { .. }))
-        );
-        let captured: Vec<_> = payloads
-            .iter()
-            .filter_map(|event| match event {
-                EventPayload::ArtifactProduced {
-                    artifact,
-                    name,
-                    source_path,
-                    ..
-                } => Some((artifact, name, source_path)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(captured.len(), 1);
-        assert_eq!(
-            *captured[0].0,
-            surge_core::ContentHash::compute(bytes.as_bytes())
-        );
-        assert_eq!(captured[0].1, "verification-report");
-        assert_eq!(
-            captured[0].2.as_deref(),
-            Some(std::path::Path::new("verification-report.toml"))
-        );
-        let stored: surge_core::roadmap::VerificationReportArtifact = toml::from_str(
-            &std::fs::read_to_string(dir.path().join("verification-report.toml")).unwrap(),
-        )
-        .unwrap();
-        assert!(stored.binding.is_none());
-        assert_eq!(stored.task_id, "m1-t1");
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tester_rejects_inline_only_missing_malformed_forged_and_mixed_skipped_files() {
-    let passed = application_report("passed");
-    let mut forged = passed.clone();
-    forged.binding = Some(surge_core::verification_evidence::VerificationBinding {
-        subject: surge_core::verification_evidence::VerificationSubject {
-            repository: "/repo/.git".into(),
-            worktree: "/repo".into(),
-            tree: "a".repeat(40),
-            checkpoint: "b".repeat(40),
-        },
-        criteria: surge_core::verification_evidence::VerificationCriteria {
-            hash: surge_core::ContentHash::compute(b"forged"),
-            epoch: surge_core::id::StageGenerationId::new(),
-            required: vec![],
-            definitions: vec![],
-        },
-    });
-    let mut mixed = passed.clone();
-    let mut skipped = mixed.checks[0].clone();
-    skipped.command = "future task".into();
-    skipped.result = surge_core::roadmap::VerificationCheckResult::Skipped;
-    mixed.checks.push(skipped);
-    for (label, file, inline, declared_file) in [
-        ("inline-only", None, Some(passed.clone()), false),
-        ("missing", None, None, true),
-        (
-            "unlisted",
-            Some(toml::to_string(&passed).unwrap()),
-            None,
-            false,
-        ),
-        ("malformed", Some("not a report".into()), None, true),
-        (
-            "forged",
-            Some(toml::to_string(&forged).unwrap()),
-            None,
-            true,
-        ),
-        (
-            "mixed-skipped",
-            Some(toml::to_string(&mixed).unwrap()),
-            None,
-            true,
-        ),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        if let Some(file) = file {
-            std::fs::write(dir.path().join("verification-report.toml"), file).unwrap();
-        }
-        let artifacts = if declared_file {
-            vec!["verification-report.toml".into()]
-        } else {
-            vec![]
-        };
-        let ((result, payloads), _) = run_stage_with_criteria(
-            dir.path(),
-            &tester_config(),
-            &[outcome_decl("passed", LedgerEffect::None)],
-            "app_test",
-            "passed",
-            artifacts,
-            Some("m1-t1".into()),
-            vec![],
-            inline,
-            true,
-        )
-        .await;
-        assert!(result.is_err(), "{label}: {result:?}");
-        assert!(payloads.iter().any(|event| matches!(event,
-            EventPayload::OutcomeRejectedByHook { hook_id, .. } if hook_id == "profile-artifact-contract:verification-report")), "{label}: {payloads:?}");
-        assert!(
-            !payloads.iter().any(|event| matches!(
-                event,
-                EventPayload::TaskVerified { .. } | EventPayload::ArtifactProduced { .. }
-            )),
-            "{label}"
-        );
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tester_cannot_run_requires_no_report_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let ((result, payloads), mock) = run_stage_with_criteria(
-        dir.path(),
-        &tester_config(),
-        &[outcome_decl("cannot_run", LedgerEffect::None)],
-        "app_test",
-        "cannot_run",
-        vec![],
-        Some("m1-t1".into()),
-        vec![],
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(result.unwrap().as_str(), "cannot_run");
-    assert!(!dir.path().join("verification-report.toml").exists());
-    assert!(!payloads.iter().any(|event| matches!(
-        event,
-        EventPayload::TaskVerified { .. } | EventPayload::ArtifactProduced { .. }
-    )));
-    assert!(
-        mock.last_prompt()
-            .await
-            .unwrap()
-            .contains("no report file is required")
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sealed_task_failure_remains_inline_without_forced_success_or_agent_binding() {
-    let dir = tempfile::tempdir().unwrap();
-    let declared = [
-        outcome_decl("passed", LedgerEffect::Verified),
-        outcome_decl("failed", LedgerEffect::FailedVerification),
-    ];
-    let ((result, payloads), mock) = run_stage_with_criteria(
-        dir.path(),
-        &generic_verifier_config(),
-        &declared,
-        "verify",
-        "failed",
-        vec![],
-        Some("m1-t1".into()),
-        vec![],
-        Some(application_report("failed")),
-        true,
-    )
-    .await;
-    assert_eq!(result.unwrap().as_str(), "failed");
-    let prompt = mock.last_prompt().await.unwrap();
-    assert!(prompt.contains("criterion:1"));
-    assert!(prompt.contains("do not write a report file or supply binding"));
-    assert!(!prompt.contains("outcome=passed"));
-    assert!(!dir.path().join("verification-report.toml").exists());
-    assert!(
-        !payloads
-            .iter()
-            .any(|event| matches!(event, EventPayload::TaskVerified { .. }))
-    );
-    assert!(payloads.iter().any(|event| matches!(event,
-        EventPayload::ArtifactProduced { name, source_path: None, .. } if name == "verification-report")));
 }

@@ -1,9 +1,5 @@
 //! Original-owner opening barriers. An opening is audit evidence, never successful settlement.
-pub(crate) mod control;
-pub(crate) mod deletion;
 mod framing;
-#[cfg(test)]
-mod opening_tests;
 #[cfg(not(windows))]
 mod unix;
 #[cfg(windows)]
@@ -66,13 +62,9 @@ struct PreparedOpening {
     lock: FileLock,
     route: Arc<RunRoute>,
     opening: Opening,
-    control: Option<Arc<control::RunUseOwner>>,
 }
 impl PreparedOpening {
     fn verify(&self) -> Result<(), OpenError> {
-        if let Some(control) = &self.control {
-            control.verify()?;
-        }
         self.route.verify()?;
         self.lock.identity()?;
         Ok(())
@@ -87,7 +79,6 @@ impl PreparedOpening {
                 route: self.route,
                 database,
                 _opening: self.opening,
-                control: self.control,
             },
         })
     }
@@ -97,16 +88,9 @@ pub(crate) struct HeldOpening {
     route: Arc<RunRoute>,
     database: Database,
     _opening: Opening,
-    control: Option<Arc<control::RunUseOwner>>,
 }
 impl HeldOpening {
-    pub(crate) fn use_owner(&self) -> Option<Arc<control::RunUseOwner>> {
-        self.control.clone()
-    }
     pub(crate) fn verify(&self) -> Result<(), OpenError> {
-        if let Some(control) = &self.control {
-            control.verify()?;
-        }
         self.route.verify()?;
         #[cfg(not(windows))]
         self.route.verify_database(&self.database)?;
@@ -140,15 +124,14 @@ fn record(
     database: Option<Vec<u8>>,
 ) -> Result<Opening, StorageError> {
     admit(tx, run)?;
-    control::record_legacy_opening(tx, run).map_err(storage_error)?;
     let previous:Option<(String,Option<String>,Option<String>)>=tx.query_row(
         "SELECT opening_id,unresolved_engine_opening,last_confirmed_engine_receipt FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",
         [run.to_string()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
     let (predecessor, unresolved, confirmed) =
         previous.map_or((None, None, None), |(id, u, c)| (Some(id), u, c));
     let id = ulid::Ulid::new().to_string();
-    tx.execute("INSERT INTO run_host_openings(opening_id,run_id,owner_mode,state,predecessor,identity_version,route_identity,database_identity,unresolved_engine_opening,last_confirmed_engine_receipt,coordination_origin) VALUES(?,?,'JournalOnly','Opening',?,1,?,?,?,?,?)",
-        params![id,run.to_string(),predecessor,route_identity,database,unresolved,confirmed,run.to_string()])?;
+    tx.execute("INSERT INTO run_host_openings(opening_id,run_id,owner_mode,state,predecessor,identity_version,route_identity,database_identity,unresolved_engine_opening,last_confirmed_engine_receipt) VALUES(?,?,'JournalOnly','Opening',?,1,?,?,?,?)",
+        params![id,run.to_string(),predecessor,route_identity,database,unresolved,confirmed])?;
     Ok(Opening {
         id,
         epoch: tx.last_insert_rowid(),
@@ -180,21 +163,12 @@ fn token(writers: &ActiveWriters, run: RunId) -> Result<Arc<WriterToken>, OpenEr
         .map_err(|_| OpenError::WriterOwnershipPoisoned)?
         .ok_or(OpenError::WriterAlreadyHeld { run_id: run })
 }
-type ExistingParts = (
-    Arc<WriterToken>,
-    FileLock,
-    Arc<RunRoute>,
-    Database,
-    Option<Arc<control::RunUseOwner>>,
-);
 fn existing_parts(
     home: &Path,
     writers: &ActiveWriters,
     run: RunId,
-    pool: &r2d2::Pool<SqliteConnectionManager>,
-) -> Result<ExistingParts, OpenError> {
+) -> Result<(Arc<WriterToken>, FileLock, Arc<RunRoute>, Database), OpenError> {
     let token = token(writers, run)?;
-    let control = control::acquire(home, pool, run, false)?;
     let root = RunRoot::existing(home)?;
     let run_path = home.join("runs").join(run.to_string());
     let database_path = run_path.join("events.sqlite");
@@ -225,15 +199,8 @@ fn existing_parts(
     };
     #[cfg(windows)]
     let route = Arc::new(root.run(run, false).map_err(OpenError::from)?);
-    #[cfg(unix)]
-    let database = if control.is_some() {
-        route.controlled_database(false)?
-    } else {
-        route.database(false)?
-    };
-    #[cfg(windows)]
     let database = route.database(false)?;
-    Ok((token, lock, route, database, control))
+    Ok((token, lock, route, database))
 }
 /// Called by the already-owned synchronous informational delivery worker; no journal SQL precedes it.
 pub(crate) fn open_existing_sync(
@@ -246,7 +213,7 @@ pub(crate) fn open_existing_sync(
         let connection = pool.get().map_err(|e| OpenError::Pool(e.to_string()))?;
         admit(&connection, run).map_err(opening_error)?;
     }
-    let (token, lock, route, database, control) = existing_parts(home, writers, run, pool)?;
+    let (token, lock, route, database) = existing_parts(home, writers, run)?;
     let identities = route_identity(&route, &lock)?;
     let database_identity = database.identity()?;
     let mut connection = pool.get().map_err(|e| OpenError::Pool(e.to_string()))?;
@@ -260,7 +227,6 @@ pub(crate) fn open_existing_sync(
         lock,
         route,
         opening,
-        control,
     }
     .bind(database))
 }
@@ -271,15 +237,17 @@ impl Storage {
         run: RunId,
     ) -> Result<RunCreationReservation, OpenError> {
         let token = token(&self.active_writers, run)?;
-        let storage = self.clone();
-        let control = tokio::task::spawn_blocking(move || control::establish(&storage, run))
-            .await
-            .map_err(|error| OpenError::Pool(format!("control establishment worker: {error}")))??;
         let root = RunRoot::existing(&self.home)?;
         root.verify()?;
-        // Durable origin is bound, and shared use excludes physical deletion here.
-        control.verify_reconnect()?;
-        let route = Arc::new(root.run(run, true)?);
+        // The actual fenced worker owns token and route even when its caller is dropped.
+        let (token, route) = registry_exec::write(&self.registry_pool, move |tx| {
+            admit(tx, run)?;
+            root.verify().map_err(storage_error)?;
+            let route = root.run(run, true).map_err(storage_error)?;
+            Ok((token, Arc::new(route)))
+        })
+        .await
+        .map_err(opening_error)?;
         let lock = FileLock::try_acquire_existing(&self.lock_path(&run), run)?;
         let identity = route_identity(&route, &lock)?;
         let prepared = registry_exec::write(&self.registry_pool, move |tx| {
@@ -291,7 +259,6 @@ impl Storage {
                 lock,
                 route,
                 opening,
-                control: Some(control),
             })
         })
         .await
@@ -311,8 +278,7 @@ impl Storage {
         })
         .await
         .map_err(opening_error)?;
-        let (token, lock, route, database, control) =
-            existing_parts(&self.home, &self.active_writers, run, &self.registry_pool)?;
+        let (token, lock, route, database) = existing_parts(&self.home, &self.active_writers, run)?;
         let identity = route_identity(&route, &lock)?;
         let db_identity = database.identity()?;
         registry_exec::write(&self.registry_pool, move |tx| {
@@ -325,7 +291,6 @@ impl Storage {
                 lock,
                 route,
                 opening,
-                control,
             }
             .bind(database))
         })
@@ -342,18 +307,12 @@ impl Storage {
             ));
         }
         let RunCreationReservation { run, prepared, .. } = reservation;
-        prepared.verify()?;
-        #[cfg(unix)]
-        let database = prepared.route.controlled_database(true)?;
-        #[cfg(windows)]
-        let database = prepared.route.database(true)?;
-        #[cfg(test)]
-        opening_tests::pause(run).await;
         registry_exec::write(&self.registry_pool,move|tx|{
             admit(tx,run)?;
             prepared.verify().map_err(storage_error)?;
             let latest:Option<String>=tx.query_row("SELECT opening_id FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",[run.to_string()],|row|row.get(0)).optional()?;
             if latest.as_deref()!=Some(prepared.opening.id.as_str()){return Err(StorageError::OperationRejected("reserved opening superseded".into()));}
+            let database=prepared.route.database(true).map_err(storage_error)?;
             let identity=database.identity().map_err(storage_error)?;
             let changed=tx.execute("UPDATE run_host_openings SET database_identity=? WHERE opening_id=? AND epoch=? AND database_identity IS NULL AND state='Opening'",params![identity,prepared.opening.id,prepared.opening.epoch])?;
             if changed!=1 {return Err(StorageError::OperationRejected("reserved database identity already bound".into()));}
@@ -377,16 +336,8 @@ pub(crate) fn verify_empty_initialized(
         lease.namespace.clone(),
     )?;
     #[cfg(not(windows))]
-    let mut connection = super::connection::RetainedConnection::open_controlled(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        lease
-            .authority
-            .use_owner()
-            .as_ref()
-            .map(crate::runs::host_settlement::control::RunUseOwner::database)
-            .transpose()?,
-    )?;
+    let mut connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     framing::snapshot(&mut connection, run, &identity, 0).map_err(opening_error)?;
     drop(connection);
     lease.verify()

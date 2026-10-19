@@ -403,7 +403,6 @@ pub fn maintain(
                     accepted_by_human = CASE WHEN excluded.status = 'completed'
                                              THEN accepted_by_human ELSE 0 END,
                     last_authority_node = excluded.last_authority_node,
-                    inherited_provenance_json = NULL,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![
                     task_id.as_str(),
@@ -447,7 +446,6 @@ pub fn maintain(
                     accepted_by_human = CASE WHEN excluded.verified = 1 THEN 0
                                              ELSE accepted_by_human END,
                     last_authority_node = excluded.last_authority_node,
-                    inherited_provenance_json = NULL,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![task_id.as_str(), verified, node.as_str(), seq.0 as i64],
             )?;
@@ -467,7 +465,6 @@ pub fn maintain(
                     verified = 0,
                     accepted_by_human = 1,
                     last_authority_node = excluded.last_authority_node,
-                    inherited_provenance_json = NULL,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![task_id.as_str(), node.as_str(), seq.0 as i64],
             )?;
@@ -482,7 +479,6 @@ pub fn maintain(
                  VALUES (?, 'pending', 0, 1, ?)
                  ON CONFLICT(task_id) DO UPDATE SET
                     requirement_revised = 1,
-                    inherited_provenance_json = NULL,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![task_id.as_str(), seq.0 as i64],
             )?;
@@ -533,7 +529,6 @@ pub fn maintain(
         | StageInputsResolved { .. }
         | EventPayload::WorkItemAttemptBound { .. }
         | EventPayload::OwnedFlowInputsBound { .. }
-        | EventPayload::ContinuationSeedBound { .. }
         | EventPayload::OwnedFlowWakeRefused { .. }
         | EventPayload::ExecutionWriterIntent { .. }
         | EventPayload::ExecutionWriterEstablished { .. }
@@ -782,86 +777,6 @@ mod tests {
 
     fn o(s: &str) -> OutcomeKey {
         OutcomeKey::from_str(s).unwrap()
-    }
-
-    #[test]
-    fn actual_migrated_views_keep_source_origin_separate_across_close_reopen_and_local_rebuild() {
-        use surge_core::execution_recovery::semantic_position::{
-            ContinuationSeedId, InheritedProvenance, SourceEventRef,
-        };
-        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let db = home.path().join("provenance-view-test.db");
-        let origin = InheritedProvenance::new(
-            ContinuationSeedId::new(ContentHash::compute(b"view-seed")),
-            SourceEventRef::new(surge_core::RunId::new(), 87).unwrap(),
-        );
-        let encoded = serde_json::to_string(&origin).unwrap();
-        let hash = ContentHash::compute(b"roadmap");
-        {
-            let mut conn = Connection::open(&db).unwrap();
-            apply_migrations(
-                &mut conn,
-                PER_RUN_MIGRATIONS,
-                &MockClock::new(1_700_000_000_000),
-            )
-            .unwrap();
-            conn.execute("INSERT INTO artifacts(id,produced_by_node,produced_at_seq,name,path,size_bytes,content_hash,inherited_provenance_json) VALUES (?, 'planning', 0, 'roadmap.toml', 'roadmap.toml', 7, ?, ?)", rusqlite::params![hash.to_string(), hash.to_string(), encoded]).unwrap();
-            conn.execute("INSERT INTO task_ledger(task_id,status,verified,updated_seq,inherited_provenance_json) VALUES ('m1-t1','pending',0,0,?)", [&encoded]).unwrap();
-        }
-        {
-            let mut conn = Connection::open(&db).unwrap();
-            let artifacts = crate::runs::reader_views::artifacts(&conn).unwrap();
-            assert_eq!(artifacts[0].produced_at_seq, EventSeq(0));
-            assert_eq!(artifacts[0].inherited_provenance, Some(origin));
-            let rows = crate::runs::reader_views::task_ledger(&conn).unwrap();
-            assert_eq!(rows[0].updated_seq, EventSeq(0));
-            assert_eq!(rows[0].inherited_provenance, Some(origin));
-            let stored: (u64, String) = conn.query_row("SELECT updated_seq,inherited_provenance_json FROM task_ledger WHERE task_id='m1-t1'", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
-            assert_eq!(stored, (0, encoded.clone()));
-            let tx = conn.transaction().unwrap();
-            maintain(
-                &tx,
-                EventSeq(5),
-                5,
-                &EventPayload::RequirementRevised {
-                    node: n("build"),
-                    task: Some("m1-t1".into()),
-                    text: "new local requirement".into(),
-                },
-            )
-            .unwrap();
-            tx.commit().unwrap();
-            assert_eq!(
-                crate::runs::reader_views::task_ledger(&conn).unwrap()[0].inherited_provenance,
-                None
-            );
-            conn.execute("UPDATE artifacts SET inherited_provenance_json='{}'", [])
-                .unwrap();
-            assert!(crate::runs::reader_views::artifacts(&conn).is_err());
-            conn.execute("UPDATE task_ledger SET inherited_provenance_json='{}'", [])
-                .unwrap();
-            assert!(crate::runs::reader_views::task_ledger(&conn).is_err());
-            let tx = conn.transaction().unwrap();
-            rebuild(&tx).unwrap();
-            maintain(
-                &tx,
-                EventSeq(5),
-                5,
-                &EventPayload::ArtifactProduced {
-                    node: n("planning"),
-                    artifact: hash,
-                    name: "roadmap.toml".into(),
-                    path: "roadmap.toml".into(),
-                    source_path: None,
-                },
-            )
-            .unwrap();
-            tx.commit().unwrap();
-            let rebuilt = crate::runs::reader_views::artifacts(&conn).unwrap();
-            assert_eq!(rebuilt[0].produced_at_seq, EventSeq(5));
-            assert_eq!(rebuilt[0].inherited_provenance, None);
-        }
-        home.close().unwrap();
     }
 
     #[test]

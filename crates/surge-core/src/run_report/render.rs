@@ -106,12 +106,6 @@ pub fn render_markdown(report: &RunReport) -> String {
         "> Evidence freshness: {} (journal verdicts describe their recorded revision).\n\n",
         report.freshness.label()
     ));
-    if let super::SemanticHistory::Unavailable { reason } = &report.semantic_history {
-        out.push_str(&format!(
-            "**Semantic history unavailable:** {}\n\n",
-            escape_markdown(reason)
-        ));
-    }
     if report.evidence_backed == Some(false) {
         out.push_str(&format!("> {UNVERIFIED_SUCCESS_BANNER}\n\n"));
     }
@@ -487,9 +481,7 @@ fn node_status_label(status: &NodeStatus) -> String {
                 ""
             }
         ),
-        NodeStatus::InProgress => {
-            "in progress (last recorded lifecycle; current execution unconfirmed)".to_string()
-        },
+        NodeStatus::InProgress => "in progress".to_string(),
     }
 }
 
@@ -606,17 +598,6 @@ pub fn render_html(report: &RunReport) -> String {
     body.push_str(&render_header_section(&report.header));
 
     let (status_class, status_text) = match &report.completion {
-        RunCompletion::Completed { terminal_node }
-            if matches!(
-                report.semantic_history,
-                super::SemanticHistory::Unavailable { .. }
-            ) =>
-        {
-            (
-                "warn",
-                format!("Completed at {terminal_node} — semantic history unavailable"),
-            )
-        },
         // Spec §10/R30: a `Completed` run with no evidence-backed verdict
         // renders with the `warn` class and an explicit label, not the same
         // green `ok` a verified completion gets — `report.evidence_backed`
@@ -671,12 +652,6 @@ pub fn render_html(report: &RunReport) -> String {
         "<p>Evidence freshness: {}. Journal verdicts describe their recorded revision.</p>",
         escape_html(report.freshness.label())
     ));
-    if let super::SemanticHistory::Unavailable { reason } = &report.semantic_history {
-        body.push_str(&format!(
-            "<p class=\"warn\"><strong>Semantic history unavailable:</strong> {}</p>",
-            escape_html(reason)
-        ));
-    }
     if report.evidence_backed == Some(false) {
         body.push_str(&format!(
             "<p class=\"warn\">{}</p>\n",
@@ -820,10 +795,7 @@ fn render_nodes_section(report: &RunReport) -> String {
                     }
                 ),
             ),
-            NodeStatus::InProgress => (
-                "warn",
-                "in progress (last recorded lifecycle; current execution unconfirmed)".to_string(),
-            ),
+            NodeStatus::InProgress => ("warn", "in progress".to_string()),
         };
         rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td class=\"{class}\">{}</td></tr>\n",
@@ -1125,72 +1097,11 @@ fn stage_description(stage: &crate::task_execution::StageExecution) -> String {
         }
     )
 }
-fn recovery_heading(view: &crate::task_execution::TaskExecutionView) -> &'static str {
-    if !view.recovery.is_complete() {
-        "Recorded recovery problem; current state unconfirmed"
-    } else if view.terminal.is_some() || view.recovery.active().is_none() {
-        "Historical recovery problem"
-    } else {
-        "Recovery requires operator review"
-    }
-}
-fn recovery_coverage(observation: &crate::recovery_observation::RecoveryObservation) -> String {
-    use crate::recovery_observation::RecoveryObservation;
-    match observation {
-        RecoveryObservation::NotLoaded => {
-            "Recovery observation not loaded; current state unconfirmed.".into()
-        },
-        RecoveryObservation::CompletePrefix { through, .. } => format!(
-            "Supplied contiguous prefix through sequence {through}; current observation and cleanup are not established by this report."
-        ),
-        RecoveryObservation::PartialPrefix { through, .. } => format!(
-            "Partial supplied prefix (through {through:?}); current state and cleanup are unconfirmed."
-        ),
-    }
-}
-fn recovery_markdown(view: &crate::task_execution::TaskExecutionView) -> String {
-    let coverage = recovery_coverage(&view.recovery);
-    let Some(record) = view.recovery.latest() else {
-        return format!("{coverage}\n\n");
-    };
-    let diagnostic = crate::recovery_observation::recovery_diagnostic(&record.diagnostic);
-    // A longer fence than every possible authored delimiter keeps links, HTML and
-    // headings literal, including diagnostics that contain their own fenced blocks.
-    let longest = diagnostic
-        .split(|character| character != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
-    format!(
-        "### {}\n\nRecorded event sequence {}; control generation {}.\n\n{coverage}\n\n{fence}text\n{diagnostic}\n{fence}\n\n",
-        recovery_heading(view),
-        record.seq,
-        record.control_generation
-    )
-}
-fn recovery_html(view: &crate::task_execution::TaskExecutionView) -> String {
-    let coverage = escape_html(&recovery_coverage(&view.recovery));
-    let Some(record) = view.recovery.latest() else {
-        return format!("<p>{coverage}</p>");
-    };
-    format!(
-        "<h3>{}</h3><p>Recorded event sequence {}; control generation {}.</p><p>{coverage}</p><pre>{}</pre>",
-        recovery_heading(view),
-        record.seq,
-        record.control_generation,
-        escape_html(&crate::recovery_observation::recovery_diagnostic(
-            &record.diagnostic
-        ))
-    )
-}
-
 fn render_task_execution_markdown(report: &RunReport) -> String {
     let Some(view) = &report.task_execution else {
         return "## Task execution\n\nUnavailable; see caveats.\n\n".into();
     };
     let mut out = "## Task execution\n\n".to_string();
-    out.push_str(&recovery_markdown(view));
     for task in &view.tasks {
         out.push_str(&format!(
             "- **{} — {}**: {} (first evidence {}; ordinal {})\n",
@@ -1238,9 +1149,7 @@ fn render_task_execution_html(report: &RunReport) -> String {
     let Some(view) = &report.task_execution else {
         return "<section><h2>Task execution</h2><p>Unavailable; see caveats.</p></section>".into();
     };
-    let mut out = "<section><h2>Task execution</h2>".to_string();
-    out.push_str(&recovery_html(view));
-    out.push_str("<ol>");
+    let mut out = "<section><h2>Task execution</h2><ol>".to_string();
     for task in &view.tasks {
         out.push_str(&format!(
             "<li><strong>{} — {}</strong>: {}<ul>",
@@ -1493,172 +1402,6 @@ mod tests {
             },
         ];
         RunReport::compile(run_id, &events)
-    }
-
-    fn recovery_events(diagnostic: &str) -> (RunId, Vec<RunEvent>) {
-        let run = RunId::new();
-        let payloads = [
-            EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: "/project".into(),
-                initial_prompt: "build".into(),
-                config: crate::run_event::RunConfig {
-                    bootstrap_edit_loop_cap: None,
-                    sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
-                    approval_default: crate::approvals::ApprovalPolicy::OnRequest,
-                    auto_pr: false,
-                    mcp_servers: vec![],
-                    budget: Default::default(),
-                },
-            },
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: diagnostic.into(),
-            },
-        ];
-        let events: Vec<_> = payloads
-            .into_iter()
-            .enumerate()
-            .map(|(i, payload)| RunEvent {
-                run_id: run,
-                seq: i as u64 + 1,
-                timestamp: chrono::DateTime::UNIX_EPOCH,
-                payload,
-            })
-            .collect();
-        (run, events)
-    }
-    #[test]
-    fn recovery_report_without_tasks_exposes_literal_problem() {
-        let (run, events) = recovery_events("contradictory durable occurrences");
-        let report = RunReport::compile(run, &events);
-        assert!(report.task_execution.as_ref().unwrap().tasks.is_empty());
-        assert!(matches!(report.completion, RunCompletion::Incomplete));
-        assert!(render_markdown(&report).contains("contradictory durable occurrences"));
-        assert!(render_html(&report).contains("contradictory durable occurrences"));
-        assert!(
-            render_json(&report)
-                .unwrap()
-                .contains("contradictory durable occurrences")
-        );
-    }
-
-    #[test]
-    fn recovery_actual_legacy_report_json_has_honest_unloaded_observation() {
-        use crate::recovery_observation::RecoveryObservation;
-        // Captured from the pre-change RunReport::compile implementation during RED,
-        // not a projection-only fixture generated by the new serializer.
-        let json = include_str!("fixtures/recovery-report-pre-observation.json");
-        let report: RunReport = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            report.task_execution.as_ref().unwrap().recovery,
-            RecoveryObservation::NotLoaded
-        );
-        let emitted = serde_json::to_value(&report).unwrap();
-        assert_eq!(
-            emitted["task_execution"]["recovery"]["observation"],
-            "not_loaded"
-        );
-        assert!(render_markdown(&report).contains("current state unconfirmed"));
-        let mut old: serde_json::Value = serde_json::from_str(json).unwrap();
-        old.as_object_mut().unwrap().remove("task_execution");
-        assert!(
-            serde_json::from_value::<RunReport>(old)
-                .unwrap()
-                .task_execution
-                .is_none()
-        );
-        for invalid in [
-            serde_json::Value::Null,
-            serde_json::json!({"observation":"unknown_future"}),
-        ] {
-            let mut bad: serde_json::Value = serde_json::from_str(json).unwrap();
-            bad["task_execution"]["recovery"] = invalid;
-            assert!(serde_json::from_value::<RunReport>(bad).is_err());
-        }
-    }
-    #[test]
-    fn recovery_report_literal_fences_prevent_links_tags_sections_and_control_sequences() {
-        let diagnostic = "\u{1b}[31m\r\n```\n[launch](https://example.invalid/action)\n</pre><script>attack()</script>\n~~~~\n# forged\n``````\n";
-        let (run, events) = recovery_events(diagnostic);
-        let report = RunReport::compile(run, &events);
-        let md = render_markdown(&report);
-        let html = render_html(&report);
-        let json = render_json(&report).unwrap();
-        let start = md.find("```````text\n").unwrap();
-        let end = md[start + "```````text\n".len()..]
-            .find("\n```````\n")
-            .unwrap();
-        let literal = &md[start + "```````text\n".len()..][..end];
-        assert!(literal.contains("[launch](https://example.invalid/action)"));
-        assert!(literal.contains("# forged"));
-        assert!(!md.contains('\u{1b}'));
-        assert!(!html.contains("<script>attack()"));
-        assert!(html.contains("&lt;/pre&gt;&lt;script&gt;attack()&lt;/script&gt;"));
-        assert!(!html.contains("href=\"https://example.invalid"));
-        let restored: RunReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            restored
-                .task_execution
-                .unwrap()
-                .recovery
-                .latest()
-                .unwrap()
-                .diagnostic,
-            diagnostic
-        );
-        let (run, events) = recovery_events(&"界".repeat(3000));
-        let bounded = RunReport::compile(run, &events);
-        assert!(render_markdown(&bounded).contains("[diagnostic truncated]"));
-        assert!(render_html(&bounded).contains("[diagnostic truncated]"));
-        assert_eq!(
-            bounded
-                .task_execution
-                .unwrap()
-                .recovery
-                .latest()
-                .unwrap()
-                .diagnostic
-                .len(),
-            9000
-        );
-    }
-    #[test]
-    fn recovery_report_continuation_terminal_and_partial_coverage_remain_non_authoritative() {
-        let (run, mut events) = recovery_events("retained");
-        let append = |events: &mut Vec<RunEvent>, payload| {
-            events.push(RunEvent {
-                run_id: run,
-                seq: events.len() as u64 + 1,
-                timestamp: chrono::DateTime::UNIX_EPOCH,
-                payload,
-            });
-        };
-        append(
-            &mut events,
-            EventPayload::RunContinued {
-                control_generation: 1,
-            },
-        );
-        let progressed = RunReport::compile(run, &events);
-        assert!(matches!(progressed.completion, RunCompletion::Incomplete));
-        assert!(render_markdown(&progressed).contains("Historical recovery problem"));
-        append(
-            &mut events,
-            EventPayload::RunCompleted {
-                terminal_node: node_key("end"),
-            },
-        );
-        let terminal = RunReport::compile(run, &events);
-        assert!(matches!(
-            terminal.completion,
-            RunCompletion::Completed { .. }
-        ));
-        assert!(render_html(&terminal).contains("Historical recovery problem"));
-        let partial = RunReport::compile(run, &events[1..2]);
-        assert!(render_markdown(&partial).contains("current state unconfirmed"));
-        assert!(!render_markdown(&partial).contains("Recovery requires operator review"));
-        assert!(render_markdown(&partial).contains("retained"));
     }
 
     #[test]

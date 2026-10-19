@@ -332,7 +332,7 @@ pub(super) struct ReadyGate {
 }
 #[cfg(test)]
 impl ReadyGate {
-    pub(super) fn enter(&self) {
+    fn enter(&self) {
         let mut state = lock(&self.state);
         state.0 = true;
         self.changed.notify_all();

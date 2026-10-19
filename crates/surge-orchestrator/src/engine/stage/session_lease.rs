@@ -555,4 +555,4 @@ pub(super) async fn persist_queued_usage(
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

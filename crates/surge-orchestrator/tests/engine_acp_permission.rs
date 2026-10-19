@@ -1,12 +1,6 @@
 //! Real engine/ACP permission roundtrip, isolated by a process watchdog.
 #[path = "fixtures/runtime_home.rs"]
 mod runtime_home_fixture;
-mod mock_acp_binary {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/test-support/mock_acp_binary.rs"
-    ));
-}
 use runtime_home_fixture::FixtureHome;
 
 use std::{
@@ -51,7 +45,10 @@ impl BridgeFacade for RealBridge {
         mut config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         config.agent_kind = AgentKind::Custom {
-            binary: mock_acp_binary::path(),
+            binary: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../target/debug/mock_acp_agent{}",
+                std::env::consts::EXE_SUFFIX
+            )),
             args: self
                 .flags
                 .iter()
@@ -313,7 +310,10 @@ system="Controlled permission journey"
 "#,
     )
     .unwrap();
-    let binary = mock_acp_binary::path();
+    let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     let args: Vec<String> = bridge
         .flags
         .iter()

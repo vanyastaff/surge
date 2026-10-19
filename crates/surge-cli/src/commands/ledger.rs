@@ -112,14 +112,6 @@ fn print_ledger_table(out: &mut impl std::io::Write, records: &[TaskLedgerIndexR
             r.discovered_from.as_deref().unwrap_or("-"),
             r.run_id,
         );
-        if let Some(origin) = r.inherited_provenance {
-            let _ = writeln!(
-                out,
-                "  inherited from {} at source event {}",
-                origin.source().run(),
-                origin.source().seq()
-            );
-        }
     }
     let verified = records.iter().filter(|r| r.is_evidence_backed()).count();
     let accepted = records
@@ -155,33 +147,8 @@ mod tests {
     use surge_core::RoadmapStatus;
     use surge_core::RunId;
 
-    #[test]
-    fn actual_ledger_json_retains_qualified_origin_and_never_relabels_source_as_local_seq() {
-        use surge_core::execution_recovery::semantic_position::{
-            ContinuationSeedId, InheritedProvenance, SourceEventRef,
-        };
-        let source = RunId::new();
-        let origin = InheritedProvenance::new(
-            ContinuationSeedId::new(surge_core::ContentHash::compute(b"cli-seed")),
-            SourceEventRef::new(source, 87).unwrap(),
-        );
-        let mut imported = record("m1-t1", RoadmapStatus::Pending, false);
-        imported.updated_seq = 0;
-        imported.inherited_provenance = Some(origin);
-        let json = serde_json::to_value(imported.clone().with_verified_normalized()).unwrap();
-        assert_eq!(json["updated_seq"], 0);
-        assert_eq!(json["inherited_provenance"]["source"]["seq"], 87);
-        assert_eq!(
-            json["inherited_provenance"]["source"]["run"],
-            serde_json::to_value(source).unwrap()
-        );
-        assert_eq!(json["verified"], false);
-        assert!(rendered(&[imported]).contains("inherited"));
-    }
-
     fn record(task_id: &str, status: RoadmapStatus, verified: bool) -> TaskLedgerIndexRecord {
         TaskLedgerIndexRecord {
-            inherited_provenance: None,
             run_id: RunId::new(),
             task_id: task_id.to_owned(),
             project_path: PathBuf::from("/proj"),

@@ -3,10 +3,6 @@
 use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
-use crate::execution_recovery::seed_guard::{SeedHistoryError, SeedStartupGuard};
-use crate::execution_recovery::semantic_position::{
-    InheritedProvenance, SeedLineage, SemanticPosition,
-};
 use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
@@ -114,17 +110,10 @@ pub struct ParkedUntil {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
-    NotStarted {
-        /// Structural observation of the complete accepted raw prefix.
-        semantic_startup_guard: SeedStartupGuard,
-    },
+    NotStarted,
     Bootstrapping {
-        /// Structural observation retained across bootstrap transitions.
-        semantic_startup_guard: SeedStartupGuard,
         stage: BootstrapStage,
         substate: BootstrapSubstate,
-        /// Shared read-only journal observation retained before materialization.
-        recovery: crate::recovery_observation::RecoveryObserver,
     },
     Pipeline {
         /// `Arc<Graph>` because each fold step shares the current graph by
@@ -141,8 +130,6 @@ pub enum RunState {
         parked: Option<ParkedUntil>,
     },
     Terminal {
-        /// Structural observation retained after terminal truth.
-        semantic_startup_guard: SeedStartupGuard,
         kind: TerminalReason,
         reason: String,
     },
@@ -201,7 +188,7 @@ impl RunState {
         match self {
             // A just-admitted run that has not folded RunStarted yet — treat
             // as working (it is not blocked on a human).
-            Self::NotStarted { .. } => Attention::Working,
+            Self::NotStarted => Attention::Working,
             Self::Bootstrapping {
                 substate: BootstrapSubstate::AwaitingApproval { .. },
                 ..
@@ -283,15 +270,11 @@ pub struct BacktrackFeedback {
     /// Node whose outcome sent the run back.
     pub from: NodeKey,
     /// Sequence of the `EdgeTraversed { kind: Backtrack }` event.
-    pub edge_seq: SemanticPosition,
+    pub edge_seq: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunMemory {
-    /// Structural source comparison context, never a hydrated launch capability.
-    pub semantic_lineage: Option<SeedLineage>,
-    /// Successor-local structural history; never inherited or a seed capability.
-    pub semantic_startup_guard: SeedStartupGuard,
     /// MCP calls whose result was never recorded, oldest first. Cleared when the
     /// next provider session opens, so only the first stage after an interruption
     /// sees them; their outcome is unknown and they are never replayed.
@@ -394,8 +377,6 @@ pub struct RunMemory {
     pub verification_graph: Option<Box<Graph>>,
     /// Immutable host accepted context, never resolved through mutable artifact names.
     pub work_item: Option<crate::work_item::WorkItemContext>,
-    /// Read-only recovery history; never consulted by runtime admission or controls.
-    pub recovery: crate::recovery_observation::RecoveryObserver,
 }
 
 /// Task-ledger view folded from ledger events. The source of truth is the
@@ -431,7 +412,6 @@ impl LedgerState {
         }
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
-        entry.inherited_provenance = None;
     }
 
     /// Insert a discovered task as pending with a `discovered_from` edge.
@@ -477,7 +457,6 @@ impl LedgerState {
         }
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
-        entry.inherited_provenance = None;
     }
 
     /// Record a human acceptance: completed, never verified, findings kept.
@@ -495,7 +474,6 @@ impl LedgerState {
         entry.findings = findings;
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
-        entry.inherited_provenance = None;
     }
 
     /// Record that a human revised the task's requirement.
@@ -503,7 +481,6 @@ impl LedgerState {
         let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.requirement_revised = true;
         entry.updated_seq = seq;
-        entry.inherited_provenance = None;
     }
 }
 
@@ -520,8 +497,6 @@ pub struct LedgerTask {
     pub last_authority_node: Option<NodeKey>,
     /// Seq of the last event that touched this task.
     pub updated_seq: u64,
-    /// Inherited origin distinct from the real local last-update row index.
-    pub inherited_provenance: Option<InheritedProvenance>,
     /// A human accepted the task after its retry ladder was exhausted
     /// (`TaskAcceptedByHuman`). Never implies `verified`.
     pub accepted_by_human: bool,
@@ -539,7 +514,6 @@ impl Default for LedgerTask {
             discovered_from: None,
             last_authority_node: None,
             updated_seq: 0,
-            inherited_provenance: None,
             accepted_by_human: false,
             findings: None,
             requirement_revised: false,
@@ -567,7 +541,7 @@ pub struct RequirementRevision {
     /// The revised requirement.
     pub text: String,
     /// Sequence of the `RequirementRevised` event.
-    pub seq: SemanticPosition,
+    pub seq: u64,
 }
 
 /// True when `node` exists in `graph` — at the top level **or inside any
@@ -611,58 +585,20 @@ pub struct GraphRevisionMemory {
     pub updated_seq: u64,
 }
 
-/// Settled source amendment history. This DTO cannot become a runtime patch map entry.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SettledRoadmapPatchHistory {
-    pub patch_id: RoadmapPatchId,
-    pub target: RoadmapPatchTarget,
-    pub status: RoadmapPatchStatus,
-    pub patch_artifact: Option<ContentHash>,
-    pub patch_path: Option<PathBuf>,
-    pub roadmap_artifact: Option<ContentHash>,
-    pub roadmap_path: Option<PathBuf>,
-    pub flow_artifact: Option<ContentHash>,
-    pub flow_path: Option<PathBuf>,
-    pub updated_at: SemanticPosition,
-}
-
-/// Settled graph revision observation, separate from executable revision counters.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SettledGraphRevisionHistory {
-    pub patch_id: RoadmapPatchId,
-    pub target: RoadmapPatchTarget,
-    pub previous_graph_hash: ContentHash,
-    pub graph_hash: ContentHash,
-    pub active_pickup: ActivePickupPolicy,
-    pub updated_at: SemanticPosition,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArtifactRef {
     pub hash: ContentHash,
     pub path: PathBuf,
     pub name: String,
     pub produced_by: NodeKey,
-    pub produced_at_seq: Option<SemanticPosition>,
-}
-
-impl ArtifactRef {
-    /// A byte-store handle alone is not a recorded semantic history fact.
-    pub fn recorded_position(
-        &self,
-    ) -> Result<SemanticPosition, crate::execution_recovery::semantic_position::PositionError> {
-        self.produced_at_seq
-            .ok_or(crate::execution_recovery::semantic_position::PositionError::Unrecorded)
-    }
+    pub produced_at_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutcomeRecord {
     pub outcome: OutcomeKey,
     pub summary: String,
-    pub seq: SemanticPosition,
+    pub seq: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -706,10 +642,6 @@ impl CostSummary {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum FoldError {
-    #[error("invalid event position: sequence zero")]
-    InvalidEventPosition,
-    #[error(transparent)]
-    SeedHistory(#[from] SeedHistoryError),
     #[error("invalid transition: state={from}, event={event}")]
     InvalidTransition {
         from: &'static str,
@@ -721,63 +653,10 @@ pub enum FoldError {
     UnknownNode { node: NodeKey },
 }
 
-struct CheckedMemoryEvent<'a> {
-    event: &'a RunEvent,
-    position: SemanticPosition,
-}
-impl<'a> CheckedMemoryEvent<'a> {
-    fn prepare(event: &'a RunEvent, guard: &mut SeedStartupGuard) -> Result<Self, FoldError> {
-        let position =
-            SemanticPosition::local(event.seq).map_err(|_| FoldError::InvalidEventPosition)?;
-        guard.observe(event)?;
-        Ok(Self { event, position })
-    }
-}
-impl RunState {
-    /// Start a fresh structural projection with no observed events.
-    #[must_use]
-    pub fn not_started() -> Self {
-        Self::NotStarted {
-            semantic_startup_guard: SeedStartupGuard::default(),
-        }
-    }
-    fn startup_guard(&self) -> &SeedStartupGuard {
-        match self {
-            Self::NotStarted {
-                semantic_startup_guard,
-            }
-            | Self::Bootstrapping {
-                semantic_startup_guard,
-                ..
-            }
-            | Self::Terminal {
-                semantic_startup_guard,
-                ..
-            } => semantic_startup_guard,
-            Self::Pipeline { memory, .. } => &memory.semantic_startup_guard,
-        }
-    }
-    fn set_startup_guard(&mut self, guard: SeedStartupGuard) {
-        match self {
-            Self::NotStarted {
-                semantic_startup_guard,
-            }
-            | Self::Bootstrapping {
-                semantic_startup_guard,
-                ..
-            }
-            | Self::Terminal {
-                semantic_startup_guard,
-                ..
-            } => *semantic_startup_guard = guard,
-            Self::Pipeline { memory, .. } => memory.semantic_startup_guard = guard,
-        }
-    }
-}
-
 /// Fold a sequence of events into a final state. Returns FoldError if any
 /// transition is invalid or sequence numbers are corrupted.
 pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
+    let mut state = RunState::NotStarted;
     for (expected_seq, event) in (1u64..).zip(events.iter()) {
         if event.seq != expected_seq {
             return Err(FoldError::CorruptedSequence {
@@ -785,10 +664,6 @@ pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
                 got_seq: event.seq,
             });
         }
-    }
-    crate::execution_recovery::seed_guard::preflight_unhydrated(events)?;
-    let mut state = RunState::not_started();
-    for event in events {
         state = apply(state, event)?;
     }
     Ok(state)
@@ -796,12 +671,6 @@ pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
 
 /// Apply a single event to the current state. Pure function, no I/O.
 pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
-    let mut guard = state.startup_guard().clone();
-    let checked = CheckedMemoryEvent::prepare(event, &mut guard)?;
-    guard.finish()?;
-    if let RunState::Bootstrapping { recovery, .. } = &mut state {
-        recovery.observe(event);
-    }
     if let RunState::Pipeline { memory, .. } = &mut state {
         if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
             memory.work_item = Some(context.clone());
@@ -820,36 +689,27 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             VerificationInvalidation::None => {},
         }
     }
-    let next: Result<RunState, FoldError> = match (state, &event.payload) {
-        (RunState::NotStarted { .. }, EventPayload::RunStarted { .. }) => {
-            let mut recovery = crate::recovery_observation::RecoveryObserver::default();
-            recovery.observe(event);
-            Ok(RunState::Bootstrapping {
-                semantic_startup_guard: SeedStartupGuard::default(),
-                recovery,
-                stage: BootstrapStage::Description,
-                substate: BootstrapSubstate::AgentRunning {
-                    // Replay determinism: fold must not introduce random IDs.
-                    // The real session id arrives via `BootstrapStageStarted` /
-                    // `SessionOpened` events; this is a stable placeholder until
-                    // then.
-                    session: SessionId::nil(),
-                    started_seq: event.seq,
-                },
-            })
-        },
+    match (state, &event.payload) {
+        (RunState::NotStarted, EventPayload::RunStarted { .. }) => Ok(RunState::Bootstrapping {
+            stage: BootstrapStage::Description,
+            substate: BootstrapSubstate::AgentRunning {
+                // Replay determinism: fold must not introduce random IDs.
+                // The real session id arrives via `BootstrapStageStarted` /
+                // `SessionOpened` events; this is a stable placeholder until
+                // then.
+                session: SessionId::nil(),
+                started_seq: event.seq,
+            },
+        }),
         (
-            RunState::Bootstrapping { recovery, .. },
+            RunState::Bootstrapping { .. },
             EventPayload::BootstrapApprovalDecided {
                 stage,
                 decision: BootstrapDecision::Approve,
                 ..
             },
-        ) => Ok(advance_bootstrap_stage(*stage, event.seq, recovery)),
-        (
-            RunState::Bootstrapping { recovery, .. },
-            EventPayload::PipelineMaterialized { graph, .. },
-        ) => {
+        ) => Ok(advance_bootstrap_stage(*stage, event.seq)),
+        (RunState::Bootstrapping { .. }, EventPayload::PipelineMaterialized { graph, .. }) => {
             // The graph is part of the event payload, so fold can fully
             // reconstruct `Pipeline` state from the event log alone. The
             // first cursor lands on `graph.start` with attempt 1 — actual
@@ -864,7 +724,6 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 },
                 memory: RunMemory {
                     verification_graph: Some(Box::new(effective)),
-                    recovery,
                     ..RunMemory::default()
                 },
                 pending_human_input: None,
@@ -917,7 +776,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                     path: path.clone(),
                     name: name.clone(),
                     produced_by: node.clone(),
-                    produced_at_seq: Some(checked.position),
+                    produced_at_seq: event.seq,
                 };
                 memory.artifacts.insert(name.clone(), aref.clone());
                 memory
@@ -959,7 +818,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                     .push(OutcomeRecord {
                         outcome: outcome.clone(),
                         summary: summary.clone(),
-                        seq: checked.position,
+                        seq: event.seq,
                     });
                 Ok(RunState::Pipeline {
                     graph,
@@ -1002,7 +861,6 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
             EventPayload::RunCompleted { .. },
         ) => Ok(RunState::Terminal {
-            semantic_startup_guard: SeedStartupGuard::default(),
             kind: TerminalReason::Completed,
             reason: String::new(),
         }),
@@ -1010,7 +868,6 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
             EventPayload::RunFailed { error },
         ) => Ok(RunState::Terminal {
-            semantic_startup_guard: SeedStartupGuard::default(),
             kind: TerminalReason::Failed,
             reason: error.clone(),
         }),
@@ -1018,7 +875,6 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
             EventPayload::RunAborted { reason },
         ) => Ok(RunState::Terminal {
-            semantic_startup_guard: SeedStartupGuard::default(),
             kind: TerminalReason::Aborted,
             reason: reason.clone(),
         }),
@@ -1236,7 +1092,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 parked,
             } = state
             {
-                memory.apply_non_recovery_event(&checked);
+                memory.apply_event(event);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
@@ -1266,7 +1122,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                         node: cursor.node.clone(),
                     });
                 }
-                memory.apply_non_recovery_event(&checked);
+                memory.apply_event(event);
                 Ok(RunState::Pipeline {
                     graph: Arc::new(revised),
                     cursor,
@@ -1287,7 +1143,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 parked,
             } = state
             {
-                memory.apply_non_recovery_event(&checked);
+                memory.apply_event(event);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
@@ -1375,7 +1231,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             },
             EventPayload::TaskAcceptedByHuman { .. } | EventPayload::RequirementRevised { .. },
         ) => {
-            memory.apply_override_event(&checked);
+            memory.apply_override_event(event);
             Ok(RunState::Pipeline {
                 graph,
                 cursor,
@@ -1387,21 +1243,12 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
         (state, EventPayload::HookExecuted { .. }) => Ok(state),
         (state, EventPayload::OutcomeRejectedByHook { .. }) => Ok(state),
         (state, _) => Ok(state),
-    };
-    let mut next = next?;
-    next.set_startup_guard(guard);
-    Ok(next)
+    }
 }
 
-fn advance_bootstrap_stage(
-    stage: BootstrapStage,
-    seq: u64,
-    recovery: crate::recovery_observation::RecoveryObserver,
-) -> RunState {
+fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
     match stage {
         BootstrapStage::Description => RunState::Bootstrapping {
-            semantic_startup_guard: SeedStartupGuard::default(),
-            recovery,
             stage: BootstrapStage::Roadmap,
             substate: BootstrapSubstate::AgentRunning {
                 // Deterministic placeholder — see RunStarted arm in `apply`
@@ -1411,8 +1258,6 @@ fn advance_bootstrap_stage(
             },
         },
         BootstrapStage::Roadmap => RunState::Bootstrapping {
-            semantic_startup_guard: SeedStartupGuard::default(),
-            recovery,
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AgentRunning {
                 // Deterministic placeholder — see RunStarted arm in `apply`
@@ -1422,8 +1267,6 @@ fn advance_bootstrap_stage(
             },
         },
         BootstrapStage::Flow => RunState::Bootstrapping {
-            semantic_startup_guard: SeedStartupGuard::default(),
-            recovery,
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AwaitingApproval {
                 artifact: ContentHash::compute(b"placeholder-flow-toml"),
@@ -1481,8 +1324,7 @@ impl RunMemory {
 
     /// Human overrides of an exhausted retry ladder (v1 task 1.2). Shared by
     /// both fold paths so the ledger agrees on every surface.
-    fn apply_override_event(&mut self, checked: &CheckedMemoryEvent<'_>) {
-        let event = checked.event;
+    fn apply_override_event(&mut self, event: &RunEvent) {
         match &event.payload {
             EventPayload::TaskAcceptedByHuman {
                 node,
@@ -1516,7 +1358,7 @@ impl RunMemory {
                     node: node.clone(),
                     task: task.clone(),
                     text: text.clone(),
-                    seq: checked.position,
+                    seq: event.seq,
                 });
             },
             _ => {},
@@ -1555,7 +1397,6 @@ impl RunMemory {
     }
 
     fn apply_recovery_event(&mut self, event: &RunEvent) {
-        self.recovery.observe(event);
         match &event.payload {
             EventPayload::StageEntered { node, .. } => {
                 self.stage_occurrences.insert(node.clone(), event.seq);
@@ -1874,10 +1715,7 @@ impl RunMemory {
                 self.control_generation = *control_generation;
             },
             EventPayload::RunContinued { control_generation }
-                if crate::recovery_observation::continuation_advances(
-                    self.control_generation,
-                    *control_generation,
-                ) =>
+                if *control_generation > self.control_generation =>
             {
                 self.control_generation = *control_generation;
                 self.suspension = None;
@@ -1887,37 +1725,7 @@ impl RunMemory {
     }
     /// Apply an event to the memory accumulator only. Used independently of
     /// the full state machine for "what's the cost so far" queries.
-    pub fn apply_event(&mut self, event: &RunEvent) -> Result<(), FoldError> {
-        let mut guard = self.semantic_startup_guard.clone();
-        let checked = CheckedMemoryEvent::prepare(event, &mut guard)?;
-        guard.finish()?;
-        self.apply_recovery_event(event);
-        self.apply_non_recovery_event(&checked);
-        self.semantic_startup_guard = guard;
-        Ok(())
-    }
-    /// Check the entire batch before changing any semantic or recovery observer.
-    pub fn apply_events(&mut self, events: &[RunEvent]) -> Result<(), FoldError> {
-        let mut guard = self.semantic_startup_guard.clone();
-        let checked = events
-            .iter()
-            .map(|event| {
-                let checked = CheckedMemoryEvent::prepare(event, &mut guard)?;
-                guard.finish()?;
-                Ok::<_, FoldError>(checked)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        guard.finish()?;
-        for event in checked {
-            self.apply_recovery_event(event.event);
-            self.apply_non_recovery_event(&event);
-        }
-        self.semantic_startup_guard = guard;
-        Ok(())
-    }
-    // Full-state apply has already observed recovery exactly once.
-    fn apply_non_recovery_event(&mut self, checked: &CheckedMemoryEvent<'_>) {
-        let event = checked.event;
+    pub fn apply_event(&mut self, event: &RunEvent) {
         use crate::verification_evidence::VerificationInvalidation;
         if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
             self.work_item = Some(context.clone());
@@ -1925,8 +1733,9 @@ impl RunMemory {
         if let EventPayload::RunStarted { config, .. } = &event.payload {
             self.bootstrap_edit_loop_cap = config.bootstrap_edit_loop_cap;
         }
+        self.apply_recovery_event(event);
         self.apply_mcp_call_event(event);
-        self.apply_override_event(checked);
+        self.apply_override_event(event);
         if let EventPayload::EdgeTraversed { edge, to, .. } = &event.payload {
             self.entered_via.insert(to.clone(), edge.clone());
         }
@@ -1942,16 +1751,8 @@ impl RunMemory {
             VerificationInvalidation::None => {},
         }
         match &event.payload {
-            // Subsequent materializations are generated future-child artifacts.
-            // Only the first graph and explicit accepted revisions own this run.
             EventPayload::PipelineMaterialized { graph, .. }
-                if self.verification_graph.is_none() =>
-            {
-                self.verification_graph = Some(Box::new(
-                    crate::escalation::with_default_escalation_gates(graph),
-                ));
-            },
-            EventPayload::GraphRevisionAccepted { graph, .. } => {
+            | EventPayload::GraphRevisionAccepted { graph, .. } => {
                 self.verification_graph = Some(Box::new(
                     crate::escalation::with_default_escalation_gates(graph),
                 ));
@@ -2003,7 +1804,7 @@ impl RunMemory {
                     path: path.clone(),
                     name: name.clone(),
                     produced_by: node.clone(),
-                    produced_at_seq: Some(checked.position),
+                    produced_at_seq: event.seq,
                 };
                 self.artifacts.insert(name.clone(), aref.clone());
                 self.artifacts_by_node
@@ -2023,7 +1824,7 @@ impl RunMemory {
                     .push(OutcomeRecord {
                         outcome: outcome.clone(),
                         summary: summary.clone(),
-                        seq: checked.position,
+                        seq: event.seq,
                     });
             },
             payload @ (EventPayload::TokensConsumed { .. }
@@ -2053,7 +1854,7 @@ impl RunMemory {
                         .cloned()
                         .unwrap_or_else(|| BacktrackFeedback {
                             from: from.clone(),
-                            edge_seq: checked.position,
+                            edge_seq: event.seq,
                         });
                 self.backtrack_feedback.insert(to.clone(), feedback);
             },
@@ -2065,7 +1866,7 @@ impl RunMemory {
             } => {
                 let feedback = BacktrackFeedback {
                     from: from.clone(),
-                    edge_seq: checked.position,
+                    edge_seq: event.seq,
                 };
                 // An escalation into an agent (the extra attempt) carries the
                 // exhausted stage's feedback like a backtrack does; for a gate
@@ -2266,66 +2067,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn legacy_artifact_wire_uses_envelope_position_not_unrecorded_handle() {
-        let legacy = serde_json::json!({"type":"artifact_produced", "node":"build",
-            "artifact":ContentHash::compute(b"legacy"), "path":"blob", "name":"artifact"});
-        let payload: EventPayload = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&payload).unwrap(), legacy);
-        let mut memory = RunMemory::default();
-        memory.apply_event(&make_event(9, payload)).unwrap();
-        assert_eq!(
-            memory.artifacts["artifact"].produced_at_seq,
-            Some(SemanticPosition::local(9).unwrap())
-        );
-    }
-
-    #[test]
-    fn semantic_zero_position_public_apply_is_rejected_before_mutation() {
-        let graph = graph_with_terminal("invalid-position", "plan");
-        let state = RunState::Pipeline {
-            cursor: Cursor {
-                node: graph.start.clone(),
-                attempt: 1,
-            },
-            graph: Arc::new(graph),
-            memory: RunMemory::default(),
-            pending_human_input: None,
-            parked: None,
-        };
-        let invalid = make_event(
-            0,
-            EventPayload::RequirementRevised {
-                node: NodeKey::try_from("plan").unwrap(),
-                task: Some(RoadmapTaskId::from("task")),
-                text: "invalid zero position must not become accepted memory".into(),
-            },
-        );
-        assert!(
-            apply(state, &invalid).is_err(),
-            "zero event sequence was accepted"
-        );
-    }
-
-    #[test]
-    fn semantic_zero_position_direct_memory_leaves_all_observers_unchanged() {
-        let mut memory = RunMemory::default();
-        let before = memory.clone();
-        let invalid = make_event(
-            0,
-            EventPayload::RequirementRevised {
-                node: NodeKey::try_from("plan").unwrap(),
-                task: Some(RoadmapTaskId::from("task")),
-                text: "invalid zero position must not become accepted memory".into(),
-            },
-        );
-        memory.apply_event(&invalid).unwrap_err();
-        assert_eq!(
-            memory, before,
-            "invalid input mutated semantic/ledger/recovery memory"
-        );
-    }
-
-    #[test]
     fn unresolved_mcp_calls_track_calls_without_results_until_next_session() {
         let session = SessionId::new();
         let called = |tool: &str| EventPayload::ToolCalled {
@@ -2335,51 +2076,41 @@ mod tests {
             mcp_server: Some("github".into()),
         };
         let mut memory = RunMemory::default();
-        memory
-            .apply_event(&make_event(1, called("create_issue")))
-            .unwrap();
-        memory
-            .apply_event(&make_event(2, called("add_comment")))
-            .unwrap();
-        memory
-            .apply_event(&make_event(
-                3,
-                EventPayload::ToolResultReceived {
-                    session,
-                    success: true,
-                    result: ContentHash::compute(b"ok"),
-                    mcp_server: Some("github".into()),
-                },
-            ))
-            .unwrap();
+        memory.apply_event(&make_event(1, called("create_issue")));
+        memory.apply_event(&make_event(2, called("add_comment")));
+        memory.apply_event(&make_event(
+            3,
+            EventPayload::ToolResultReceived {
+                session,
+                success: true,
+                result: ContentHash::compute(b"ok"),
+                mcp_server: Some("github".into()),
+            },
+        ));
         // Engine tools are not MCP effects.
-        memory
-            .apply_event(&make_event(
-                4,
-                EventPayload::ToolCalled {
-                    session,
-                    tool: "read_file".into(),
-                    args_redacted: ContentHash::compute(b"args"),
-                    mcp_server: None,
-                },
-            ))
-            .unwrap();
+        memory.apply_event(&make_event(
+            4,
+            EventPayload::ToolCalled {
+                session,
+                tool: "read_file".into(),
+                args_redacted: ContentHash::compute(b"args"),
+                mcp_server: None,
+            },
+        ));
         assert_eq!(memory.unresolved_mcp_calls.len(), 1);
         assert_eq!(memory.unresolved_mcp_calls[0].tool, "add_comment");
         assert_eq!(memory.unresolved_mcp_calls[0].seq, 2);
-        memory
-            .apply_event(&make_event(
-                5,
-                EventPayload::SessionOpened {
-                    handoff: None,
-                    opened: None,
-                    node: NodeKey::try_from("impl").unwrap(),
-                    session: SessionId::new(),
-                    agent: "implementer@1.0".into(),
-                    agent_id: None,
-                },
-            ))
-            .unwrap();
+        memory.apply_event(&make_event(
+            5,
+            EventPayload::SessionOpened {
+                handoff: None,
+                opened: None,
+                node: NodeKey::try_from("impl").unwrap(),
+                session: SessionId::new(),
+                agent: "implementer@1.0".into(),
+                agent_id: None,
+            },
+        ));
         assert!(memory.unresolved_mcp_calls.is_empty());
     }
 
@@ -2433,8 +2164,8 @@ mod tests {
 
     #[test]
     fn not_started_is_default_initial() {
-        let s = RunState::not_started();
-        assert!(matches!(s, RunState::NotStarted { .. }));
+        let s = RunState::NotStarted;
+        assert!(matches!(s, RunState::NotStarted));
     }
 
     #[test]
@@ -2447,29 +2178,7 @@ mod tests {
                 node: NodeKey::try_from("plan").unwrap(),
                 attempt: 1,
             },
-            memory: RunMemory {
-                recovery: {
-                    let mut observer = crate::recovery_observation::RecoveryObserver::default();
-                    observer.observe(&make_event(
-                        1,
-                        EventPayload::RunStarted {
-                            pipeline_template: None,
-                            project_path: "/project".into(),
-                            initial_prompt: "test".into(),
-                            config: RunConfig {
-                                bootstrap_edit_loop_cap: None,
-                                budget: Default::default(),
-                                sandbox_default: SandboxMode::WorkspaceWrite,
-                                approval_default: ApprovalPolicy::OnRequest,
-                                auto_pr: false,
-                                mcp_servers: vec![],
-                            },
-                        },
-                    ));
-                    observer
-                },
-                ..RunMemory::default()
-            },
+            memory: RunMemory::default(),
             pending_human_input: Some(PendingHumanInput {
                 node: NodeKey::try_from("plan").unwrap(),
                 call_id: Some("exact-call".into()),
@@ -2513,7 +2222,6 @@ mod tests {
             "Recovery requires an operator"
         );
         let terminal = RunState::Terminal {
-            semantic_startup_guard: SeedStartupGuard::default(),
             kind: TerminalReason::Aborted,
             reason: "stopped".into(),
         };
@@ -2526,7 +2234,7 @@ mod tests {
     #[test]
     fn empty_event_log_folds_to_not_started() {
         let state = fold(&[]).unwrap();
-        assert!(matches!(state, RunState::NotStarted { .. }));
+        assert!(matches!(state, RunState::NotStarted));
     }
 
     #[test]
@@ -2647,8 +2355,7 @@ mod tests {
                 cost_usd: 0.0,
                 total_tokens: 800_000,
             },
-        ))
-        .unwrap();
+        ));
         assert!(m.budget_warning_raised);
     }
 
@@ -2664,8 +2371,7 @@ mod tests {
             outcome: OutcomeKey::try_from(key).unwrap(),
             summary: String::new(),
         };
-        m.apply_event(&make_event(1, outcome(&verify, "failed")))
-            .unwrap();
+        m.apply_event(&make_event(1, outcome(&verify, "failed")));
         m.apply_event(&make_event(
             2,
             EventPayload::EdgeTraversed {
@@ -2674,21 +2380,17 @@ mod tests {
                 to: implement.clone(),
                 kind: EdgeKind::Backtrack,
             },
-        ))
-        .unwrap();
+        ));
         assert_eq!(
             m.backtrack_feedback.get(&implement),
             Some(&BacktrackFeedback {
                 from: verify.clone(),
-                edge_seq: crate::execution_recovery::semantic_position::SemanticPosition::local(2)
-                    .unwrap(),
+                edge_seq: 2,
             })
         );
-        m.apply_event(&make_event(3, outcome(&verify, "failed")))
-            .unwrap();
+        m.apply_event(&make_event(3, outcome(&verify, "failed")));
         assert!(m.backtrack_feedback.contains_key(&implement));
-        m.apply_event(&make_event(4, outcome(&implement, "done")))
-            .unwrap();
+        m.apply_event(&make_event(4, outcome(&implement, "done")));
         assert!(m.backtrack_feedback.is_empty());
     }
 
@@ -2711,8 +2413,7 @@ mod tests {
                 "verify_1_escalation",
                 EdgeKind::Escalate,
             ),
-        ))
-        .unwrap();
+        ));
         m.apply_event(&make_event(
             9,
             EventPayload::OutcomeReported {
@@ -2720,8 +2421,7 @@ mod tests {
                 outcome: OutcomeKey::try_from("retry").unwrap(),
                 summary: "human gate decision".into(),
             },
-        ))
-        .unwrap();
+        ));
         m.apply_event(&make_event(
             10,
             traverse(
@@ -2730,14 +2430,12 @@ mod tests {
                 "implement_1",
                 EdgeKind::Backtrack,
             ),
-        ))
-        .unwrap();
+        ));
         assert_eq!(
             m.backtrack_feedback[&NodeKey::try_from("implement_1").unwrap()],
             BacktrackFeedback {
                 from: NodeKey::try_from("verify_1").unwrap(),
-                edge_seq: crate::execution_recovery::semantic_position::SemanticPosition::local(5)
-                    .unwrap(),
+                edge_seq: 5,
             }
         );
     }
@@ -2755,8 +2453,7 @@ mod tests {
                 task: Some(task.clone()),
                 text: "Sessions last 24 hours".into(),
             },
-        ))
-        .unwrap();
+        ));
         m.apply_event(&make_event(
             2,
             EventPayload::TaskAcceptedByHuman {
@@ -2765,8 +2462,7 @@ mod tests {
                 findings: Some(findings),
                 comment: None,
             },
-        ))
-        .unwrap();
+        ));
         let entry = &m.ledger.tasks[&task];
         assert_eq!(entry.status, RoadmapStatus::Completed);
         assert!(!entry.verified);
@@ -2784,8 +2480,7 @@ mod tests {
                 to: RoadmapStatus::ReadyForVerification,
                 authority_node: verify,
             },
-        ))
-        .unwrap();
+        ));
         assert!(!m.ledger.tasks[&task].accepted_by_human);
     }
 
@@ -2808,8 +2503,7 @@ mod tests {
                 to: target.clone(),
                 kind: EdgeKind::Forward,
             },
-        ))
-        .unwrap();
+        ));
         assert!(m.node_visits.is_empty());
 
         // First Backtrack into `target` — counter becomes 1.
@@ -2821,8 +2515,7 @@ mod tests {
                 to: target.clone(),
                 kind: EdgeKind::Backtrack,
             },
-        ))
-        .unwrap();
+        ));
         assert_eq!(m.node_visits[&target], 1);
 
         // Second Backtrack into the same node — counter becomes 2.
@@ -2834,8 +2527,7 @@ mod tests {
                 to: target.clone(),
                 kind: EdgeKind::Backtrack,
             },
-        ))
-        .unwrap();
+        ));
         assert_eq!(m.node_visits[&target], 2);
 
         // Backtrack into a different target — independent counter.
@@ -2847,8 +2539,7 @@ mod tests {
                 to: other.clone(),
                 kind: EdgeKind::Backtrack,
             },
-        ))
-        .unwrap();
+        ));
         assert_eq!(m.node_visits[&target], 2);
         assert_eq!(m.node_visits[&other], 1);
     }
@@ -2879,8 +2570,8 @@ mod tests {
         let mut a = RunMemory::default();
         let mut b = RunMemory::default();
         for e in &events {
-            a.apply_event(e).unwrap();
-            b.apply_event(e).unwrap();
+            a.apply_event(e);
+            b.apply_event(e);
         }
         assert_eq!(a.node_visits, b.node_visits);
         assert_eq!(a.node_visits[&target], 4);
@@ -2901,7 +2592,7 @@ mod tests {
                     feedback: "tighten".into(),
                 },
             );
-            m.apply_event(&evt).unwrap();
+            m.apply_event(&evt);
         }
         assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Description], 2);
         assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Roadmap], 1);
@@ -2931,8 +2622,8 @@ mod tests {
         let mut a = RunMemory::default();
         let mut b = RunMemory::default();
         for e in &events {
-            a.apply_event(e).unwrap();
-            b.apply_event(e).unwrap();
+            a.apply_event(e);
+            b.apply_event(e);
         }
         assert_eq!(a.bootstrap_edit_counts, b.bootstrap_edit_counts);
         assert_eq!(a.bootstrap_edit_counts[&BootstrapStage::Description], 2);
@@ -3538,129 +3229,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_child_cannot_grant_or_restore_parent_verification_authority() {
-        let verifier = NodeKey::try_from("verify_1").unwrap();
-        for revoke_by_revision in [false, true] {
-            let mut events = ledger_run_prefix();
-            let mut denied = ledger_graph();
-            denied.nodes.remove(&verifier);
-            if revoke_by_revision {
-                events.push(make_event(
-                    3,
-                    EventPayload::GraphRevisionAccepted {
-                        patch_id: RoadmapPatchId::new("rpatch-revoke").unwrap(),
-                        target: RoadmapPatchTarget::ProjectRoadmap {
-                            roadmap_path: "roadmap.toml".into(),
-                        },
-                        previous_graph_hash: ContentHash::compute(b"parent"),
-                        graph: Box::new(denied),
-                        graph_hash: ContentHash::compute(b"revoked"),
-                        active_pickup: ActivePickupPolicy::Allowed,
-                    },
-                ));
-            } else if let EventPayload::PipelineMaterialized { graph, .. } = &mut events[1].payload
-            {
-                **graph = denied;
-            }
-            events.push(make_event(
-                4,
-                EventPayload::PipelineMaterialized {
-                    graph: Box::new(ledger_graph()),
-                    graph_hash: ContentHash::compute(b"future-child"),
-                },
-            ));
-            events.push(make_event(
-                5,
-                EventPayload::TaskVerified {
-                    task_id: "m1-t1".into(),
-                    node: verifier.clone(),
-                    evidence: ContentHash::compute(b"report"),
-                    report: None,
-                },
-            ));
-            let events = crate::verification_evidence::bind_fixture(&events);
-            let mut incremental = RunMemory::default();
-            for event in &events {
-                incremental.apply_event(event).unwrap();
-            }
-            let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
-                panic!("expected pipeline");
-            };
-            for memory in [&incremental, &memory] {
-                assert!(
-                    !memory
-                        .verification_graph
-                        .as_ref()
-                        .unwrap()
-                        .nodes
-                        .contains_key(&verifier)
-                );
-                assert_eq!(memory.ledger.rejected_verifications, 1);
-                assert!(
-                    !memory
-                        .ledger
-                        .tasks
-                        .get(&RoadmapTaskId::from("m1-t1"))
-                        .is_some_and(|task| task.verified)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn accepted_revision_restores_authority_across_later_child_generation() {
-        let mut events = ledger_run_prefix();
-        let mut denied = ledger_graph();
-        denied.nodes.remove(&NodeKey::try_from("verify_1").unwrap());
-        if let EventPayload::PipelineMaterialized { graph, .. } = &mut events[1].payload {
-            **graph = denied.clone();
-        }
-        events.extend([
-            make_event(
-                3,
-                EventPayload::GraphRevisionAccepted {
-                    patch_id: RoadmapPatchId::new("rpatch-restored").unwrap(),
-                    target: RoadmapPatchTarget::ProjectRoadmap {
-                        roadmap_path: "roadmap.toml".into(),
-                    },
-                    previous_graph_hash: ContentHash::compute(b"denied"),
-                    graph: Box::new(ledger_graph()),
-                    graph_hash: ContentHash::compute(b"accepted-restore"),
-                    active_pickup: ActivePickupPolicy::Allowed,
-                },
-            ),
-            make_event(
-                4,
-                EventPayload::PipelineMaterialized {
-                    graph: Box::new(denied),
-                    graph_hash: ContentHash::compute(b"child"),
-                },
-            ),
-            make_event(
-                5,
-                EventPayload::TaskVerified {
-                    task_id: "m1-t1".into(),
-                    node: NodeKey::try_from("verify_1").unwrap(),
-                    evidence: ContentHash::compute(b"sealed"),
-                    report: None,
-                },
-            ),
-        ]);
-        let events = crate::verification_evidence::bind_fixture(&events);
-        let mut incremental = RunMemory::default();
-        for event in &events {
-            incremental.apply_event(event).unwrap();
-        }
-        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
-            panic!("expected pipeline");
-        };
-        for memory in [&incremental, &memory] {
-            assert!(memory.ledger.tasks["m1-t1"].verified);
-            assert_eq!(memory.ledger.rejected_verifications, 0);
-        }
-    }
-
-    #[test]
     fn node_authority_is_graph_visible_via_verified_outcome() {
         let graph = ledger_graph();
         assert!(node_has_verification_authority(
@@ -3955,7 +3523,6 @@ mod tests {
     fn attention_classifies_terminal_as_done() {
         assert_eq!(
             RunState::Terminal {
-                semantic_startup_guard: SeedStartupGuard::default(),
                 kind: TerminalReason::Completed,
                 reason: String::new(),
             }
@@ -3963,7 +3530,7 @@ mod tests {
             Attention::Done(TerminalReason::Completed)
         );
         assert_eq!(
-            RunState::not_started().attention(),
+            RunState::NotStarted.attention(),
             Attention::Working,
             "a not-yet-folded run is working, not blocked"
         );
@@ -3972,8 +3539,6 @@ mod tests {
     #[test]
     fn attention_classifies_bootstrap_awaiting_approval_as_needs_input() {
         let awaiting = RunState::Bootstrapping {
-            semantic_startup_guard: SeedStartupGuard::default(),
-            recovery: Default::default(),
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AwaitingApproval {
                 artifact: ContentHash::compute(b"flow"),
@@ -3983,8 +3548,6 @@ mod tests {
         assert_eq!(awaiting.attention(), Attention::NeedsInput);
 
         let running = RunState::Bootstrapping {
-            semantic_startup_guard: SeedStartupGuard::default(),
-            recovery: Default::default(),
             stage: BootstrapStage::Description,
             substate: BootstrapSubstate::AgentRunning {
                 session: SessionId::nil(),

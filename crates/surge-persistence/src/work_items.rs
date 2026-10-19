@@ -5,12 +5,11 @@ mod owned_flow;
 #[cfg(test)]
 #[path = "work_items/reconciliation_tests.rs"]
 mod reconciliation_tests;
-pub(crate) mod start_preparation;
+mod start_preparation;
 pub use owned_flow::{
-    AuthenticatedOwnedFlowInputs, OrdinaryRequestPrivacy, OwnedFlowAcceptance,
-    OwnedFlowCapturedSource, OwnedFlowPreparation, OwnedFlowPreparationPurpose,
-    OwnedFlowPreparationResult, OwnedFlowSourceSnapshot, OwnedFlowWakeAdmission, SeedFailureTail,
-    SeedStorageBinding, SeedStorageBindingFields,
+    AuthenticatedOwnedFlowInputs, OwnedFlowAcceptance, OwnedFlowCapturedSource,
+    OwnedFlowPreparation, OwnedFlowPreparationResult, OwnedFlowSourceSnapshot,
+    OwnedFlowWakeAdmission,
 };
 pub use start_preparation::StartPreparation;
 pub mod recovery_cycles;
@@ -48,9 +47,6 @@ impl ReconciliationObservation<'_> {
 /// Task mutation or durable storage failure.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkItemError {
-    /// Stored continuation inputs require later source/workspace execution owners.
-    #[error("continuation execution authority is not available")]
-    ContinuationExecutionUnavailable,
     /// Retained native storage ownership could not be established or validated.
     #[error("task state-home {category}: {message}")]
     StateHome {
@@ -151,33 +147,10 @@ enum LaunchLock {
         guard: std::sync::Arc<start_preparation::secure_lock::PreparationLock>,
         operation: surge_core::id::WorkItemOperationId,
         identity: String,
-        private_owner: Option<std::sync::Arc<owned_flow::PrivateOwner>>,
     },
 }
 impl WorkItemLaunchClaim {
     fn verify_lock(&self) -> Result<()> {
-        self.verify_native_lock()?;
-        if let LaunchLock::OwnedFlow {
-            private_owner: Some(owner),
-            ..
-        } = &self.lock
-        {
-            owner.verify()?;
-        }
-        self.verify_native_lock()
-    }
-    fn verify_lock_in(&self, conn: &Connection) -> Result<()> {
-        self.verify_native_lock()?;
-        if let LaunchLock::OwnedFlow {
-            private_owner: Some(owner),
-            ..
-        } = &self.lock
-        {
-            owner.verify_in(conn)?;
-        }
-        self.verify_native_lock()
-    }
-    fn verify_native_lock(&self) -> Result<()> {
         match &self.lock {
             #[cfg(not(windows))]
             LaunchLock::Legacy { file, path } => verify_lock_identity(file, path),
@@ -852,7 +825,6 @@ impl WorkItemStore {
         run: RunId,
         observation: Option<ReconciliationObservation<'_>>,
     ) -> Result<Option<WorkItemLaunchClaim>> {
-        owned_flow::refuse_execution(self, run)?;
         {
             let conn = self.pool.get()?;
             let value = attempt(&conn, run)?;
@@ -946,11 +918,10 @@ impl WorkItemStore {
     /// Validate host ownership at every engine boundary, never caller configuration.
     pub fn validate_claim(&self, claim: &WorkItemLaunchClaim) -> Result<WorkItemAttempt> {
         claim.verify_lock()?;
-        owned_flow::refuse_execution(self, claim.run())?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
         let value = self.validate_claim_in(&tx, claim)?;
-        claim.verify_lock_in(&tx)?;
+        claim.verify_lock()?;
         tx.commit()?;
         Ok(value)
     }

@@ -877,7 +877,6 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
     let bridge = Arc::new(mock_bridge::MockBridge::new());
     let (engine, cancel, server, socket) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    let cold_started = std::time::Instant::now();
     let observed = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if bridge.last_prompt().await.is_some() {
@@ -889,8 +888,7 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
     .await;
     assert!(
         observed.is_ok(),
-        "cold resume elapsed={:?}; diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
-        cold_started.elapsed(),
+        "cold resume diagnostic: {:?}; journal: {:?}; control={:?}; active={:?}; server_finished={}; trace={}",
         storage
             .work_items()
             .for_run(attempt.run)
@@ -1022,27 +1020,12 @@ async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains
     let bridge = Arc::new(mock_bridge::MockBridge::new());
     let (engine, cancel, server, _) =
         cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-    let started = std::time::Instant::now();
     let observed = wait_for_attention(&bridge, &storage, attempt.run).await;
-    if observed.is_err() {
-        legacy_cap_timeout_observation(
-            &storage,
-            &bridge,
-            attempt.run,
-            version,
-            started.elapsed(),
-            conn.is_autocommit(),
-            server.is_finished(),
-        );
-    }
-    // Preserve the original assertion, but let actual fixture owners settle before rethrowing.
-    let assertion = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert!(
-            observed.is_ok(),
-            "version {version}: {:?}",
-            storage.work_items().for_run(attempt.run).unwrap()
-        );
-    }));
+    assert!(
+        observed.is_ok(),
+        "version {version}: {:?}",
+        storage.work_items().for_run(attempt.run).unwrap()
+    );
     let prompted = bridge.last_prompt().await.is_some();
     if prompted {
         engine
@@ -1053,9 +1036,6 @@ async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains
     cancel.cancel();
     server.await.unwrap().unwrap();
     drop(unwrap_settled_fixture_owner(engine).await);
-    if let Err(panic) = assertion {
-        std::panic::resume_unwind(panic);
-    }
     assert_eq!(
         prompted,
         version == 12,
@@ -1070,62 +1050,6 @@ async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains
         assert_eq!(current.binding, attempt.binding);
     }
 }
-fn legacy_cap_timeout_observation(
-    storage: &Storage,
-    bridge: &mock_bridge::MockBridge,
-    run: surge_core::RunId,
-    version: u32,
-    elapsed: Duration,
-    corruption_autocommit: bool,
-    server_finished: bool,
-) {
-    let attempt = storage
-        .work_items()
-        .for_run(run)
-        .map(|row| {
-            row.map(|row| {
-                (
-                    row.state,
-                    row.binding.generation,
-                    row.usage_seq,
-                    row.diagnostic.is_some(),
-                )
-            })
-        })
-        .map_err(|_| "unavailable");
-    let control = storage
-        .work_items()
-        .execution_control(run)
-        .map(|row| row.map(|row| (row.state, row.generation, row.diagnostic.is_some())))
-        .map_err(|_| "unavailable");
-    let cycles = storage
-        .work_items()
-        .due_recovery_wakes_for_run(run, i64::MAX, 10)
-        .map(|rows| rows.len())
-        .map_err(|_| "unavailable");
-    let calls = bridge.recorded_calls.try_lock().ok().map(|calls| {
-        use mock_bridge::RecordedCall;
-        (
-            calls
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::OpenSession))
-                .count(),
-            calls
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::SendMessage { .. }))
-                .count(),
-            calls
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::CloseSession(_)))
-                .count(),
-        )
-    });
-    eprintln!(
-        "WG7 legacy-cap version={version} run={run} elapsed={elapsed:?} corruption_connection_retained=true corruption_autocommit={corruption_autocommit} server_finished={server_finished} attempt={attempt:?} control={control:?} cycles={cycles:?} bridge_open_send_close={calls:?} subscriptions={} journal=unavailable-no-synchronous-admitted-reader active_runs=unavailable-no-synchronous-snapshot socket_methods=unavailable-no-observer",
-        bridge.subscribe_count()
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches() {
     let home = FixtureHome::new().unwrap();

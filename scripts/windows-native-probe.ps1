@@ -112,7 +112,7 @@ try {
         'state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final',
         'state_home::windows::namespace::private_objects::tests::killed_native_preparation_owner_releases_os_lock_without_changing_original_identity',
         'work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority',
-        'work_items::owned_flow::tests::accepted_public_private_mcp_replay_refuses_unavailable_storage_without_changing_facts',
+        'work_items::owned_flow::tests::accepted_public_flow_replay_precedes_unavailable_private_storage',
         'work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque',
         'work_items::owned_flow::private_inputs::tests::established_corrupt_host_key_never_regenerates_or_authenticates',
         'work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed',

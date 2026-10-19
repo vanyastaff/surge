@@ -1,5 +1,5 @@
 //! Exclusive host preparation before freezing sources in the actual launch workspace.
-pub(crate) mod secure_lock;
+pub(in crate::work_items) mod secure_lock;
 use super::*;
 use secure_lock::PreparationLock;
 

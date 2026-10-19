@@ -9,7 +9,6 @@ use surge_core::{
 #[derive(Clone, Copy)]
 pub(in crate::work_items) enum PreparationLockKey {
     Task(WorkItemId),
-    PrivateEstablishment,
     FlowOperation(WorkItemOperationId),
     FlowLaunch {
         operation: WorkItemOperationId,
@@ -20,7 +19,6 @@ impl PreparationLockKey {
     fn name(self) -> String {
         match self {
             Self::Task(item) => item.to_string(),
-            Self::PrivateEstablishment => "flow-private-establishment-v1".into(),
             Self::FlowOperation(operation) => format!("flow-operation-v1-{operation}"),
             Self::FlowLaunch { operation, run } => format!("flow-launch-v1-{operation}-{run}"),
         }
@@ -152,7 +150,7 @@ impl PreparationLock {
 /// Private owned-flow objects exist only on Linux and macOS
 /// (`owned_flow::private_files`), so this check has no other callers.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
+pub(in crate::work_items) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
     unix::check_acl(file)
         .map_err(|()| WorkItemError::Invalid("unsafe private preparation ACL".into()))
 }

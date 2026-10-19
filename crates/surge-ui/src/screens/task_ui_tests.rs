@@ -913,11 +913,7 @@ fn disconnected_task_with_cached_working_stream_is_unconfirmed(cx: &mut TestAppC
             0,
         );
     }
-    assert_eq!(
-        stream.display().label(),
-        "Run state is unconfirmed",
-        "a cached execution prefix has no attached observation"
-    );
+    assert_eq!(stream.display().label(), "Running");
     let record = WorkItemRecord {
         id: surge_core::id::WorkItemId::new(),
         project: WorkItemProjectId::new(),
@@ -950,10 +946,7 @@ fn disconnected_task_with_cached_working_stream_is_unconfirmed(cx: &mut TestAppC
         let state = view.state.read(cx);
         assert!(!state.tasks.fresh);
         assert_eq!(state.tasks.records[0].id, record.id);
-        assert_eq!(
-            state.run_streams[&run].display().label(),
-            "Run state is unconfirmed"
-        );
+        assert_eq!(state.run_streams[&run].display().label(), "Running");
         assert_eq!(view.durable_status(&record, cx), "Run state is unconfirmed");
     });
     state.update(cx, |state, _| {
@@ -1563,8 +1556,8 @@ fn newly_admitted_suspend_cannot_use_old_executing_detail(cx: &mut TestAppContex
     }
     assert_eq!(
         stream.display().label(),
-        "Run state is unconfirmed",
-        "the actual cached journal prefix alone does not establish a current observation"
+        "Running",
+        "actual cached journal prefix was working"
     );
     stream.live = true;
     cx.update(gpui_kit::init);

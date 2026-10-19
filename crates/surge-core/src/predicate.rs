@@ -4,31 +4,24 @@
 //! the engine can supply runtime data (artifacts, env vars, file existence,
 //! prior outcomes) without coupling the evaluator to engine internals.
 //!
-//! Missing data makes a leaf return `false`; unavailable semantic provenance
-//! returns a typed error. Combinators evaluate in order and short-circuit, so
-//! unreachable semantic data is neither read nor validated.
+//! Fail-closed semantics: missing data (unknown artifact name, undefined env
+//! var, broken symlink) makes the leaf predicate return `false`. Combinators
+//! short-circuit normally. Documented choice — in an autonomous setting,
+//! panicking on missing data would turn a small data error into a run-killing
+//! crash; falling back keeps the run going and surfaces the divergence via
+//! `OutcomeReported.summary`.
 
 use crate::branch_config::{CompareOp, Predicate};
-use crate::execution_recovery::semantic_position::PositionError;
 use crate::keys::{NodeKey, OutcomeKey};
 use std::path::Path;
 
 /// Runtime data source for predicate evaluation.
 pub trait PredicateContext {
     /// Most recent outcome reported for `node`, if any.
-    ///
-    /// # Errors
-    /// Returns an error when the selected record has unavailable provenance.
-    fn outcome_of(&self, node: &NodeKey) -> Result<Option<&OutcomeKey>, PositionError>;
+    fn outcome_of(&self, node: &NodeKey) -> Option<&OutcomeKey>;
 
     /// Size in bytes of the artifact identified by `name`, if it exists.
-    ///
-    /// Validates selected provenance before metadata access. A missing artifact
-    /// or inaccessible metadata is absence.
-    ///
-    /// # Errors
-    /// Returns an error when the selected artifact has invalid provenance.
-    fn artifact_size(&self, name: &str) -> Result<Option<u64>, PositionError>;
+    fn artifact_size(&self, name: &str) -> Option<u64>;
 
     /// Value of environment variable `name`, if defined.
     fn env_var(&self, name: &str) -> Option<String>;
@@ -37,47 +30,31 @@ pub trait PredicateContext {
     fn file_exists(&self, path: &Path) -> bool;
 }
 
-/// Evaluate `predicate` against `ctx` in order, preserving short-circuiting.
-///
-/// Missing data returns `false` from the relevant leaf. Unavailable semantic
-/// provenance in a reached leaf propagates without choosing a branch.
-///
-/// # Errors
-/// Returns the selected semantic record's position error from the context.
-pub fn evaluate(predicate: &Predicate, ctx: &dyn PredicateContext) -> Result<bool, PositionError> {
-    Ok(match predicate {
+/// Evaluate `predicate` against `ctx`. Never panics; missing data returns
+/// `false` from the relevant leaf and short-circuits combinators normally.
+#[must_use]
+pub fn evaluate(predicate: &Predicate, ctx: &dyn PredicateContext) -> bool {
+    match predicate {
         Predicate::FileExists { path } => ctx.file_exists(Path::new(path)),
         Predicate::ArtifactSize {
             artifact,
             op,
             value,
         } => ctx
-            .artifact_size(artifact)?
-            .is_some_and(|actual| compare_u64(actual, *op, *value)),
-        Predicate::OutcomeMatches { node, outcome } => ctx
-            .outcome_of(node)?
-            .is_some_and(|actual| actual == outcome),
+            .artifact_size(artifact)
+            .map(|actual| compare_u64(actual, *op, *value))
+            .unwrap_or(false),
+        Predicate::OutcomeMatches { node, outcome } => {
+            ctx.outcome_of(node).is_some_and(|o| o == outcome)
+        },
         Predicate::EnvVar { name, op, value } => ctx
             .env_var(name)
-            .is_some_and(|actual| compare_str(&actual, *op, value)),
-        Predicate::And { and } => {
-            for predicate in and {
-                if !evaluate(predicate, ctx)? {
-                    return Ok(false);
-                }
-            }
-            true
-        },
-        Predicate::Or { or } => {
-            for predicate in or {
-                if evaluate(predicate, ctx)? {
-                    return Ok(true);
-                }
-            }
-            false
-        },
-        Predicate::Not { not } => !evaluate(not, ctx)?,
-    })
+            .map(|actual| compare_str(&actual, *op, value))
+            .unwrap_or(false),
+        Predicate::And { and } => and.iter().all(|p| evaluate(p, ctx)),
+        Predicate::Or { or } => or.iter().any(|p| evaluate(p, ctx)),
+        Predicate::Not { not } => !evaluate(not, ctx),
+    }
 }
 
 fn compare_u64(a: u64, op: CompareOp, b: u64) -> bool {
@@ -118,11 +95,11 @@ mod tests {
     }
 
     impl PredicateContext for MockCtx {
-        fn outcome_of(&self, node: &NodeKey) -> Result<Option<&OutcomeKey>, PositionError> {
-            Ok(self.outcomes.get(node))
+        fn outcome_of(&self, node: &NodeKey) -> Option<&OutcomeKey> {
+            self.outcomes.get(node)
         }
-        fn artifact_size(&self, name: &str) -> Result<Option<u64>, PositionError> {
-            Ok(self.artifacts.get(name).copied())
+        fn artifact_size(&self, name: &str) -> Option<u64> {
+            self.artifacts.get(name).copied()
         }
         fn env_var(&self, name: &str) -> Option<String> {
             self.env.get(name).cloned()
@@ -139,7 +116,7 @@ mod tests {
         let p = Predicate::FileExists {
             path: "Cargo.toml".into(),
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -148,7 +125,7 @@ mod tests {
         let p = Predicate::FileExists {
             path: "missing.toml".into(),
         };
-        assert!(!evaluate(&p, &ctx).unwrap());
+        assert!(!evaluate(&p, &ctx));
     }
 
     #[test]
@@ -160,7 +137,7 @@ mod tests {
             op: CompareOp::Eq,
             value: 1024,
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -171,7 +148,7 @@ mod tests {
             op: CompareOp::Gt,
             value: 0,
         };
-        assert!(!evaluate(&p, &ctx).unwrap());
+        assert!(!evaluate(&p, &ctx));
     }
 
     #[test]
@@ -191,7 +168,7 @@ mod tests {
                 op,
                 value: 20,
             };
-            assert_eq!(evaluate(&p, &ctx).unwrap(), expected, "op={op:?}");
+            assert_eq!(evaluate(&p, &ctx), expected, "op={op:?}");
         }
     }
 
@@ -205,7 +182,7 @@ mod tests {
             node: n,
             outcome: OutcomeKey::try_from("done").unwrap(),
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -215,7 +192,7 @@ mod tests {
             node: NodeKey::try_from("nope").unwrap(),
             outcome: OutcomeKey::try_from("done").unwrap(),
         };
-        assert!(!evaluate(&p, &ctx).unwrap());
+        assert!(!evaluate(&p, &ctx));
     }
 
     #[test]
@@ -227,7 +204,7 @@ mod tests {
             op: CompareOp::Eq,
             value: "dev".into(),
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -238,7 +215,7 @@ mod tests {
             op: CompareOp::Eq,
             value: "x".into(),
         };
-        assert!(!evaluate(&p, &ctx).unwrap());
+        assert!(!evaluate(&p, &ctx));
     }
 
     #[test]
@@ -254,7 +231,7 @@ mod tests {
                 },
             ],
         };
-        assert!(!evaluate(&p, &ctx).unwrap());
+        assert!(!evaluate(&p, &ctx));
     }
 
     #[test]
@@ -271,7 +248,7 @@ mod tests {
                 },
             ],
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -282,7 +259,7 @@ mod tests {
                 path: "missing".into(),
             }),
         };
-        assert!(evaluate(&p, &ctx).unwrap());
+        assert!(evaluate(&p, &ctx));
     }
 
     #[test]
@@ -307,121 +284,6 @@ mod tests {
                 Predicate::FileExists { path: "z".into() },
             ],
         };
-        assert!(evaluate(&p, &ctx).unwrap());
-    }
-    struct RefusingCtx {
-        calls: std::cell::Cell<usize>,
-    }
-
-    impl PredicateContext for RefusingCtx {
-        fn outcome_of(&self, _: &NodeKey) -> Result<Option<&OutcomeKey>, PositionError> {
-            self.calls.set(self.calls.get() + 1);
-            Err(PositionError::ForeignLineage)
-        }
-        fn artifact_size(&self, _: &str) -> Result<Option<u64>, PositionError> {
-            self.calls.set(self.calls.get() + 1);
-            Err(PositionError::Unrecorded)
-        }
-        fn env_var(&self, _: &str) -> Option<String> {
-            None
-        }
-        fn file_exists(&self, path: &Path) -> bool {
-            path == Path::new("present")
-        }
-    }
-
-    #[test]
-    fn semantic_errors_propagate_through_reached_combinators() {
-        let leaf = Predicate::OutcomeMatches {
-            node: NodeKey::try_from("producer").unwrap(),
-            outcome: OutcomeKey::try_from("passed").unwrap(),
-        };
-        for predicate in [
-            leaf.clone(),
-            Predicate::Not {
-                not: Box::new(leaf.clone()),
-            },
-            Predicate::And {
-                and: vec![
-                    Predicate::FileExists {
-                        path: "present".into(),
-                    },
-                    leaf.clone(),
-                ],
-            },
-            Predicate::Or {
-                or: vec![
-                    Predicate::FileExists {
-                        path: "absent".into(),
-                    },
-                    leaf.clone(),
-                ],
-            },
-            Predicate::Not {
-                not: Box::new(Predicate::Or { or: vec![leaf] }),
-            },
-        ] {
-            let ctx = RefusingCtx {
-                calls: std::cell::Cell::new(0),
-            };
-            assert_eq!(
-                evaluate(&predicate, &ctx),
-                Err(PositionError::ForeignLineage)
-            );
-            assert_eq!(ctx.calls.get(), 1);
-        }
-        let ctx = RefusingCtx {
-            calls: std::cell::Cell::new(0),
-        };
-        let artifact = Predicate::Not {
-            not: Box::new(Predicate::ArtifactSize {
-                artifact: "evidence".into(),
-                op: CompareOp::Gt,
-                value: 0,
-            }),
-        };
-        assert_eq!(evaluate(&artifact, &ctx), Err(PositionError::Unrecorded));
-        assert_eq!(ctx.calls.get(), 1);
-    }
-
-    #[test]
-    fn unreachable_semantic_data_and_empty_combinators_do_not_lookup() {
-        let leaf = Predicate::ArtifactSize {
-            artifact: "invalid".into(),
-            op: CompareOp::Gt,
-            value: 0,
-        };
-        for (predicate, expected) in [
-            (
-                Predicate::And {
-                    and: vec![
-                        Predicate::FileExists {
-                            path: "absent".into(),
-                        },
-                        leaf.clone(),
-                    ],
-                },
-                false,
-            ),
-            (
-                Predicate::Or {
-                    or: vec![
-                        Predicate::FileExists {
-                            path: "present".into(),
-                        },
-                        leaf,
-                    ],
-                },
-                true,
-            ),
-            (Predicate::And { and: vec![] }, true),
-            (Predicate::Or { or: vec![] }, false),
-        ] {
-            let ctx = RefusingCtx {
-                calls: std::cell::Cell::new(0),
-            };
-            assert_eq!(evaluate(&predicate, &ctx), Ok(expected));
-            assert_eq!(ctx.calls.get(), 0);
-        }
+        assert!(evaluate(&p, &ctx));
     }
 }

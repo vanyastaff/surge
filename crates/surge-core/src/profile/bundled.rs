@@ -197,23 +197,6 @@ mod tests {
         );
         let outcomes: Vec<&str> = tester.outcomes.iter().map(|o| o.id.as_ref()).collect();
         assert_eq!(outcomes, ["passed", "failed", "cannot_run"]);
-        for outcome in &tester.outcomes[..2] {
-            assert_eq!(
-                outcome.produced_artifacts[0].path,
-                "verification-report.toml"
-            );
-            assert_eq!(
-                outcome.produced_artifacts[0].contract.kind,
-                ArtifactKind::VerificationReport
-            );
-        }
-        assert!(tester.outcomes[2].produced_artifacts.is_empty());
-        let prompt = &tester.prompt.system;
-        assert!(prompt.contains("artifacts_produced"));
-        assert!(!prompt.contains("Submit `verification_report` inline"));
-        assert!(prompt.contains("narrative evidence notes"));
-        assert!(!prompt.contains("`skipped` with"));
-        assert!(prompt.contains("must not edit project sources"));
     }
 
     #[test]

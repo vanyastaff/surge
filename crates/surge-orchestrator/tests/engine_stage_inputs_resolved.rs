@@ -78,10 +78,7 @@ async fn launch(
                 path: "context.md".into(),
                 name: "context".into(),
                 produced_by: node.clone(),
-                produced_at_seq: Some(
-                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(1)
-                        .unwrap(),
-                ),
+                produced_at_seq: 1,
             },
         );
         if file.is_some() {

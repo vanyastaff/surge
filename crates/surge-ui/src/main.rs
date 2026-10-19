@@ -25,7 +25,6 @@ mod project_init;
 mod project_lifecycle;
 mod roadmap_source;
 mod router;
-mod run_observation;
 mod run_stream;
 mod screens;
 mod sidebar;

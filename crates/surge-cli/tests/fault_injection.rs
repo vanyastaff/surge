@@ -113,7 +113,7 @@ fn unclean_exit_mid_run_preserves_and_folds_event_log() {
             .env("SURGE_HOME", surge_home)
             .assert()
             .success()
-            .stdout(contains("last recorded node: impl_1"))
+            .stdout(contains("active node:   impl_1"))
             .stdout(contains("terminal:      no"));
         daemon.close().unwrap();
     }

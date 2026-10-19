@@ -4,22 +4,6 @@ assertion_line: 238
 expression: memory
 ---
 RunMemory {
-    semantic_lineage: None,
-    semantic_startup_guard: SeedStartupGuard {
-        run: Some(
-            RunId(
-                Ulid(
-                    1,
-                ),
-            ),
-        ),
-        binding: None,
-        graph_hash: Some(
-            sha256:55ed60a6b1da763c455ac8abdce281dd82ba7654dd9d2932791173c0d5d7ca46,
-        ),
-        executable: true,
-        marker: false,
-    },
     unresolved_mcp_calls: [],
     execution_writers: {},
     provider_sessions: {},
@@ -42,20 +26,12 @@ RunMemory {
             OutcomeRecord {
                 outcome: OutcomeKey("done"),
                 summary: "implementation complete",
-                seq: SemanticPosition(
-                    Local(
-                        9,
-                    ),
-                ),
+                seq: 9,
             },
             OutcomeRecord {
                 outcome: OutcomeKey("done"),
                 summary: "second pass",
-                seq: SemanticPosition(
-                    Local(
-                        12,
-                    ),
-                ),
+                seq: 12,
             },
         ],
     },
@@ -134,13 +110,4 @@ RunMemory {
         },
     ),
     work_item: None,
-    recovery: RecoveryObserver {
-        observation: CompletePrefix {
-            through: 12,
-            latest: None,
-        },
-        bound: false,
-        control_generation: 0,
-        terminal_seq: None,
-    },
 }

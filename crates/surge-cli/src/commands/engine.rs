@@ -600,7 +600,7 @@ async fn replay_command(run_id: String, seq: Option<u64>, format: OutputFormat) 
     println!("seq cutoff:    {seq_label}");
     println!("events folded: {}", snap.event_count);
     println!(
-        "last recorded node: {}",
+        "active node:   {}",
         snap.active_node.as_deref().unwrap_or("-")
     );
     println!(

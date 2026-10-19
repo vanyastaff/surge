@@ -44,9 +44,6 @@ pub struct RenderedNotification {
 /// Errors a `NotifyDeliverer` can produce.
 #[derive(Debug, Error)]
 pub enum NotifyError {
-    /// A rendered semantic record has unavailable or foreign provenance.
-    #[error(transparent)]
-    Position(#[from] surge_core::execution_recovery::semantic_position::PositionError),
     /// Required secret reference (chat id, bot token, SMTP creds) missing.
     #[error("missing secret reference {0}")]
     MissingSecret(String),

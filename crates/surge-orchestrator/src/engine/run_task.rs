@@ -646,7 +646,7 @@ async fn execute_current_stage(
         StageResolution::Terminal(outcome) => StageLoopStep::Done(outcome),
         StageResolution::Outcome(outcome) => {
             if let Err(error) = route_and_snapshot(params, state, &outcome, stage_start_seq).await {
-                return StageLoopStep::Done(failed(params, error.to_string()).await);
+                return StageLoopStep::Done(failed(params, error).await);
             }
             match enforce_budget(params, state).await {
                 Ok(Some(outcome)) => StageLoopStep::Done(outcome),
@@ -2489,45 +2489,9 @@ async fn record_suppressed_error(
     Ok(suppressed)
 }
 
-/// Pure debug-selector check. A bare node retains the original first-entry
-/// behavior; `node@N` selects a positive durable occurrence. Release tests
-/// exercise the same input while proving that no selector can request an exit.
-#[cfg(any(debug_assertions, test))]
-fn route_commit_occurrence_matches(
-    selector: Option<&str>,
-    node: &str,
-    current_entry: u64,
-    entries: &[u64],
-    route_committed: bool,
-) -> bool {
-    if !cfg!(debug_assertions) || !route_committed {
-        return false;
-    }
-    let Some(selector) = selector else {
-        return false;
-    };
-    let (target, occurrence) = match selector.rsplit_once('@') {
-        Some((target, count)) => {
-            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
-                return false;
-            }
-            let Ok(count) = count.parse::<usize>() else {
-                return false;
-            };
-            (target, count)
-        },
-        None => (selector, 1),
-    };
-    !target.is_empty()
-        && target == node
-        && occurrence > 0
-        && entries.len() == occurrence
-        && entries.last() == Some(&current_entry)
-}
-
 /// Debug-only crash seam after an authenticated route and snapshot commit.
-/// Count only durable entries through this committed prefix. Release builds
-/// do not read the selector or invoke this wrapper.
+/// Only the first actual durable entry of the selected node can terminate this
+/// isolated test host. Release builds do not read the selector or exit.
 #[cfg(debug_assertions)]
 async fn route_commit_exit_if_requested(
     params: &RunTaskParams,
@@ -2536,7 +2500,7 @@ async fn route_commit_exit_if_requested(
     committed: surge_persistence::runs::EventSeq,
 ) {
     let target = std::env::var("SURGE_ROUTE_COMMIT_EXIT").ok();
-    if target.is_none() {
+    if !checkpoint_exit_matches(target.as_deref(), node.as_str()) {
         return;
     }
     let Ok(events) = params
@@ -2546,34 +2510,12 @@ async fn route_commit_exit_if_requested(
     else {
         return;
     };
-    let entries: Vec<_> = events
-        .iter()
-        .filter_map(|row| match &row.payload.payload {
-            EventPayload::StageEntered { node: actual, .. } if actual == node => {
-                Some(row.seq.as_u64())
-            },
-            _ => None,
-        })
-        .collect();
-    // The route must be in the actual committed tail, bound to the selected
-    // entry (gate) or to that entry's accepted invocation (agent).
-    let route_committed = events.last().is_some_and(|tail| {
-        tail.seq == committed && match tail.payload.payload() {
-            EventPayload::GateStageRouteCommitted { stage_entry_seq, .. } => *stage_entry_seq == entry.as_u64(),
-            EventPayload::StageRouteCommitted { invocation, outcome_commit_seq } => events.iter().any(|row| {
-                row.seq.as_u64() == *outcome_commit_seq && row.seq > entry && matches!(row.payload.payload(),
-                    EventPayload::StageOutcomeCommitted { commit } if commit.invocation() == *invocation && &commit.context().node == node)
-            }),
-            _ => false,
-        }
+    let mut entries = events.iter().filter(|row| {
+        matches!(
+            &row.payload.payload, EventPayload::StageEntered {node:actual,..} if actual==node
+        )
     });
-    if route_commit_occurrence_matches(
-        target.as_deref(),
-        node.as_str(),
-        entry.as_u64(),
-        &entries,
-        route_committed,
-    ) {
+    if entries.next().is_some_and(|row| row.seq == entry) && entries.next().is_none() {
         tracing::warn!(target: "engine::fault_injection", %node,
             "SURGE_ROUTE_COMMIT_EXIT hit after committed route; exiting uncleanly (99)");
         std::process::exit(99);
@@ -2670,30 +2612,27 @@ const SPLIT_TASKS_MAX: usize = 12;
 /// splices twice or loses the splice.
 /// The validated `discovered-tasks` the split planner produced in this occurrence.
 async fn read_split_tasks(
-    artifact_store: &surge_persistence::artifacts::ArtifactStore,
-    run_id: surge_core::RunId,
-    memory: &surge_core::run_state::RunMemory,
+    params: &RunTaskParams,
+    state: &RunExecutionState,
     node: &surge_core::keys::NodeKey,
     stage_start_seq: surge_persistence::runs::EventSeq,
 ) -> Result<surge_core::roadmap::DiscoveredTasksArtifact, String> {
-    let artifact = memory
+    let artifact = state
+        .memory
         .artifacts_by_node
         .get(node)
         .into_iter()
         .flatten()
         .rfind(|artifact| {
             artifact.name == "discovered-tasks"
-                && artifact.produced_at_seq.is_some_and(|position| {
-                    position
-                        .local_seq()
-                        .is_ok_and(|seq| seq > stage_start_seq.as_u64())
-                })
+                && artifact.produced_at_seq > stage_start_seq.as_u64()
         })
         .ok_or_else(|| {
             format!("split planner {node} reported split without discovered-tasks.toml")
         })?;
-    let bytes = artifact_store
-        .open_bounded(run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
+    let bytes = params
+        .artifact_store
+        .open_bounded(params.run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
         .await
         .map_err(|error| format!("read split tasks: {error}"))?;
     let text = String::from_utf8(bytes).map_err(|_| "split tasks are not UTF-8".to_owned())?;
@@ -2758,14 +2697,7 @@ async fn task_split_effect(
     if !is_split {
         return Ok(None);
     }
-    let tasks = read_split_tasks(
-        &params.artifact_store,
-        params.run_id,
-        &state.memory,
-        &node,
-        stage_start_seq,
-    )
-    .await?;
+    let tasks = read_split_tasks(params, state, &node, stage_start_seq).await?;
     let Some(crate::engine::frames::Frame::Loop(frame)) = state
         .frames
         .iter_mut()
@@ -2818,33 +2750,12 @@ async fn task_split_effect(
     })))
 }
 
-#[derive(Debug, thiserror::Error)]
-enum StageRouteError {
-    #[error(transparent)]
-    Fold(#[from] surge_core::run_state::FoldError),
-    #[error(transparent)]
-    Storage(#[from] surge_persistence::runs::StorageError),
-    #[error("{0}")]
-    Route(String),
-}
-
-impl From<String> for StageRouteError {
-    fn from(message: String) -> Self {
-        Self::Route(message)
-    }
-}
-impl From<&str> for StageRouteError {
-    fn from(message: &str) -> Self {
-        Self::Route(message.to_owned())
-    }
-}
-
 async fn route_and_snapshot(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
     outcome: &OutcomeKey,
     stage_start_seq: surge_persistence::runs::EventSeq,
-) -> Result<(), StageRouteError> {
+) -> Result<(), String> {
     let mut prepared = state.clone();
     let prefix = params
         .writer
@@ -2861,7 +2772,8 @@ async fn route_and_snapshot(
         )
         .await
         .map_err(|error| format!("read stage route prefix: {error}"))?;
-    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory)?;
+    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory)
+        .map_err(|error| format!("fold stage route prefix: {error}"))?;
     prepared
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
@@ -2904,17 +2816,14 @@ async fn route_and_snapshot(
             .checked_add(events.len() as u64)
             .ok_or_else(|| "stage route sequence overflow".to_owned())?,
     );
-    let memory_events: Vec<_> = events
-        .iter()
-        .enumerate()
-        .map(|(offset, event)| RunEvent {
+    for (offset, event) in events.iter().enumerate() {
+        prepared.memory.apply_event(&RunEvent {
             run_id: params.run_id,
             seq: prefix.as_u64() + offset as u64 + 1,
             timestamp: chrono::Utc::now(),
             payload: event.payload().clone(),
-        })
-        .collect();
-    prepared.memory.apply_events(&memory_events)?;
+        });
+    }
     let next_cursor = Cursor {
         node: routed.target,
         attempt: 1,
@@ -3347,7 +3256,9 @@ fn apply_read_events(
         .iter()
         .map(|event| event.to_run_event(run_id))
         .collect::<Result<Vec<_>, _>>()?;
-    memory.apply_events(&converted)?;
+    for event in &converted {
+        memory.apply_event(event);
+    }
     Ok(AppliedEventBatch {
         graph_revisions: crate::engine::execution_state::pending_revisions(events, 0),
     })
@@ -3528,31 +3439,6 @@ mod tests {
     use surge_core::keys::ProfileKey;
     use surge_core::node::{Node, OutcomeDecl, Position};
 
-    #[test]
-    fn semantic_zero_position_batch_does_not_apply_earlier_valid_event() {
-        let mut memory = RunMemory::default();
-        let before = memory.clone();
-        let read = |seq| surge_persistence::runs::ReadEvent {
-            seq: surge_persistence::runs::EventSeq(seq),
-            timestamp_ms: 1_760_000_000_000,
-            kind: "RequirementRevised".into(),
-            payload: surge_core::VersionedEventPayload::new(EventPayload::RequirementRevised {
-                node: surge_core::keys::NodeKey::try_from("plan").unwrap(),
-                task: Some(surge_core::roadmap::RoadmapTaskId::from("task")),
-                text: "batch must be atomic before all observers".into(),
-            }),
-        };
-        let refused = apply_read_events(RunId::new(), &[read(1), read(0)], &mut memory);
-        assert!(
-            refused.is_err(),
-            "invalid event position accepted: {refused:?}"
-        );
-        assert_eq!(
-            memory, before,
-            "valid first event leaked from rejected batch"
-        );
-    }
-
     /// #120: a batch with a corrupt timestamp anywhere folds nothing, so the
     /// memory never holds half a batch that a later catch-up would refold.
     #[test]
@@ -3600,92 +3486,6 @@ mod tests {
         assert!(!checkpoint_exit_matches(Some("impl_1"), "review_1"));
         assert!(!checkpoint_exit_matches(None, "impl_1"));
         assert!(!checkpoint_exit_matches(Some(""), "impl_1"));
-    }
-
-    #[test]
-    fn route_commit_selector_requires_exact_durable_occurrence_and_route() {
-        let enabled = cfg!(debug_assertions);
-        assert_eq!(
-            route_commit_occurrence_matches(
-                Some("flow_generator"),
-                "flow_generator",
-                10,
-                &[10],
-                true
-            ),
-            enabled
-        );
-        assert_eq!(
-            route_commit_occurrence_matches(
-                Some("flow_generator@1"),
-                "flow_generator",
-                10,
-                &[10],
-                true
-            ),
-            enabled
-        );
-        assert_eq!(
-            route_commit_occurrence_matches(
-                Some("flow_generator@2"),
-                "flow_generator",
-                40,
-                &[10, 40],
-                true
-            ),
-            enabled
-        );
-        assert!(!route_commit_occurrence_matches(
-            Some("flow_generator"),
-            "flow_generator",
-            40,
-            &[10, 40],
-            true
-        ));
-        assert!(!route_commit_occurrence_matches(
-            Some("flow_generator@2"),
-            "flow_generator",
-            10,
-            &[10],
-            true
-        ));
-        assert!(!route_commit_occurrence_matches(
-            Some("flow_generator@2"),
-            "flow_generator",
-            10,
-            &[10, 40],
-            true
-        ));
-        assert!(!route_commit_occurrence_matches(
-            Some("flow_generator@2"),
-            "flow_generator",
-            40,
-            &[10, 40],
-            false
-        ));
-        assert!(!route_commit_occurrence_matches(
-            Some("flow_generator@2"),
-            "flow_gate",
-            40,
-            &[10, 40],
-            true
-        ));
-        for selector in [
-            None,
-            Some(""),
-            Some("@2"),
-            Some("flow_generator@0"),
-            Some("flow_generator@-1"),
-            Some("flow_generator@+2"),
-            Some("flow_generator@"),
-            Some("flow_generator@two"),
-            Some("flow_generator@184467440737095516160"),
-        ] {
-            assert!(
-                !route_commit_occurrence_matches(selector, "flow_generator", 40, &[10, 40], true),
-                "{selector:?}"
-            );
-        }
     }
 
     #[test]
@@ -4079,7 +3879,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(test)]
-#[path = "run_task_semantic_tests.rs"]
-mod semantic_history_tests;

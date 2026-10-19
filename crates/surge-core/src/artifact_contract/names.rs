@@ -96,14 +96,6 @@ pub struct AmbiguousArtifact {
     pub names: Vec<String>,
 }
 
-/// Canonical selection requires both unambiguous names and a valid lineage.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ArtifactSelectionError {
-    #[error(transparent)]
-    Ambiguous(#[from] AmbiguousArtifact),
-    #[error(transparent)]
-    Position(#[from] crate::execution_recovery::semantic_position::PositionError),
-}
 /// The canonical ref for `kind` in `format` (`None`: the primary format):
 /// the latest ref per spelling, refusing competing spellings and
 /// equal-sequence conflicts instead of guessing.
@@ -115,8 +107,7 @@ pub fn select_canonical<'a>(
     refs: impl IntoIterator<Item = &'a ArtifactRef>,
     kind: ArtifactKind,
     format: Option<ArtifactFormat>,
-    lineage: Option<&crate::execution_recovery::semantic_position::SeedLineage>,
-) -> Result<Option<&'a ArtifactRef>, ArtifactSelectionError> {
+) -> Result<Option<&'a ArtifactRef>, AmbiguousArtifact> {
     let wanted = format.unwrap_or_else(|| contract_for(kind).primary_format);
     let mut latest: BTreeMap<&str, &ArtifactRef> = BTreeMap::new();
     let mut conflict = false;
@@ -127,15 +118,8 @@ pub fn select_canonical<'a>(
         if name.kind != kind || name.effective_format() != wanted {
             continue;
         }
-        let position = artifact
-            .produced_at_seq
-            .ok_or(crate::execution_recovery::semantic_position::PositionError::Unrecorded)?;
-        position.validate(lineage)?;
         let entry = latest.entry(artifact.name.as_str()).or_insert(artifact);
-        let previous = entry
-            .produced_at_seq
-            .ok_or(crate::execution_recovery::semantic_position::PositionError::Unrecorded)?;
-        if position.compare(previous, lineage)?.is_gt() {
+        if artifact.produced_at_seq > entry.produced_at_seq {
             *entry = artifact;
         } else if artifact.produced_at_seq == entry.produced_at_seq && *entry != artifact {
             conflict = true;
@@ -145,8 +129,7 @@ pub fn select_canonical<'a>(
         return Err(AmbiguousArtifact {
             kind: kind.as_str(),
             names: latest.keys().map(|name| (*name).to_owned()).collect(),
-        }
-        .into());
+        });
     }
     Ok(latest.into_values().next())
 }

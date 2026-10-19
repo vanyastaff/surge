@@ -43,12 +43,6 @@ impl BootstrapContinuation {
     ) -> Result<Self, BootstrapInputError> {
         if graph.name.trim().is_empty()
             || artifacts.len() != 3
-            || artifacts.iter().any(|artifact| {
-                artifact
-                    .recorded_position()
-                    .and_then(|position| position.local_seq())
-                    .is_err()
-            })
             || ["description", "roadmap", "flow"].into_iter().any(|name| {
                 artifacts
                     .iter()
@@ -136,95 +130,28 @@ mod artifact_refs {
     ) -> Result<S::Ok, S::Error> {
         artifacts
             .iter()
-            .map(|artifact| {
-                Ok(StoredArtifact {
-                    hash: artifact.hash,
-                    path: artifact.path.clone(),
-                    name: artifact.name.clone(),
-                    produced_by: artifact.produced_by.clone(),
-                    produced_at_seq: artifact
-                        .produced_at_seq
-                        .ok_or_else(|| {
-                            serde::ser::Error::custom("unrecorded Bootstrap handoff artifact")
-                        })?
-                        .local_seq()
-                        .map_err(serde::ser::Error::custom)?,
-                })
+            .map(|artifact| StoredArtifact {
+                hash: artifact.hash,
+                path: artifact.path.clone(),
+                name: artifact.name.clone(),
+                produced_by: artifact.produced_by.clone(),
+                produced_at_seq: artifact.produced_at_seq,
             })
-            .collect::<Result<Vec<_>, S::Error>>()?
+            .collect::<Vec<_>>()
             .serialize(serializer)
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<ArtifactRef>, D::Error> {
-        Vec::<StoredArtifact>::deserialize(deserializer)?
+        Ok(Vec::<StoredArtifact>::deserialize(deserializer)?
             .into_iter()
-            .map(|artifact| {
-                Ok(ArtifactRef {
-                    hash: artifact.hash,
-                    path: artifact.path,
-                    name: artifact.name,
-                    produced_by: artifact.produced_by,
-                    produced_at_seq: Some(
-                        crate::execution_recovery::semantic_position::SemanticPosition::local(
-                            artifact.produced_at_seq,
-                        )
-                        .map_err(serde::de::Error::custom)?,
-                    ),
-                })
+            .map(|artifact| ArtifactRef {
+                hash: artifact.hash,
+                path: artifact.path,
+                name: artifact.name,
+                produced_by: artifact.produced_by,
+                produced_at_seq: artifact.produced_at_seq,
             })
-            .collect::<Result<Vec<_>, D::Error>>()
-    }
-}
-
-#[cfg(test)]
-mod semantic_handoff_tests {
-    use super::*;
-    use crate::ContentHash;
-    use crate::execution_recovery::semantic_position::{
-        ContinuationSeedId, SemanticPosition, SourceEventRef,
-    };
-
-    fn approved(position: Option<SemanticPosition>) -> Vec<ArtifactRef> {
-        ["description", "roadmap", "flow"]
-            .into_iter()
-            .map(|name| ArtifactRef {
-                hash: ContentHash::compute(name.as_bytes()),
-                path: format!("{name}.toml").into(),
-                name: name.into(),
-                produced_by: NodeKey::try_from("planning").unwrap(),
-                produced_at_seq: position,
-            })
-            .collect()
-    }
-    fn continuation(
-        artifacts: Vec<ArtifactRef>,
-    ) -> Result<BootstrapContinuation, BootstrapInputError> {
-        BootstrapContinuation::new(
-            RunId::new(),
-            BootstrapContentRef {
-                name: "flow.toml".into(),
-                digest: ContentHash::compute(b"flow"),
-            },
-            artifacts,
-            BudgetGuard::default(),
-        )
-    }
-    #[test]
-    fn actual_handoff_rejects_unrecorded_and_inherited_before_serialization() {
-        assert!(continuation(approved(None)).is_err());
-        let inherited = SemanticPosition::inherited(
-            ContinuationSeedId::new(ContentHash::compute(b"seed")),
-            SourceEventRef::new(RunId::new(), 87).unwrap(),
-        );
-        assert!(continuation(approved(Some(inherited))).is_err());
-        let accepted = continuation(approved(Some(SemanticPosition::local(9).unwrap()))).unwrap();
-        let bytes = serde_json::to_value(&accepted).unwrap();
-        assert_eq!(bytes["artifacts"][0]["produced_at_seq"], 9);
-        let decoded: BootstrapContinuation = serde_json::from_value(bytes.clone()).unwrap();
-        assert_eq!(decoded, accepted);
-        let mut zero = bytes;
-        zero["artifacts"][0]["produced_at_seq"] = serde_json::json!(0);
-        assert!(serde_json::from_value::<BootstrapContinuation>(zero).is_err());
+            .collect())
     }
 }

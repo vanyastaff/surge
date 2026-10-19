@@ -16,9 +16,6 @@ use surge_core::run_state::RunMemory;
 /// Errors returned by [`resolve_bindings`].
 #[derive(Debug, thiserror::Error)]
 pub enum BindingError {
-    /// Artifact production position is unavailable or outside this lineage.
-    #[error(transparent)]
-    Position(#[from] surge_core::execution_recovery::semantic_position::PositionError),
     /// The referenced artifact name is not present in `RunMemory`.
     #[error("unknown artifact name: {0}")]
     UnknownArtifact(String),
@@ -53,8 +50,6 @@ pub async fn resolve_bindings(
         let resolved: Result<String, BindingError> = match &b.source {
             ArtifactSource::RunArtifact { name } => {
                 if let Some(aref) = memory.artifacts.get(name) {
-                    aref.recorded_position()?
-                        .validate(memory.semantic_lineage.as_ref())?;
                     read_artifact_text(&aref.path, worktree_root, &aref.name).await
                 } else {
                     Err(BindingError::UnknownArtifact(name.clone()))
@@ -71,21 +66,11 @@ pub async fn resolve_bindings(
                             arefs,
                             name.kind,
                             name.format,
-                            memory.semantic_lineage.as_ref(),
                         )
-                        .map_err(|error| match error {
-                            surge_core::artifact_contract::ArtifactSelectionError::Ambiguous(_) => {
-                                BindingError::AmbiguousArtifact(artifact.clone())
-                            },
-                            surge_core::artifact_contract::ArtifactSelectionError::Position(
-                                error,
-                            ) => BindingError::Position(error),
-                        })?,
+                        .map_err(|_| BindingError::AmbiguousArtifact(artifact.clone()))?,
                         None => arefs.iter().rev().find(|a| &a.name == artifact),
                     };
                     if let Some(aref) = reference {
-                        aref.recorded_position()?
-                            .validate(memory.semantic_lineage.as_ref())?;
                         read_artifact_text(&aref.path, worktree_root, &aref.name).await
                     } else {
                         Err(BindingError::UnknownArtifact(artifact.clone()))
@@ -98,8 +83,6 @@ pub async fn resolve_bindings(
             ArtifactSource::GlobPattern { .. } => Err(BindingError::GlobUnsupported),
             ArtifactSource::InitialPrompt => {
                 if let Some(aref) = memory.artifacts.get("user_prompt") {
-                    aref.recorded_position()?
-                        .validate(memory.semantic_lineage.as_ref())?;
                     read_artifact_text(&aref.path, worktree_root, &aref.name).await
                 } else {
                     Err(BindingError::UnknownArtifact(
@@ -225,66 +208,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn actual_bindings_refuse_unrecorded_noncanonical_handles_even_when_optional() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = NodeKey::try_from("build").unwrap();
-        let path = dir.path().join("details.txt");
-        tokio::fs::write(&path, "real retained bytes")
-            .await
-            .unwrap();
-        let handle = surge_core::run_state::ArtifactRef {
-            hash: surge_core::ContentHash::compute(b"real retained bytes"),
-            path,
-            name: "details".into(),
-            produced_by: node.clone(),
-            produced_at_seq: None,
-        };
-        let mut memory = RunMemory::default();
-        memory.artifacts.insert("details".into(), handle.clone());
-        memory
-            .artifacts
-            .insert("user_prompt".into(), handle.clone());
-        memory.artifacts_by_node.insert(node.clone(), vec![handle]);
-        for source in [
-            ArtifactSource::RunArtifact {
-                name: "details".into(),
-            },
-            ArtifactSource::NodeOutput {
-                node,
-                artifact: "details".into(),
-            },
-            ArtifactSource::InitialPrompt,
-        ] {
-            let binding = Binding {
-                source,
-                target: TemplateVar("input".into()),
-                optional: true,
-            };
-            assert!(matches!(
-                resolve_bindings(&[binding], &memory, dir.path()).await,
-                Err(BindingError::Position(_))
-            ));
-        }
-        memory.artifacts.get_mut("details").unwrap().produced_at_seq = Some(
-            surge_core::execution_recovery::semantic_position::SemanticPosition::local(4).unwrap(),
-        );
-        let binding = Binding {
-            source: ArtifactSource::RunArtifact {
-                name: "details".into(),
-            },
-            target: TemplateVar("input".into()),
-            optional: false,
-        };
-        assert_eq!(
-            resolve_bindings(&[binding], &memory, dir.path())
-                .await
-                .unwrap()[0]
-                .1,
-            "real retained bytes"
-        );
-    }
-
-    #[tokio::test]
     async fn repeated_producer_binds_latest_specification() {
         use surge_core::{ContentHash, run_state::ArtifactRef};
         let dir = tempfile::tempdir().unwrap();
@@ -305,12 +228,7 @@ mod tests {
                     path,
                     name: "spec_toml".into(),
                     produced_by: node.clone(),
-                    produced_at_seq: Some(
-                        surge_core::execution_recovery::semantic_position::SemanticPosition::local(
-                            seq,
-                        )
-                        .unwrap(),
-                    ),
+                    produced_at_seq: seq,
                 });
         }
         let binding = Binding {
@@ -347,12 +265,7 @@ mod tests {
                     path: path.into(),
                     name: name.into(),
                     produced_by: node.clone(),
-                    produced_at_seq: Some(
-                        surge_core::execution_recovery::semantic_position::SemanticPosition::local(
-                            5,
-                        )
-                        .unwrap(),
-                    ),
+                    produced_at_seq: 5,
                 });
         }
         for (name, expected) in [
@@ -493,10 +406,7 @@ mod tests {
                 path: PathBuf::from(".surge/user_prompt.txt"),
                 name: "user_prompt".into(),
                 produced_by: NodeKey::try_from("start_node").unwrap(),
-                produced_at_seq: Some(
-                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(3)
-                        .unwrap(),
-                ),
+                produced_at_seq: 3,
             },
         );
 

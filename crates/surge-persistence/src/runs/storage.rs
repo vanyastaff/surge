@@ -173,7 +173,6 @@ impl Storage {
                         discovered_from: row.discovered_from.clone(),
                         last_authority_node: row.last_authority_node.clone(),
                         updated_seq: row.updated_seq.0,
-                        inherited_provenance: row.inherited_provenance,
                         observed_at_ms,
                         accepted_by_human: row.accepted_by_human,
                         requirement_revised: row.requirement_revised,
@@ -312,22 +311,6 @@ impl Storage {
     /// This does not upgrade legacy schemas; opening its exclusive writer applies
     /// supported pending migrations before current materialized-view reads.
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
-        let control = super::host_settlement::control::acquire(
-            &self.home,
-            &self.registry_pool,
-            run_id,
-            false,
-        )?;
-        self.open_run_reader_owned(run_id, control).await
-    }
-    async fn open_run_reader_owned(
-        self: &Arc<Self>,
-        run_id: RunId,
-        control: Option<Arc<super::host_settlement::control::RunUseOwner>>,
-    ) -> Result<RunReader, OpenError> {
-        if let Some(owner) = &control {
-            owner.verify_reconnect()?;
-        }
         registry_exec::read(&self.registry_pool, move |connection| {
             super::host_settlement::admit(connection, run_id)
         })
@@ -349,7 +332,6 @@ impl Storage {
             let manager = SqliteConnectionManager::file(&events_path, namespace);
             #[cfg(not(windows))]
             let manager = SqliteConnectionManager::file(&events_path);
-            let manager = manager.with_run_owner(control)?;
             let manager = manager.with_flags(
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
                     | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -403,7 +385,7 @@ impl Storage {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
             lease.verify()?;
-            storage.upgrade_existing_run(&storage.events_db_path(&run_id), &lease)?;
+            storage.upgrade_existing_run(&storage.events_db_path(&run_id))?;
             if freshly_created {
                 super::host_settlement::verify_empty_initialized(
                     run_id,
@@ -423,9 +405,7 @@ impl Storage {
         lease: Arc<WriterLease>,
     ) -> Result<RunWriter, OpenError> {
         lease.verify()?;
-        let reader = self
-            .open_run_reader_owned(run_id.clone(), lease.authority.use_owner())
-            .await?;
+        let reader = self.open_run_reader(run_id.clone()).await?;
 
         let cfg = WriterConfig {
             run_id: run_id.clone(),
@@ -450,12 +430,7 @@ impl Storage {
     }
 
     // Called only after acquiring both writer guards, before pools or the writer task.
-    fn upgrade_existing_run(
-        &self,
-        events_path: &Path,
-        #[cfg(not(windows))] lease: &WriterLease,
-        #[cfg(windows)] _lease: &WriterLease,
-    ) -> Result<(), OpenError> {
+    fn upgrade_existing_run(&self, events_path: &Path) -> Result<(), OpenError> {
         use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
 
         #[cfg(windows)]
@@ -467,15 +442,9 @@ impl Storage {
             namespace,
         )?;
         #[cfg(not(windows))]
-        let mut conn = super::connection::RetainedConnection::open_controlled(
+        let mut conn = rusqlite::Connection::open_with_flags(
             events_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            lease
-                .authority
-                .use_owner()
-                .as_ref()
-                .map(crate::runs::host_settlement::control::RunUseOwner::database)
-                .transpose()?,
         )?;
         let has_migrations: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations')",
@@ -501,8 +470,6 @@ impl Storage {
             self.clock.as_ref(),
         )
         .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
-        super::projection::upgrade_owned(super::connection::raw_mut(&mut conn))
-            .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
         tracing::debug!(path = %events_path.display(), "run database schema validated before writer startup");
         Ok(())
     }
@@ -614,7 +581,36 @@ impl Storage {
         self: &Arc<Self>,
         run_id: &RunId,
     ) -> Result<(), crate::runs::error::StorageError> {
-        super::host_settlement::deletion::delete(self.clone(), *run_id).await
+        if self
+            .active_writers
+            .is_held(run_id)
+            .await
+            .map_err(|_| crate::runs::error::StorageError::WriterOwnershipPoisoned)?
+        {
+            return Err(crate::runs::error::StorageError::WriterStillActive {
+                run_id: run_id.clone(),
+            });
+        }
+        let row = run_id.clone();
+        registry_exec::write(&self.registry_pool, move |tx| {
+            registry::delete_run_connection(tx, &row)
+        })
+        .await?;
+        // Idempotent cleanup of an already-unregistered run; finishing after
+        // an abandoned caller is harmless.
+        let dir = self.run_dir(run_id);
+        tokio::task::spawn_blocking(move || {
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| {
+            crate::runs::error::StorageError::Pool(format!(
+                "run directory removal task failed: {e}"
+            ))
+        })?
     }
 
     /// Set the registry status (and optional `ended_at` ms) for a run.
@@ -1082,51 +1078,16 @@ mod existing_run_upgrade_tests {
 
         let mut conn = rusqlite::Connection::open(storage.events_db_path(run_id)).unwrap();
         apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &MockClock::new(100)).unwrap();
-        // Every legacy stage field has a journal cause. Rebuilding must not retain
-        // an arbitrary precomputed row that has no corresponding durable event.
-        let session = surge_core::SessionId::new();
-        for (index, payload) in [
-            EventPayload::StageEntered {
-                node: "worker".parse().unwrap(),
-                attempt: 2,
-            },
-            EventPayload::SessionOpened {
-                handoff: None,
-                opened: None,
-                node: "worker".parse().unwrap(),
-                session,
-                agent: "legacy-profile".into(),
-                agent_id: None,
-            },
-            EventPayload::TokensConsumed {
-                session,
-                prompt_tokens: 11,
-                output_tokens: 7,
-                cache_hits: 0,
-                model: "legacy".into(),
-                cost_usd: Some(1.25),
-            },
-            EventPayload::RunAborted {
-                reason: "historical reason".into(),
-            },
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let payload = VersionedEventPayload::new(payload);
-            conn.execute(
-                "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(?,42,?,?,?)",
-                rusqlite::params![
-                    index as i64 + 1,
-                    payload.payload().discriminant_str(),
-                    serde_json::to_vec(&payload).unwrap(),
-                    payload.schema_version()
-                ],
-            )
-            .unwrap();
-        }
+        let payload = VersionedEventPayload::new(EventPayload::RunAborted {
+            reason: "historical reason".into(),
+        });
         conn.execute(
-            "INSERT INTO stage_executions(node_id,attempt,started_seq,started_at,cost_usd,tokens_in,tokens_out) VALUES('worker',2,1,42,1.25,11,7)", [],
+            "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(1,42,'RunAborted',?,?)",
+            rusqlite::params![serde_json::to_vec(&payload).unwrap(), payload.schema_version()],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stage_executions(node_id,attempt,started_seq,started_at,cost_usd,tokens_in,tokens_out) VALUES('worker',2,1,42,1.25,11,7)",
+            [],
         ).unwrap();
     }
 
@@ -1137,19 +1098,6 @@ mod existing_run_upgrade_tests {
             let storage = Storage::open(dir.path()).await.unwrap();
             let run_id = RunId::new();
             seed_legacy_run(&storage, &run_id);
-            {
-                let mut conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
-                apply(&mut conn, PER_RUN_MIGRATIONS, &MockClock::new(100)).unwrap();
-                let known: Option<f64> = conn
-                    .query_row("SELECT known_cost_usd FROM stage_executions", [], |row| {
-                        row.get(0)
-                    })
-                    .unwrap();
-                assert_eq!(
-                    known, None,
-                    "schema upgrade alone cannot turn an old aggregate into known spend"
-                );
-            }
 
             for _ in 0..2 {
                 let writer = storage.open_run_writer(run_id.clone()).await.unwrap();
@@ -1165,9 +1113,9 @@ mod existing_run_upgrade_tests {
                     (stage.cost_usd, stage.tokens_in, stage.tokens_out),
                     (1.25, 11, 7)
                 );
-                assert_eq!(stage.known_cost_usd, Some(1.25));
+                assert_eq!(stage.known_cost_usd, None);
                 assert!(!stage.cost_unknown);
-                let event = reader.read_event(EventSeq(4)).await.unwrap().unwrap();
+                let event = reader.read_event(EventSeq(1)).await.unwrap().unwrap();
                 assert_eq!(event.timestamp_ms, 42);
                 assert_eq!(event.kind, "RunAborted");
                 assert!(
@@ -1272,185 +1220,3 @@ mod windows_ownership_tests;
 #[cfg(test)]
 #[path = "storage/stage_a_tests.rs"]
 mod stage_a_tests;
-
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-mod deletion_identity_characterization {
-    use super::*;
-    use rusqlite::params;
-    use sha2::{Digest, Sha256};
-    use std::os::unix::fs::MetadataExt;
-
-    fn native_inventory(root: &Path, current: &Path) -> Vec<(Vec<u8>, Vec<u8>)> {
-        use std::os::unix::ffi::OsStrExt;
-        let mut entries: Vec<_> = std::fs::read_dir(current)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        entries.sort();
-        let mut rows = Vec::new();
-        for path in entries {
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            assert!(!meta.file_type().is_symlink());
-            let relative = path
-                .strip_prefix(root)
-                .unwrap()
-                .as_os_str()
-                .as_bytes()
-                .to_vec();
-            let encoded = serde_json::to_vec(&serde_json::json!({
-                "test_inventory_version": 1, "relative": relative,
-                "device": meta.dev(), "inode": meta.ino(), "directory": meta.is_dir(),
-                "length": meta.len(), "content_sha256": if meta.is_file() {
-                    Some(hex::encode(Sha256::digest(std::fs::read(&path).unwrap())))
-                } else { None },
-            }))
-            .unwrap();
-            rows.push((relative, encoded));
-            if meta.is_dir() {
-                rows.extend(native_inventory(root, &path));
-            }
-        }
-        assert!(rows.len() < 100, "bounded real fixture inventory");
-        rows
-    }
-
-    fn record_real_fixture_intent(storage: &Storage, run: RunId) -> String {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let _original_control = loop {
-            match super::super::host_settlement::control::acquire(
-                storage.home(),
-                &storage.registry_pool,
-                run,
-                true,
-            ) {
-                Ok(Some(owner)) => break owner,
-                Err(OpenError::RunInUse { .. }) if std::time::Instant::now() < deadline => {
-                    std::thread::yield_now();
-                },
-                other => panic!(
-                    "actual fixture SQLite owners did not settle: {}",
-                    other
-                        .err()
-                        .map_or("missing original control".into(), |error| format!(
-                            "{error:?}"
-                        ))
-                ),
-            }
-        };
-        let root = storage.run_dir(&run);
-        let parent = std::fs::File::open(root.parent().unwrap()).unwrap();
-        let meta = parent.metadata().unwrap();
-        let outside_parent = [meta.dev().to_le_bytes(), meta.ino().to_le_bytes()].concat();
-        let rows = native_inventory(&root, &root);
-        let inventory: Vec<_> = rows
-            .iter()
-            .flat_map(|(path, bytes)| [path.as_slice(), bytes.as_slice()].concat())
-            .collect();
-        let mut conn = storage.registry_pool.get().unwrap();
-        let tx = conn.transaction().unwrap();
-        let (opening, route, database): (String, Vec<u8>, Vec<u8>) = tx.query_row(
-            "SELECT opening_id,route_identity,database_identity FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",
-            [run.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-        ).unwrap();
-        let journal = [route, database].concat();
-        assert_eq!(journal.len(), 65, "actual Unix framed journal identity");
-        let deletion = "independently-recorded-original-fixture-delete".to_string();
-        tx.execute("INSERT INTO run_host_tombstones(run_id,deletion_id,original_opening,journal_identity,provenance,inventory_version,inventory_count,inventory_bytes,inventory_digest,outside_parent,state) VALUES(?,?,?,?,'ExplicitStorageDelete',1,?,?,?,?,'DeletePending')",
-            params![run.to_string(),deletion,opening,journal,rows.len(),inventory.len(),Sha256::digest(&inventory).as_slice(),outside_parent]).unwrap();
-        for (path, bytes) in rows {
-            tx.execute("INSERT INTO run_host_deletion_inventory(deletion_id,relative_path,encoded_entry) VALUES(?,?,?)",params![deletion,path,bytes]).unwrap();
-        }
-        tx.commit().unwrap();
-        deletion
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn preexisting_real_deletion_intent_never_removes_replacement_namespace() {
-        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let facts = {
-            let storage = Storage::open(home.path()).await.unwrap();
-            let run = RunId::new();
-            let writer = storage
-                .create_run(run, "/fixed-project", None)
-                .await
-                .unwrap();
-            let root = storage.run_dir(&run);
-            std::fs::write(root.join("artifacts/original-marker"), b"original artifact").unwrap();
-            writer.close().await.unwrap();
-            let deletion = record_real_fixture_intent(&storage, run);
-            let original = home.path().join("original-run-retained");
-            std::fs::rename(&root, &original).unwrap();
-            std::fs::create_dir(&root).unwrap();
-            std::fs::write(root.join("replacement-marker"), b"replacement must survive").unwrap();
-            let result = storage.delete_run(&run).await;
-            let replacement_preserved = std::fs::read(root.join("replacement-marker"))
-                .ok()
-                .as_deref()
-                == Some(b"replacement must survive");
-            let intent: (String, String) = storage
-                .registry_pool
-                .get()
-                .unwrap()
-                .query_row(
-                    "SELECT deletion_id,state FROM run_host_tombstones WHERE run_id=?",
-                    [run.to_string()],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .unwrap();
-            (
-                matches!(
-                    result,
-                    Err(crate::runs::error::StorageError::DeletionOwnership{run_id,..}) if run_id==run
-                ),
-                replacement_preserved,
-                std::fs::read(original.join("artifacts/original-marker")).unwrap()
-                    == b"original artifact",
-                intent == (deletion, "DeletePending".into()),
-            )
-        };
-        home.close().unwrap();
-        assert!(
-            facts.0 && facts.1 && facts.2 && facts.3,
-            "existing deletion intent ignored original identity: refused={}, replacement_preserved={}, original_preserved={}, intent_unchanged={}",
-            facts.0,
-            facts.1,
-            facts.2,
-            facts.3
-        );
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ordinary_unpinned_delete_and_repeat_preserve_compatibility() {
-        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
-        let facts = {
-            let storage = Storage::open(home.path()).await.unwrap();
-            let run = RunId::new();
-            let writer = storage
-                .create_run(run, "/fixed-project", None)
-                .await
-                .unwrap();
-            let root = storage.run_dir(&run);
-            std::fs::write(root.join("artifacts/original-marker"), b"original artifact").unwrap();
-            writer.close().await.unwrap();
-            let first = storage.delete_run(&run).await;
-            let second = storage.delete_run(&run).await;
-            (
-                first.is_ok(),
-                second.is_ok(),
-                !root.exists(),
-                storage.get_run(&run).await.unwrap().is_none(),
-            )
-        };
-        home.close().unwrap();
-        assert_eq!(facts, (true, true, true, true));
-    }
-}
-
-#[cfg(all(test, unix))]
-#[path = "storage/continuation_storage_tests.rs"]
-mod continuation_storage_tests;
-#[cfg(all(test, unix))]
-pub(crate) use continuation_storage_tests::legacy_fixture;
-
-#[cfg(test)]
-#[path = "storage/deletion_process_tests.rs"]
-mod deletion_process_tests;

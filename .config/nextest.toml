@@ -25,13 +25,3 @@ retries = 0
 path = "junit.xml"
 store-success-output = true
 store-failure-output = true
-
-# Fixed Windows causal observation; timeout inherits the unchanged 120-second bound.
-[profile.wg7-windows-observation]
-fail-fast = false
-retries = 0
-
-[profile.wg7-windows-observation.junit]
-path = "wg7-windows-observation.xml"
-store-success-output = true
-store-failure-output = true

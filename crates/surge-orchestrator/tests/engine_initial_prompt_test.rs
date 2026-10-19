@@ -178,7 +178,7 @@ async fn start_run_seeds_user_prompt_artifact_from_initial_prompt() {
                 // terminal-transition events to inspect mid-run memory.
                 let mut acc = RunMemory::default();
                 for ev in &run_events {
-                    acc.apply_event(ev).unwrap();
+                    acc.apply_event(ev);
                 }
                 acc
             },

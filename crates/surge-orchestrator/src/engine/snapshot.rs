@@ -2,10 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-pub use surge_core::execution_recovery::snapshot::{
-    SerializableCursor, SerializableFrame, SerializableLoopFrame, SerializableSubgraphFrame,
-    SerializableSubgraphInput, SnapshotError,
-};
 use surge_core::keys::NodeKey;
 use surge_core::run_state::Cursor;
 
@@ -46,6 +42,52 @@ pub struct EngineSnapshot {
     pub workspace_checkpoint: Option<surge_git::checkpoint::WorkspaceCheckpoint>,
 }
 
+/// Serde-friendly mirror of `surge_core::run_state::Cursor`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableCursor {
+    /// Serialized `NodeKey` (its inner string value).
+    pub node: String,
+    /// Attempt counter for retry tracking.
+    pub attempt: u32,
+}
+
+impl From<&Cursor> for SerializableCursor {
+    fn from(c: &Cursor) -> Self {
+        Self {
+            node: c.node.to_string(),
+            attempt: c.attempt,
+        }
+    }
+}
+
+/// Errors that can occur when deserializing an `EngineSnapshot`.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotError {
+    /// The stored node key string is not a valid `NodeKey`.
+    #[error("invalid node key in snapshot: {0}")]
+    InvalidNodeKey(String),
+    /// The blob is not valid JSON.
+    #[error("invalid JSON: {0}")]
+    InvalidJson(String),
+    /// The blob does not include a `schema_version` field.
+    #[error("snapshot is missing schema_version")]
+    MissingSchemaVersion,
+    /// The blob has a `schema_version` this engine doesn't support.
+    #[error("unsupported snapshot schema version: {0:?}")]
+    UnsupportedSchema(Option<u64>),
+}
+
+impl SerializableCursor {
+    /// Convert back to a `Cursor`, validating the stored node key string.
+    pub fn into_cursor(self) -> Result<Cursor, SnapshotError> {
+        Ok(Cursor {
+            node: NodeKey::try_from(self.node.as_str())
+                .map_err(|e| SnapshotError::InvalidNodeKey(format!("{}: {e}", self.node)))?,
+            attempt: self.attempt,
+        })
+    }
+}
+
 /// Snapshot of a `HumanInputRequested` state persisted when the run pauses.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PendingHumanInputSnapshot {
@@ -57,6 +99,79 @@ pub struct PendingHumanInputSnapshot {
     pub prompt: String,
     /// Event sequence number when the request was emitted.
     pub requested_seq: u64,
+}
+
+/// Serde-friendly mirror of [`crate::engine::frames::Frame`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SerializableFrame {
+    /// Serialized form of a `Frame::Loop` entry.
+    Loop(SerializableLoopFrame),
+    /// Serialized form of a `Frame::Subgraph` entry.
+    Subgraph(SerializableSubgraphFrame),
+}
+
+/// Serializable form of a [`crate::engine::frames::LoopFrame`].
+///
+/// `LoopConfig` is not stored as a single serialized blob because
+/// `IterableSource::Static` embeds `toml::Value` inside an internally-tagged
+/// serde enum, which neither `serde_json` nor `toml` can serialize.  Instead
+/// we flatten the config fields we need to preserve across snapshots.
+/// The resolved iteration items are already in `items_json`, so `iterates_over`
+/// is only persisted for the `Artifact` path (stored as `iterable_source_json`).
+/// For `Static`, `iterable_source_json` is `null` and items are reconstructed
+/// from `items_json` in the Task 2.3 reverse conversion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableLoopFrame {
+    /// Serialized `NodeKey` of the outer Loop node.
+    pub loop_node: String,
+    /// `IterableSource` stored as JSON, or `null` for `Static` (items are in
+    /// `items_json`).
+    pub iterable_source_json: Option<String>,
+    /// Body subgraph key string.
+    pub body: String,
+    /// Variable name for the current item inside the loop body.
+    pub iteration_var_name: String,
+    /// Exit condition stored as JSON.
+    pub exit_condition_json: String,
+    /// Failure policy stored as JSON.
+    pub on_iteration_failure_json: String,
+    /// Parallelism mode stored as JSON.
+    pub parallelism_json: String,
+    /// Whether to insert a human-review gate after each iteration.
+    pub gate_after_each: bool,
+    /// Resolved iteration items (one per loop step).
+    pub items_json: Vec<serde_json::Value>,
+    /// 0-based index of the current iteration.
+    pub current_index: u32,
+    /// Remaining retry attempts for the current iteration.
+    pub attempts_remaining: u32,
+    /// Serialized `NodeKey` of the outer-graph node to resume after the loop.
+    pub return_to: String,
+    /// Per-edge traversal counters for body edges.
+    pub traversal_counts: HashMap<String, u32>,
+}
+
+/// Serializable form of a [`crate::engine::frames::SubgraphFrame`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableSubgraphFrame {
+    /// Serialized `NodeKey` of the outer Subgraph node.
+    pub outer_node: String,
+    /// Serialized `SubgraphKey` referencing the inner subgraph.
+    pub inner_subgraph: String,
+    /// Resolved input bindings.
+    pub bound_inputs: Vec<SerializableSubgraphInput>,
+    /// Serialized `NodeKey` of the outer-graph node to resume after the subgraph.
+    pub return_to: String,
+}
+
+/// One resolved subgraph input in serializable form.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableSubgraphInput {
+    /// Inner template variable name (the string inside `{{...}}`).
+    pub inner_var: String,
+    /// Resolved value.
+    pub value: serde_json::Value,
 }
 
 impl From<crate::engine::frames::Frame> for SerializableFrame {
@@ -598,85 +713,5 @@ mod tests {
         assert_eq!(pending.call_id.as_deref(), Some("call-abc-123"));
         assert_eq!(pending.prompt, "Should I continue?");
         assert_eq!(pending.requested_seq, 48);
-    }
-}
-
-#[cfg(test)]
-mod shared_wire_contract_tests {
-    use super::*;
-    #[test]
-    fn engine_import_path_is_the_same_core_cursor_and_v2_wire_is_unchanged() {
-        let cursor: surge_core::execution_recovery::snapshot::SerializableCursor =
-            SerializableCursor {
-                node: "build".into(),
-                attempt: 3,
-            };
-        let through_old_path: SerializableCursor = cursor;
-        assert_eq!(
-            serde_json::to_value(&through_old_path).unwrap(),
-            serde_json::json!({"node":"build","attempt":3})
-        );
-        let bytes = r#"{"schema_version":2,"cursor":{"node":"build","attempt":3},"frames":[],"root_traversal_counts":{},"at_seq":9,"stage_boundary_seq":8,"applied_graph_revision_seq":0,"pending_human_input":null}"#;
-        let snapshot = EngineSnapshot::deserialize(bytes.as_bytes()).unwrap();
-        assert_eq!(
-            serde_json::to_value(&snapshot).unwrap(),
-            serde_json::from_str::<serde_json::Value>(bytes).unwrap()
-        );
-        assert_eq!(snapshot.cursor.into_cursor().unwrap().attempt, 3);
-    }
-    #[test]
-    fn fixed_nested_v2_wire_preserves_child_order_indices_retries_and_bound_inputs() {
-        let bytes = r#"{
-          "schema_version":2,
-          "cursor":{"node":"app_task","attempt":3},
-          "frames":[
-            {"kind":"loop","loop_node":"milestones","iterable_source_json":null,"body":"milestone_body","iteration_var_name":"milestone","exit_condition_json":"{\"type\":\"all_items\"}","on_iteration_failure_json":"{\"type\":\"abort\"}","parallelism_json":"\"sequential\"","gate_after_each":false,"items_json":[{"id":"m1"},{"id":"m2"}],"current_index":1,"attempts_remaining":2,"return_to":"finish","traversal_counts":{"retry":2}},
-            {"kind":"subgraph","outer_node":"task_body","inner_subgraph":"implement","bound_inputs":[{"inner_var":"children","value":["child-z","child-a"]},{"inner_var":"task","value":{"id":"m2-t3","accepted":false}}],"return_to":"next_task"},
-            {"kind":"loop","loop_node":"tasks","iterable_source_json":null,"body":"task_body","iteration_var_name":"task","exit_condition_json":"{\"type\":\"all_items\"}","on_iteration_failure_json":"{\"type\":\"abort\"}","parallelism_json":"\"sequential\"","gate_after_each":true,"items_json":[{"id":"child-z"},{"id":"child-a"},{"id":"original-next"}],"current_index":1,"attempts_remaining":4,"return_to":"milestone_done","traversal_counts":{"retry_child":3}}
-          ],
-          "root_traversal_counts":{"revisit":2},"at_seq":87,"stage_boundary_seq":86,"applied_graph_revision_seq":42,
-          "pending_human_input":{"node":"approval","call_id":"decision-7","prompt":"Review current work","requested_seq":85}
-        }"#;
-        let snapshot = EngineSnapshot::deserialize(bytes.as_bytes()).unwrap();
-        assert_eq!(snapshot.cursor.node, "app_task");
-        assert_eq!(snapshot.cursor.attempt, 3);
-        assert_eq!(snapshot.frames.len(), 3);
-        let SerializableFrame::Loop(outer) = &snapshot.frames[0] else {
-            panic!("outer loop lost")
-        };
-        assert_eq!((outer.current_index, outer.attempts_remaining), (1, 2));
-        assert_eq!(outer.return_to, "finish");
-        let SerializableFrame::Subgraph(subgraph) = &snapshot.frames[1] else {
-            panic!("subgraph lost")
-        };
-        assert_eq!(
-            subgraph.bound_inputs[0].value,
-            serde_json::json!(["child-z", "child-a"])
-        );
-        assert_eq!(subgraph.return_to, "next_task");
-        let SerializableFrame::Loop(inner) = &snapshot.frames[2] else {
-            panic!("inner loop lost")
-        };
-        assert_eq!((inner.current_index, inner.attempts_remaining), (1, 4));
-        assert_eq!(
-            inner.items_json,
-            vec![
-                serde_json::json!({"id":"child-z"}),
-                serde_json::json!({"id":"child-a"}),
-                serde_json::json!({"id":"original-next"})
-            ]
-        );
-        assert_eq!(inner.return_to, "milestone_done");
-        assert_eq!(inner.traversal_counts["retry_child"], 3);
-        assert_eq!(snapshot.applied_graph_revision_seq, 42);
-        for frame in snapshot.frames.clone() {
-            let decoded = crate::engine::frames::Frame::try_from(frame.clone()).unwrap();
-            assert_eq!(SerializableFrame::from(decoded), frame);
-        }
-
-        assert_eq!(
-            serde_json::to_value(&snapshot).unwrap(),
-            serde_json::from_str::<serde_json::Value>(bytes).unwrap()
-        );
     }
 }

@@ -116,29 +116,18 @@ impl Fixture {
     /// A store whose events are stamped by a fixed clock, so two stores
     /// holding the same payloads hold the same log.
     async fn with_fixed_clock() -> Self {
-        Self::with_fixed_clock_for_run(RunId::new()).await
-    }
-
-    async fn with_fixed_clock_for_run(run: RunId) -> Self {
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let clock: Arc<dyn surge_persistence::runs::Clock> =
             Arc::new(surge_persistence::runs::MockClock::new(1_760_000_000_000));
         let storage = Storage::open_with(home.path(), clock).await.unwrap();
-        Self::with_storage_for_run(home, storage, run).await
+        Self::with_storage(home, storage).await
     }
 
     async fn with_storage(
         home: crate::runtime_home_fixture::FixtureHome,
         storage: Arc<Storage>,
     ) -> Self {
-        Self::with_storage_for_run(home, storage, RunId::new()).await
-    }
-
-    async fn with_storage_for_run(
-        home: crate::runtime_home_fixture::FixtureHome,
-        storage: Arc<Storage>,
-        run: RunId,
-    ) -> Self {
+        let run = RunId::new();
         let writer = storage.create_run(run, home.path(), None).await.unwrap();
         Self {
             home,
@@ -372,7 +361,7 @@ async fn state_at_n_equals_state_of_the_truncated_log() {
 
     // From seq 2: the first prefix with a graph in force.
     for (index, n) in seqs.iter().copied().enumerate().skip(1) {
-        let truncated = Fixture::with_fixed_clock_for_run(full.run).await;
+        let truncated = Fixture::with_fixed_clock().await;
         truncated.append(payloads[..=index].to_vec()).await;
         if checkpoint.at_seq <= n {
             truncated.checkpoint(&checkpoint).await;
@@ -695,52 +684,4 @@ async fn fork_refuses_a_prefix_whose_consumed_route_lacks_its_checkpoint() {
     }
     drop(storage);
     home.close().unwrap();
-}
-
-mod continuation_seed_fixture {
-    use surge_core as domain;
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/test-support/continuation_seed.rs"
-    ));
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn actual_load_and_load_memory_refuse_unhydrated_seed_with_positive_terminal_tail() {
-    let fx = Fixture::new().await;
-    let (mut events, manifest) = continuation_seed_fixture::startup(fx.run);
-    let _ = continuation_seed_fixture::graph();
-    events.push(continuation_seed_fixture::event(
-        fx.run,
-        4,
-        EventPayload::ContinuationSeedBound {
-            manifest: Box::new(manifest),
-        },
-    ));
-    events.extend(continuation_seed_fixture::positive_tail(fx.run, 4));
-    fx.append(
-        events
-            .into_iter()
-            .map(|event| VersionedEventPayload::new(event.payload))
-            .collect(),
-    )
-    .await;
-    let reader = fx.storage.open_run_reader(fx.run).await.unwrap();
-    let full = load(&reader, Position::Latest).await.unwrap_err();
-    let memory = load_memory(&reader, Position::Latest).await.unwrap_err();
-    assert_eq!(full.run_id, fx.run);
-    assert_eq!(memory.run_id, fx.run);
-    assert!(matches!(
-        full.error,
-        ExecutionStateError::Fold(surge_core::run_state::FoldError::SeedHistory(
-            surge_core::execution_recovery::seed_guard::SeedHistoryError::Unavailable
-        ))
-    ));
-    assert!(matches!(
-        memory.error,
-        ExecutionStateError::Fold(surge_core::run_state::FoldError::SeedHistory(
-            surge_core::execution_recovery::seed_guard::SeedHistoryError::Unavailable
-        ))
-    ));
-    drop(reader);
-    fx.close().await;
 }

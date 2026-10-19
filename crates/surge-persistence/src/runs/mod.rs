@@ -60,7 +60,6 @@ pub mod migrations;
 mod pool;
 pub mod pragmas;
 pub mod process;
-mod projection;
 pub mod query;
 pub mod reader;
 mod reader_views;
@@ -101,5 +100,3 @@ pub use types::{
     ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution, TaskLedgerRow,
 };
 pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig, WriterLifecycle};
-
-pub(crate) mod provenance;

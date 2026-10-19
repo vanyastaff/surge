@@ -65,9 +65,7 @@ fn runtime_drop_cannot_release_original_launch_lease_while_child_survives() {
         .begin_owned_flow(
             WorkItemOperationId::new(),
             b"runtime ownership oracle",
-            surge_persistence::work_items::OwnedFlowPreparationPurpose::Ordinary(
-                surge_persistence::work_items::OrdinaryRequestPrivacy::Public,
-            ),
+            false,
             1,
         )
         .unwrap()

@@ -2,14 +2,60 @@ use super::*;
 use std::{collections::BTreeMap, num::NonZeroU32};
 use surge_core::{ContentHash, EventPayload as E};
 
-#[path = "project_history_snapshot.rs"]
-mod snapshot;
-#[cfg(windows)]
-#[path = "windows_readonly_opening_tests.rs"]
-mod windows_readonly_opening_tests;
-use snapshot::{Snapshot, files};
-fn assert_readonly(before: &Snapshot, after: &Snapshot) {
-    snapshot::validate_readonly(before, after).unwrap();
+fn files(root: &Path) -> BTreeMap<std::path::PathBuf, Option<ContentHash>> {
+    let mut found = BTreeMap::new();
+    if !root.exists() {
+        return found;
+    }
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                // SHM is coordination metadata: retain its path without reading lock bytes.
+                let hash = if path.to_string_lossy().ends_with("-shm") {
+                    None
+                } else {
+                    // A live Windows journal lease locks an empty file's byte range.
+                    // Metadata proves its empty payload; do not issue ReadFile past EOF.
+                    let bytes = if std::fs::metadata(&path).unwrap().len() == 0 {
+                        Vec::new()
+                    } else {
+                        std::fs::read(&path).unwrap_or_else(|error| {
+                            panic!("cannot snapshot durable file {}: {error}", path.display())
+                        })
+                    };
+                    Some(ContentHash::compute(&bytes))
+                };
+                found.insert(path, hash);
+            }
+        }
+    }
+    found
+}
+// SQLite readers coordinate through existing ephemeral SHM read marks.
+// Every path and every durable DB/WAL/content byte must remain unchanged.
+fn assert_readonly(
+    before: &BTreeMap<std::path::PathBuf, Option<ContentHash>>,
+    after: &BTreeMap<std::path::PathBuf, Option<ContentHash>>,
+) {
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        "inspection must not create or remove any path"
+    );
+    for (path, hash) in before {
+        if hash.is_some() {
+            assert_eq!(
+                Some(hash),
+                after.get(path),
+                "durable content changed: {}",
+                path.display()
+            );
+        }
+    }
 }
 fn id(value: u64) -> RunId {
     format!("run-{value:026}").parse().unwrap()
@@ -147,184 +193,45 @@ async fn readonly_pages_distinguish_missing_corrupt_and_foreign_home_cursor() {
     other.close().unwrap();
     home.close().unwrap();
 }
-type RegistryRows = BTreeMap<String, Vec<String>>;
-fn registry_rows(connection: &rusqlite::Connection) -> RegistryRows {
-    let names: Vec<String> = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    names
-        .into_iter()
-        .map(|name| {
-            let mut query = connection
-                .prepare(&format!("SELECT * FROM \"{}\"", name.replace('"', "\"\"")))
-                .unwrap();
-            let count = query.column_count();
-            let mut rows: Vec<String> = query
-                .query_map([], |row| {
-                    let values: Vec<rusqlite::types::Value> = (0..count)
-                        .map(|index| row.get(index))
-                        .collect::<Result<_, _>>()?;
-                    Ok(format!("{values:?}"))
-                })
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
-            rows.sort();
-            (name, rows)
-        })
-        .collect()
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn static_history_producer() {
-    use std::io::Read;
-    let Some(root) = std::env::var_os("SURGE_TEST_HISTORY_PRODUCER") else {
-        return;
-    };
-    let home = std::path::PathBuf::from(root);
-    let storage = Storage::open(&home).await.unwrap();
-    // Pin a pre-creation read snapshot: original origin/control commits stay in live WAL.
-    let mut connection = storage.acquire_registry_conn().unwrap();
-    let pin = connection.transaction().unwrap();
-    let _: i64 = pin
-        .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))
-        .unwrap();
-    let writer = storage.create_run(id(1), "/ours", None).await.unwrap();
-    for reason in ["first", "second", "third"] {
-        writer
-            .append_event(VersionedEventPayload::new(E::RunAborted {
-                reason: reason.into(),
-            }))
-            .await
-            .unwrap();
-    }
-    println!("SURGE_HISTORY_LIVE_READY");
-    std::io::stdin().read_exact(&mut [0_u8]).unwrap();
-    drop(pin);
-    drop(connection);
-    writer.close().await.unwrap();
-    let expected = registry_rows(&storage.acquire_registry_conn().unwrap());
-    println!(
-        "SURGE_HISTORY_ROWS={}",
-        serde_json::to_string(&expected).unwrap()
-    );
-    drop(storage);
-}
-struct HistoryProducer {
-    child: std::process::Child,
-    lines: std::sync::mpsc::Receiver<String>,
-    reader: Option<std::thread::JoinHandle<()>>,
-}
-impl Drop for HistoryProducer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(reader) = self.reader.take() {
-            reader.join().unwrap();
-        }
-    }
-}
-impl HistoryProducer {
-    fn start(home: &Path) -> Self {
-        use std::io::BufRead;
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "runs::inspection::project_history_tests::static_history_producer",
-                "--nocapture",
-            ])
-            .env("SURGE_TEST_HISTORY_PRODUCER", home)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let output = child.stdout.take().unwrap();
-        let (send, lines) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            for line in std::io::BufReader::new(output).lines() {
-                let line = line.unwrap();
-                if let Some((_, marker)) = line.split_once("SURGE_HISTORY_") {
-                    send.send(marker.to_owned()).unwrap();
-                }
-            }
-        });
-        let mut producer = Self {
-            child,
-            lines,
-            reader: Some(reader),
-        };
-        assert_eq!(producer.line(), "LIVE_READY");
-        producer
-    }
-    fn line(&mut self) -> String {
-        match self.lines.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(line) => line,
-            Err(error) => {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                panic!("producer marker missing: {error}");
-            },
-        }
-    }
-    fn finish(mut self) -> RegistryRows {
-        use std::io::Write;
-        self.child.stdin.as_mut().unwrap().write_all(b"c").unwrap();
-        let rows = self.line();
-        let rows = serde_json::from_str(rows.strip_prefix("ROWS=").unwrap()).unwrap();
-        assert!(self.child.wait().unwrap().success());
-        self.reader.take().unwrap().join().unwrap();
-        rows
-    }
-}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn static_event_pages_read_latest_live_wal_and_keep_cold_files_unchanged() {
     let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
     let run = id(1);
-    let producer = HistoryProducer::start(home.path());
-    let before = files(home.path());
-    let run_home = home.path().join("runs").join(run.to_string());
-    let lock = run_home.join("events.sqlite.lock");
-    assert_eq!(std::fs::metadata(&lock).unwrap().len(), 0);
-    assert_eq!(
-        before.entries.get(&lock).map(|fact| &fact.hash),
-        Some(&Some(ContentHash::compute(b"")))
-    );
-    let wal = run_home.join("events.sqlite-wal");
-    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
-    assert!(before.entries[&wal].hash.is_some());
-    assert_eq!(
-        before
-            .entries
-            .get(&run_home.join("events.sqlite-shm"))
-            .map(|fact| &fact.hash),
-        Some(&None)
-    );
-    assert!(before.entries[&home.path().join("db/registry.sqlite-wal")].length > 32);
-    let page = Storage::inspect_existing_events_after(
-        home.path().join("runs"),
-        run,
-        EventSeq(1),
-        NonZeroU32::new(2).unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(page.iter().map(|row| row.seq.0).collect::<Vec<_>>(), [2, 3]);
-    assert!(matches!(&page[1].payload.payload,E::RunAborted{reason} if reason=="third"));
-    assert_readonly(&before, &files(home.path()));
-    let expected = producer.finish(); // Successful exec'd producer exit closes ALL pools/workers/SQLite.
-    let before = files(home.path());
-    for suffix in ["-wal", "-shm"] {
-        assert!(
-            !before
-                .entries
-                .contains_key(&home.path().join(format!("db/registry.sqlite{suffix}")))
-        );
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let writer = storage.create_run(run, "/ours", None).await.unwrap();
+        for reason in ["first", "second", "third"] {
+            writer
+                .append_event(VersionedEventPayload::new(E::RunAborted {
+                    reason: reason.into(),
+                }))
+                .await
+                .unwrap();
+        }
+        let before = files(home.path());
+        let run_home = home.path().join("runs").join(run.to_string());
+        let lock = run_home.join("events.sqlite.lock");
+        assert_eq!(std::fs::metadata(&lock).unwrap().len(), 0);
+        assert_eq!(before.get(&lock), Some(&Some(ContentHash::compute(b""))));
+        let wal = run_home.join("events.sqlite-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        assert!(before.get(&wal).unwrap().is_some());
+        assert_eq!(before.get(&run_home.join("events.sqlite-shm")), Some(&None));
+        let page = Storage::inspect_existing_events_after(
+            home.path().join("runs"),
+            run,
+            EventSeq(1),
+            NonZeroU32::new(2).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(page.iter().map(|row| row.seq.0).collect::<Vec<_>>(), [2, 3]);
+        assert!(matches!(&page[1].payload.payload,E::RunAborted{reason} if reason=="third"));
+        assert_readonly(&before, &files(home.path()));
+        writer.close().await.unwrap();
     }
+    let before = files(home.path());
     let page = Storage::inspect_existing_events_after(
         home.path().join("runs"),
         run,
@@ -332,22 +239,8 @@ async fn static_event_pages_read_latest_live_wal_and_keep_cold_files_unchanged()
         NonZeroU32::MIN,
     )
     .await;
-    let after = files(home.path()); // Must precede every SQL verification open.
-    assert_readonly(&before, &after);
-    for suffix in ["-wal", "-shm"] {
-        assert!(
-            after
-                .entries
-                .contains_key(&home.path().join(format!("db/registry.sqlite{suffix}")))
-        );
-    }
+    assert_readonly(&before, &files(home.path()));
     assert_eq!(page.unwrap().unwrap()[0].seq.0, 1);
-    let registry = crate::runs::connection::RetainedConnection::read_only(
-        &home.path().join("db/registry.sqlite"),
-    )
-    .unwrap();
-    assert_eq!(registry_rows(&registry), expected);
-    drop(registry);
     home.close().unwrap();
 }
 
@@ -415,10 +308,7 @@ async fn readonly_operation_inspection_preserves_every_older_continuation_refere
                 path: home.path().join(format!("{index}-{name}")),
                 name: name.into(),
                 produced_by: "planner".parse().unwrap(),
-                produced_at_seq: Some(
-                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(7)
-                        .unwrap(),
-                ),
+                produced_at_seq: 7,
             });
             let child = BootstrapContinuation::new(
                 capture.fields().planning_run,

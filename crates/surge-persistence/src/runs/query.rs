@@ -30,8 +30,7 @@ pub struct RunStatusSnapshot {
     pub display: RunDisplayState,
     /// The run this snapshot describes.
     pub run_id: RunId,
-    /// Most-recent recorded `StageEntered` node, or `None` before the first stage.
-    /// This historical cursor does not establish a current worker or process.
+    /// Most-recent `StageEntered` node, or `None` before the first stage.
     pub active_node: Option<String>,
     /// Most-recent `OutcomeReported.outcome` string, or `None`.
     pub last_outcome: Option<String>,
@@ -206,7 +205,7 @@ pub fn fold_read_events(run_id: RunId, events: &[ReadEvent]) -> Result<RunState,
             event: first.payload.payload.discriminant_str(),
         });
     }
-    let mut state = RunState::not_started();
+    let mut state = RunState::NotStarted;
     for (expected_seq, row) in (1u64..).zip(events) {
         if row.seq.0 != expected_seq {
             return Err(FoldError::CorruptedSequence {
@@ -281,54 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn recovery_observability_offline_status_uses_shared_prefix_and_terminal_rules() {
-        let run = RunId::new();
-        let start = event(
-            1,
-            0,
-            EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: "/project".into(),
-                initial_prompt: "inspect recovery".into(),
-                config: run_config(),
-            },
-        );
-        let recovery = event(
-            2,
-            10,
-            EventPayload::RunRecoveryRequired {
-                control_generation: 0,
-                diagnostic: "recorded gate contradiction".into(),
-            },
-        );
-        assert_eq!(
-            aggregate_status(run, &[start.clone(), recovery.clone()]).display,
-            RunDisplayState::Waiting(surge_core::run_display::WaitingReason::RecoveryRequired)
-        );
-        assert_eq!(
-            aggregate_status(run, std::slice::from_ref(&recovery)).display,
-            RunDisplayState::Unknown
-        );
-        let mut gap = recovery.clone();
-        gap.seq = EventSeq(3);
-        assert_eq!(
-            aggregate_status(run, &[start.clone(), gap]).display,
-            RunDisplayState::Unknown
-        );
-        let terminal = event(
-            3,
-            20,
-            EventPayload::RunAborted {
-                reason: "operator stopped".into(),
-            },
-        );
-        assert_eq!(
-            aggregate_status(run, &[start, recovery, terminal]).display,
-            RunDisplayState::Done(surge_core::TerminalReason::Aborted)
-        );
-    }
-
-    #[test]
     fn display_requires_valid_prefix_and_terminal_overrides_crash() {
         let id = RunId::new();
         let start = event(
@@ -344,7 +295,7 @@ mod tests {
         assert_eq!(aggregate_status(id, &[]).display, RunDisplayState::Unknown);
         assert_eq!(
             aggregate_status(id, std::slice::from_ref(&start)).display,
-            RunDisplayState::Unknown
+            RunDisplayState::Working
         );
         let abort = event(
             2,

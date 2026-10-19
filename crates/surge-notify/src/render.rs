@@ -32,10 +32,7 @@ pub fn render(
     let artifact_paths = template
         .artifacts
         .iter()
-        .map(|src| resolve_artifact_path(src, ctx.run_memory))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
+        .filter_map(|src| resolve_artifact_path(src, ctx.run_memory))
         .collect();
     Ok(RenderedNotification {
         severity: template.severity,
@@ -67,7 +64,7 @@ fn render_string(template: &str, ctx: &RenderContext<'_>) -> Result<String, Noti
                     placeholder.trim()
                 )));
             }
-            out.push_str(&substitute(placeholder.trim(), ctx)?);
+            out.push_str(&substitute(placeholder.trim(), ctx));
         } else {
             out.push(ch);
         }
@@ -75,71 +72,55 @@ fn render_string(template: &str, ctx: &RenderContext<'_>) -> Result<String, Noti
     Ok(out)
 }
 
-fn substitute(placeholder: &str, ctx: &RenderContext<'_>) -> Result<String, NotifyError> {
+fn substitute(placeholder: &str, ctx: &RenderContext<'_>) -> String {
     if let Some(name) = placeholder.strip_prefix("artifact:") {
-        let Some(artifact) = ctx.run_memory.artifacts.get(name) else {
-            return Ok(String::new());
-        };
-        artifact
-            .recorded_position()?
-            .validate(ctx.run_memory.semantic_lineage.as_ref())?;
-        return Ok(artifact.path.to_string_lossy().to_string());
+        return ctx
+            .run_memory
+            .artifacts
+            .get(name)
+            .map(|a| a.path.to_string_lossy().to_string())
+            .unwrap_or_default();
     }
-    Ok(match placeholder {
+    match placeholder {
         "run_id" => ctx.run_id.to_string(),
         "node" => ctx.node.to_string(),
-        "outcome" => latest_outcome(ctx.run_memory)?
-            .map(|record| record.outcome.to_string())
+        "outcome" => ctx
+            .run_memory
+            .outcomes
+            .values()
+            .flatten()
+            .max_by_key(|r| r.seq)
+            .map(|r| r.outcome.to_string())
             .unwrap_or_default(),
-        "stage_summary" => latest_outcome(ctx.run_memory)?
-            .map(|record| record.summary.clone())
+        "stage_summary" => ctx
+            .run_memory
+            .outcomes
+            .values()
+            .flatten()
+            .max_by_key(|r| r.seq)
+            .map(|r| r.summary.clone())
             .unwrap_or_default(),
         _ => String::new(),
-    })
-}
-fn latest_outcome(
-    memory: &RunMemory,
-) -> Result<Option<&surge_core::run_state::OutcomeRecord>, NotifyError> {
-    let mut latest: Option<&surge_core::run_state::OutcomeRecord> = None;
-    for record in memory.outcomes.values().flatten() {
-        record.seq.validate(memory.semantic_lineage.as_ref())?;
-        if let Some(previous) = latest
-            && !record
-                .seq
-                .compare(previous.seq, memory.semantic_lineage.as_ref())?
-                .is_gt()
-        {
-            continue;
-        }
-        latest = Some(record);
     }
-    Ok(latest)
 }
 
 fn resolve_artifact_path(
     src: &surge_core::agent_config::ArtifactSource,
     memory: &RunMemory,
-) -> Result<Option<PathBuf>, NotifyError> {
+) -> Option<PathBuf> {
     use surge_core::agent_config::ArtifactSource;
-    let artifact = match src {
+    match src {
         ArtifactSource::NodeOutput { node, artifact } => memory
             .artifacts_by_node
             .get(node)
-            .and_then(|list| list.iter().find(|a| a.name == *artifact)),
-        ArtifactSource::RunArtifact { name } => memory.artifacts.get(name),
+            .and_then(|list| list.iter().find(|a| a.name == *artifact))
+            .map(|a| a.path.clone()),
+        ArtifactSource::RunArtifact { name } => memory.artifacts.get(name).map(|a| a.path.clone()),
         ArtifactSource::GlobPattern { .. }
         | ArtifactSource::Static { .. }
         | ArtifactSource::EditFeedback { .. }
         | ArtifactSource::InitialPrompt => None,
-    };
-    artifact
-        .map(|artifact| {
-            artifact
-                .recorded_position()?
-                .validate(memory.semantic_lineage.as_ref())?;
-            Ok(artifact.path.clone())
-        })
-        .transpose()
+    }
 }
 
 #[cfg(test)]
@@ -148,68 +129,6 @@ mod tests {
     use surge_core::content_hash::ContentHash;
     use surge_core::keys::OutcomeKey;
     use surge_core::run_state::{ArtifactRef, OutcomeRecord};
-
-    #[test]
-    fn actual_notification_orders_source_before_local_and_refuses_foreign_attachment() {
-        use surge_core::agent_config::ArtifactSource;
-        use surge_core::execution_recovery::semantic_position::{
-            ContinuationSeedId, SeedLineage, SemanticPosition, SourceEventRef,
-        };
-        let source = RunId::new();
-        let seed = ContinuationSeedId::new(ContentHash::compute(b"notify-seed"));
-        let mut memory = RunMemory {
-            semantic_lineage: Some(SeedLineage::new(
-                seed,
-                SourceEventRef::new(source, 87).unwrap(),
-            )),
-            ..RunMemory::default()
-        };
-        let node = NodeKey::try_from("build").unwrap();
-        memory.outcomes.insert(
-            node.clone(),
-            vec![
-                OutcomeRecord {
-                    seq: SemanticPosition::inherited(
-                        seed,
-                        SourceEventRef::new(source, 80).unwrap(),
-                    ),
-                    outcome: OutcomeKey::try_from("failed").unwrap(),
-                    summary: "old source failure".into(),
-                },
-                OutcomeRecord {
-                    seq: SemanticPosition::local(5).unwrap(),
-                    outcome: OutcomeKey::try_from("done").unwrap(),
-                    summary: "new local success".into(),
-                },
-            ],
-        );
-        let context = ctx(RunId::new(), &node, &memory);
-        assert_eq!(
-            render_string("{{outcome}}: {{stage_summary}}", &context).unwrap(),
-            "done: new local success"
-        );
-        let foreign = ArtifactRef {
-            hash: ContentHash::compute(b"foreign"),
-            path: "foreign.md".into(),
-            name: "report".into(),
-            produced_by: node.clone(),
-            produced_at_seq: Some(SemanticPosition::inherited(
-                seed,
-                SourceEventRef::new(RunId::new(), 20).unwrap(),
-            )),
-        };
-        memory.artifacts.insert("report".into(), foreign);
-        assert!(render_string("{{artifact:report}}", &ctx(RunId::new(), &node, &memory)).is_err());
-        assert!(
-            resolve_artifact_path(
-                &ArtifactSource::RunArtifact {
-                    name: "report".into()
-                },
-                &memory
-            )
-            .is_err()
-        );
-    }
 
     fn empty_memory() -> RunMemory {
         RunMemory::default()
@@ -252,10 +171,7 @@ mod tests {
                 path: "/tmp/plan.md".into(),
                 name: "plan.md".into(),
                 produced_by: NodeKey::try_from("p").unwrap(),
-                produced_at_seq: Some(
-                    surge_core::execution_recovery::semantic_position::SemanticPosition::local(1)
-                        .unwrap(),
-                ),
+                produced_at_seq: 1,
             },
         );
         let run = RunId::new();
@@ -273,8 +189,7 @@ mod tests {
             .push(OutcomeRecord {
                 outcome: OutcomeKey::try_from("done").unwrap(),
                 summary: "all good".into(),
-                seq: surge_core::execution_recovery::semantic_position::SemanticPosition::local(5)
-                    .unwrap(),
+                seq: 5,
             });
         let run = RunId::new();
         let node = NodeKey::try_from("n").unwrap();

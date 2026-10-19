@@ -577,7 +577,6 @@ fn step_line(step: &Step) -> Div {
     let state = match &step.state {
         StepState::Working => "last observed in progress".into(),
         StepState::WaitingOnYou => "decision requested".into(),
-        StepState::RecoveryRequired => "paused · recovery requires review".into(),
         StepState::Done(outcome) => format!("finished: {outcome}"),
         StepState::Failed(error) => format!("failed: {error}"),
         StepState::Unknown => "continuation unknown".into(),

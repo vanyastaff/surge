@@ -1070,53 +1070,6 @@ mod accessibility_tests {
     use std::{cell::Cell, rc::Rc};
     use surge_orchestrator::engine::handle::RunStatus;
 
-    fn terminal_stream(
-        run: surge_core::RunId,
-        prompt: String,
-        failed: bool,
-    ) -> crate::run_stream::RunStreamState {
-        use surge_core::EventPayload;
-        use surge_orchestrator::engine::handle::EngineRunEvent;
-        let mut stream = crate::run_stream::RunStreamState::default();
-        stream.begin_display_history(run, None);
-        stream.apply_recorded(
-            &EngineRunEvent::Persisted {
-                seq: 1,
-                payload: Box::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: "/fleet-fixture".into(),
-                    initial_prompt: prompt,
-                    config: surge_core::RunConfig {
-                        budget: Default::default(),
-                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                        auto_pr: false,
-                        mcp_servers: Vec::new(),
-                        bootstrap_edit_loop_cap: None,
-                    },
-                }),
-            },
-            1_700_000_000_000,
-        );
-        stream.apply_recorded(
-            &EngineRunEvent::Persisted {
-                seq: 2,
-                payload: Box::new(if failed {
-                    EventPayload::RunFailed {
-                        error: "actual fixture failure".into(),
-                    }
-                } else {
-                    EventPayload::RunCompleted {
-                        terminal_node: "done".parse().unwrap(),
-                    }
-                }),
-            },
-            1_700_000_001_000,
-        );
-        stream.finish_display_history(2);
-        stream
-    }
-
     #[cfg(unix)]
     #[gpui_kit::test]
     fn durable_task_without_runs_arrives_through_real_facade(cx: &mut TestAppContext) {
@@ -1518,15 +1471,8 @@ mod accessibility_tests {
                     last_event_seq: None,
                     ended_at: None,
                 });
-                let prompt = format!("Task {index}\nFull original request for {index}");
-                if matches!(status, RunStatus::Failed | RunStatus::Completed) {
-                    state.run_streams.insert(
-                        run_id,
-                        terminal_stream(run_id, prompt, matches!(status, RunStatus::Failed)),
-                    );
-                } else {
-                    state.run_streams.entry(run_id).or_default().prompt = Some(prompt);
-                }
+                state.run_streams.entry(run_id).or_default().prompt =
+                    Some(format!("Task {index}\nFull original request for {index}"));
             }
             state
         });
@@ -1649,12 +1595,8 @@ mod accessibility_tests {
         let (handle, view) = cx.update(|cx| {
             let state = cx.new(|_| {
                 let mut state = AppState::new();
-                let run = surge_core::RunId::new();
-                state
-                    .run_streams
-                    .insert(run, terminal_stream(run, "Review failure".into(), true));
                 state.runs.push(crate::app_state::UiRun {
-                    run_id: run,
+                    run_id: surge_core::id::RunId::new(),
                     status: surge_orchestrator::engine::handle::RunStatus::Failed,
                     started_at: chrono::Utc::now(),
                     last_event_seq: None,

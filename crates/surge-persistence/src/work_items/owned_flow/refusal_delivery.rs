@@ -2,6 +2,8 @@
 use super::{launch, refusal_owner::DeliveryResources};
 use crate::runs::{EventSeq, writer, writer_slot::WriterLease};
 use crate::work_items::{Result, WorkItemError, start_preparation::secure_lock::PreparationLock};
+#[cfg(not(windows))]
+use rusqlite::Connection;
 use rusqlite::{OpenFlags, OptionalExtension, Transaction, params};
 use std::sync::Arc;
 use surge_core::{
@@ -114,18 +116,7 @@ pub(super) fn deliver(
             owner.lease.namespace.clone(),
         )?;
         #[cfg(not(windows))]
-        let conn = crate::runs::connection::RetainedConnection::open_controlled(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE,
-            owner
-                .lease
-                .authority
-                .use_owner()
-                .as_ref()
-                .map(|owner| owner.database())
-                .transpose()
-                .map_err(|error| std::io::Error::other(error.to_string()))?,
-        )?;
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)
             .map_err(|_| unavailable())?;
         owner.connection = Some(conn);
