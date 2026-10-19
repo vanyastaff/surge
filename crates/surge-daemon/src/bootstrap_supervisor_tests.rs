@@ -1468,13 +1468,9 @@ async fn failed_continuation_cold_reserved_is_unknown_without_second_fork() {
         .await
         .unwrap();
     assert_eq!(repeated, cold);
-    assert!(
-        restarted
-            .services
-            .engine
-            .snapshot_active_runs()
-            .await
-            .is_empty()
+    assert_eq!(
+        restarted.services.engine.snapshot_active_runs().await.len(),
+        0
     );
     assert!(
         !fixture
