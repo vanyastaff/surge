@@ -294,6 +294,8 @@ pub enum BootstrapAttentionReason {
     BudgetUnconfirmed,
     /// Durable execution outcome cannot be established.
     StorageUnconfirmed,
+    /// A matching durable execution refusal was confirmed; inspect before recovery.
+    RecoveryRequired,
 }
 
 /// Typed operation state. Attention and cancellation retain the blocked phase.
@@ -458,5 +460,37 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    #[test]
+    fn recovery_attention_reason_preserves_legacy_states_and_fails_closed() {
+        for legacy in [
+            "configuration_changed",
+            "missing_credential",
+            "partial_startup",
+            "missing_bootstrap_policy",
+            "worktree_conflict",
+            "invalid_materialization",
+            "budget_unconfirmed",
+            "storage_unconfirmed",
+        ] {
+            let state = serde_json::json!({"state":"needs_attention","phase":"planning",
+                "run_id":"00000000000000000000000001","reason":legacy});
+            let parsed: BootstrapState = serde_json::from_value(state.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), state);
+        }
+        let state = BootstrapState::NeedsAttention {
+            phase: BootstrapPhase::Planning,
+            run_id: Some("run-00000000000000000000000001".parse().unwrap()),
+            reason: BootstrapAttentionReason::RecoveryRequired,
+        };
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["reason"], "recovery_required");
+        assert_eq!(
+            serde_json::from_value::<BootstrapState>(json.clone()).unwrap(),
+            state
+        );
+        let mut future = json;
+        future["reason"] = serde_json::json!("unknown_future");
+        assert!(serde_json::from_value::<BootstrapState>(future).is_err());
     }
 }

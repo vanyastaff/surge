@@ -52,6 +52,61 @@ impl Fixture {
 async fn fixture() -> Fixture {
     fixture_with_error_hook(None).await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_observability_offline_operator_report_preserves_zero_task_problem() {
+    let home = FixtureHome::new().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
+    let run = RunId::new();
+    let writer = storage
+        .create_run(run, worktree.path(), None)
+        .await
+        .unwrap();
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: worktree.path().into(),
+            initial_prompt: "offline planning report".into(),
+            config: RunConfig {
+                budget: Default::default(),
+                sandbox_default: surge_core::sandbox::SandboxMode::ReadOnly,
+                approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                auto_pr: false,
+                mcp_servers: Vec::new(),
+                bootstrap_edit_loop_cap: None,
+            },
+        }))
+        .await
+        .unwrap();
+    let diagnostic = "restore refused: conflicting gate occurrences\n[inspect](https://example.invalid) <script>no</script>";
+    writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: diagnostic.into(),
+            },
+        ))
+        .await
+        .unwrap();
+    writer.close().await.unwrap();
+    drop(storage);
+    let reopened = Storage::open(home.path()).await.unwrap();
+    let report = compile_report(&reopened, &run.to_string()).await.unwrap();
+    assert_eq!(
+        report.completion,
+        surge_core::run_report::RunCompletion::Incomplete
+    );
+    assert!(report.task_execution.as_ref().unwrap().tasks.is_empty());
+    let markdown = surge_core::run_report::render_markdown(&report);
+    let html = surge_core::run_report::render_html(&report);
+    assert!(markdown.contains("restore refused: conflicting gate occurrences"));
+    assert!(html.contains("restore refused: conflicting gate occurrences"));
+    assert!(!html.contains("<script>no</script>"));
+    drop(reopened);
+    home.close().unwrap();
+    worktree.close().unwrap();
+}
 async fn fixture_with_error_hook(command: Option<&str>) -> Fixture {
     fixture_owned(command, false).await
 }

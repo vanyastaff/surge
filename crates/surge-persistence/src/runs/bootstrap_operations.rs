@@ -637,18 +637,55 @@ pub(super) fn read_record_for_run(
         return Ok(None);
     };
     let id = id.parse().map_err(|_| BootstrapStoreError::CorruptRecord)?;
-    read(connection, id)?
+    read_inspection(connection, id)?
         .map(Some)
         .ok_or(BootstrapStoreError::CorruptRecord)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("stored operation exceeds the 4 MiB read-only inspection payload bound")]
+struct InspectionPayloadTooLarge;
+
+pub(super) fn read_inspection(
+    connection: &Connection,
+    id: RunId,
+) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
+    read_row(connection, id, |row| {
+        // ValueRef borrows SQLite's cells. Check their aggregate byte length before
+        // any String/Vec allocation or JSON decoding in the existing decoder.
+        let mut bytes = 0_usize;
+        for index in 0..row.as_ref().column_count() {
+            match row.get_ref(index)? {
+                rusqlite::types::ValueRef::Text(value) | rusqlite::types::ValueRef::Blob(value) => {
+                    bytes = bytes.saturating_add(value.len());
+                },
+                _ => {},
+            }
+        }
+        if bytes > 4 * 1024 * 1024 {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(InspectionPayloadTooLarge),
+            ));
+        }
+        stored_row(row)
+    })
+}
 fn read(
     connection: &Connection,
     id: RunId,
 ) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
+    read_row(connection, id, stored_row)
+}
+fn read_row(
+    connection: &Connection,
+    id: RunId,
+    decoder: fn(&rusqlite::Row<'_>) -> rusqlite::Result<StoredRow>,
+) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
     let row = connection.query_row(
         "SELECT planning_run, implementation_run, payload_version, intent_fingerprint, capture_fingerprint, intent_json, capture_json, state_json, revision, cancel_requested, queue_sequence, child_json, result_json FROM bootstrap_operations WHERE operation_id=?",
-        [id.to_string()], stored_row,
+        [id.to_string()], decoder,
     ).optional()?;
     row.map(|row| decode(id, row)).transpose()
 }

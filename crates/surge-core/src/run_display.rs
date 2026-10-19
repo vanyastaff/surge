@@ -22,7 +22,7 @@ pub enum WaitingReason {
         /// Runtime correlated with this run's parked event.
         runtime: Option<String>,
     },
-    /// The registry confirms loss of the hosting daemon without durable completion.
+    /// Recorded execution refusal or confirmed daemon loss requires operator inspection.
     RecoveryRequired,
 }
 
@@ -30,7 +30,7 @@ pub enum WaitingReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", content = "reason", rename_all = "snake_case")]
 pub enum RunDisplayState {
-    /// Trusted history shows active execution.
+    /// Trusted history and an attributed current observation show active execution.
     Working,
     /// Trusted history shows completion.
     Done(TerminalReason),
@@ -41,10 +41,24 @@ pub enum RunDisplayState {
 }
 
 impl RunDisplayState {
-    /// Project authoritative history and independent registry crash evidence.
-    /// A durable terminal event wins over a stale crash label.
+    /// Classify historical evidence without claiming a current execution observation.
+    /// Durable terminal/waiting facts remain visible; execution history alone is unknown.
     #[must_use]
     pub fn from_state(state: Option<&RunState>, registry: Option<RunStatus>) -> Self {
+        Self::from_state_with_observation(state, registry, false)
+    }
+
+    /// Classify trusted history with independently established observation availability.
+    /// `current_observation` must refer to this run's actual attributed subscription,
+    /// fenced by the caller's current errors and identity. It proves neither process
+    /// settlement nor retry authority. Missing/gapped history and recorded recovery
+    /// cannot become Working merely because this value is true. Terminal comes first.
+    #[must_use]
+    pub fn from_state_with_observation(
+        state: Option<&RunState>,
+        registry: Option<RunStatus>,
+        current_observation: bool,
+    ) -> Self {
         if let Some(RunState::Terminal { kind, .. }) = state {
             return Self::Done(*kind);
         }
@@ -53,6 +67,19 @@ impl RunDisplayState {
         }
         if matches!(state, None | Some(RunState::NotStarted)) {
             return Self::Unknown;
+        }
+        let observation = match state {
+            Some(RunState::Bootstrapping { recovery, .. }) => Some(recovery.observation()),
+            Some(RunState::Pipeline { memory, .. }) => Some(memory.recovery.observation()),
+            _ => None,
+        };
+        if let Some(observation) = observation {
+            if !observation.is_complete() {
+                return Self::Unknown;
+            }
+            if observation.active().is_some() {
+                return Self::Waiting(WaitingReason::RecoveryRequired);
+            }
         }
         match state.map(RunState::attention) {
             Some(Attention::NeedsInput) => Self::Waiting(WaitingReason::HumanInput),
@@ -65,7 +92,8 @@ impl RunDisplayState {
                 basis,
                 runtime,
             }),
-            Some(Attention::Working) => Self::Working,
+            Some(Attention::Working) if current_observation => Self::Working,
+            Some(Attention::Working) => Self::Unknown,
             Some(Attention::Done(kind)) => Self::Done(kind),
             None => Self::Unknown,
         }

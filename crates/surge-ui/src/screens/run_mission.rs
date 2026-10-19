@@ -13,8 +13,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use surge_core::roadmap::RoadmapStatus;
 use surge_core::roadmap::{MilestoneId, RoadmapTaskId};
-use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
 use surge_core::{BootstrapStage, RunId};
 
 use crate::flow_diagram::Lane;
@@ -22,53 +22,25 @@ use crate::mission::{self, MilestoneView, Mission, PlanState, RunEnd, Step, Step
 use crate::theme::{self, Semantic};
 use crate::ui;
 
-/// The runs a mission is made of.
+#[path = "run_mission/history.rs"]
+mod history;
+pub(super) use history::MissionRequest;
+pub(super) use history::operation_message;
+use history::{ImplementationHistory, LoadOutcome};
+use surge_core::bootstrap_operation::{BootstrapOperationStatus, BootstrapState};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MissionRefresh {
+    operation: Option<(RunId, u64)>,
+    streams: Vec<(RunId, Option<u64>, Option<u64>)>,
+    observations: Vec<(RunId, bool)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MissionRuns {
-    pub planning: Option<RunId>,
-    pub implementation: RunId,
-}
-
-async fn events_of(
-    root: std::path::PathBuf,
-    run: RunId,
-) -> Result<Vec<surge_core::RunEvent>, String> {
-    surge_persistence::runs::Storage::inspect_existing_run_events(root, run)
-        .await
-        .map_err(|error| error.to_string())?
-        .iter()
-        .map(|event| event.to_run_event(run).map_err(|error| error.to_string()))
-        .collect()
-}
-
-async fn load(runs: MissionRuns) -> Result<Mission, String> {
-    // Storage reads run on the app's tokio runtime (entered in `main`);
-    // without one (headless tests) say so instead of panicking.
-    tokio::runtime::Handle::try_current()
-        .map_err(|_| "Run storage is not available".to_string())?;
-    let home = surge_core::home::surge_home_dir().ok_or("Surge home unavailable")?;
-    let root = home.join("runs");
-    let planning = match runs.planning {
-        Some(run) => events_of(root.clone(), run).await?,
-        None => Vec::new(),
-    };
-    let implementation = if Some(runs.implementation) == runs.planning {
-        Vec::new()
-    } else {
-        events_of(root, runs.implementation).await?
-    };
-    let roadmap: Option<RoadmapArtifact> = runs
-        .planning
-        .and_then(|p| crate::roadmap_source::read_run_roadmap(&home, p))
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| toml::from_str(&text).ok());
-    mission::fold(
-        &planning,
-        runs.implementation,
-        &implementation,
-        roadmap.as_ref(),
-    )
-    .map_err(|error| error.to_string())
+enum LoadingState {
+    Reading,
+    Ready,
+    Changed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,13 +49,35 @@ struct StepOccurrence {
     index: usize,
 }
 
+#[cfg(test)]
+type ControlledLoads =
+    std::rc::Rc<std::cell::RefCell<Vec<tokio::sync::oneshot::Sender<Result<LoadOutcome, String>>>>>;
+
+#[cfg(test)]
+struct PendingLoad(std::rc::Rc<std::cell::Cell<usize>>);
+
+#[cfg(test)]
+impl Drop for PendingLoad {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
 pub(super) struct MissionPanel {
-    runs: MissionRuns,
+    #[cfg(test)]
+    active_loads: std::rc::Rc<std::cell::Cell<usize>>,
+    #[cfg(test)]
+    controlled_loads: Option<ControlledLoads>,
+    home: Option<std::path::PathBuf>,
+    request: MissionRequest,
     mission: Option<Mission>,
+    implementation: Option<ImplementationHistory>,
+    operation: Option<BootstrapOperationStatus>,
+    loading: LoadingState,
     error: Option<String>,
     generation: u64,
-    /// Event count the current fold reflects.
-    loaded_seq: Option<String>,
+    /// Operation revision and both run observations the last request reflects.
+    loaded_refresh: Option<MissionRefresh>,
     scope: Vec<usize>,
     requested_task: Option<(MilestoneId, RoadmapTaskId)>,
     expanded_steps: BTreeSet<StepOccurrence>,
@@ -91,16 +85,26 @@ pub(super) struct MissionPanel {
 
 impl MissionPanel {
     pub(super) fn new(
-        runs: MissionRuns,
+        home: Option<std::path::PathBuf>,
+        request: MissionRequest,
         requested_task: Option<(MilestoneId, RoadmapTaskId)>,
+        #[cfg(test)] active_loads: std::rc::Rc<std::cell::Cell<usize>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut panel = Self {
-            runs,
+            #[cfg(test)]
+            controlled_loads: None,
+            #[cfg(test)]
+            active_loads,
+            home,
+            request,
             mission: None,
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Reading,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task,
             expanded_steps: Default::default(),
@@ -109,31 +113,163 @@ impl MissionPanel {
         panel
     }
 
-    pub(super) fn runs(&self) -> MissionRuns {
-        self.runs
+    pub(super) fn request(&self) -> &MissionRequest {
+        &self.request
     }
 
-    /// Reload when the run has moved since the last fold.
-    pub(super) fn sync(&mut self, seq: &str, cx: &mut Context<Self>) {
-        if self.loaded_seq.as_deref() != Some(seq) {
-            self.loaded_seq = Some(seq.to_string());
-            self.reload(cx);
+    /// Read-only exact ownership learned by the existing cold history lookup.
+    pub(super) fn operation_for(&self, run: RunId) -> Option<&BootstrapOperationStatus> {
+        self.operation
+            .as_ref()
+            .filter(|status| [status.planning_run, status.implementation_run].contains(&run))
+    }
+
+    /// Both reserved streams and operation transitions can change this composition.
+    pub(super) fn refresh_key(&self, state: &crate::app_state::AppState) -> MissionRefresh {
+        let operation = state
+            .bootstrap_operations
+            .values()
+            .find(|status| {
+                [status.planning_run, status.implementation_run].contains(&self.request.selected)
+            })
+            .or(self.operation.as_ref());
+        let ids = operation.map_or_else(
+            || vec![self.request.selected],
+            |status| vec![status.planning_run, status.implementation_run],
+        );
+        let observations = ids
+            .iter()
+            .map(|run| {
+                (
+                    *run,
+                    state
+                        .run_streams
+                        .get(run)
+                        .is_some_and(|stream| stream.observation_available_for(*run)),
+                )
+            })
+            .collect();
+        MissionRefresh {
+            observations,
+            operation: operation.map(|status| (status.operation_id, status.revision)),
+            streams: ids
+                .into_iter()
+                .map(|run| {
+                    (
+                        run,
+                        state
+                            .runs
+                            .iter()
+                            .find(|item| item.run_id == run)
+                            .and_then(|item| item.last_event_seq),
+                        state.run_streams.get(&run).map(|stream| stream.last_seq),
+                    )
+                })
+                .collect(),
         }
     }
 
+    pub(super) fn sync(&mut self, refresh: MissionRefresh, cx: &mut Context<Self>) {
+        let history_changed = self.loaded_refresh.as_ref().is_none_or(|loaded| {
+            loaded.operation != refresh.operation || loaded.streams != refresh.streams
+        });
+        let observation_changed = self
+            .loaded_refresh
+            .as_ref()
+            .is_none_or(|loaded| loaded.observations != refresh.observations);
+        self.loaded_refresh = Some(refresh);
+        if history_changed {
+            self.reload(cx);
+        } else if observation_changed {
+            cx.notify();
+        }
+    }
+
+    fn current_observation(&self) -> bool {
+        let run = self
+            .operation
+            .as_ref()
+            .map_or(self.request.selected, |status| {
+                if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
+                    status.implementation_run
+                } else {
+                    status.planning_run
+                }
+            });
+        let Some(mission) = &self.mission else {
+            return false;
+        };
+        self.observes_run(run, &mission.recovery, mission.end.is_some())
+    }
+
+    fn observes_run(
+        &self,
+        run: RunId,
+        recovery: &surge_core::recovery_observation::RecoveryObservation,
+        terminal: bool,
+    ) -> bool {
+        if terminal || self.loading != LoadingState::Ready || self.error.is_some() {
+            return false;
+        }
+        let Some(refresh) = &self.loaded_refresh else {
+            return false;
+        };
+        let surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+            through, ..
+        } = *recovery
+        else {
+            return false;
+        };
+        refresh.observations.contains(&(run, true))
+            && refresh.streams.iter().any(|(id, registry, stream)| {
+                *id == run && *stream == Some(through) && registry.is_none_or(|seq| seq <= through)
+            })
+    }
+
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_once(false, cx);
+    }
+
+    fn reload_once(&mut self, retried: bool, cx: &mut Context<Self>) {
         self.generation += 1;
+        self.loading = LoadingState::Reading;
         let generation = self.generation;
-        let runs = self.runs;
+        let request = self.request.clone();
+        let home = self.home.clone();
+        #[cfg(test)]
+        let controlled = self.controlled_loads.clone();
+        #[cfg(test)]
+        let pending = {
+            self.active_loads.set(self.active_loads.get() + 1);
+            PendingLoad(self.active_loads.clone())
+        };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = load(runs).await;
+            #[cfg(test)]
+            let _pending = pending;
+            #[cfg(not(test))]
+            let result = history::load(home, request).await;
+            #[cfg(test)]
+            let result = if let Some(controlled) = controlled {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                controlled.borrow_mut().push(sender);
+                receiver
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(std::convert::identity)
+            } else {
+                history::load(home, request).await
+            };
             cx.update(|cx| {
                 let _ = this.update(cx, |panel, cx| {
                     if panel.generation != generation {
                         return;
                     }
                     match result {
-                        Ok(m) => {
+                        Ok(LoadOutcome::Loaded(snapshot)) => {
+                            let m = snapshot.mission;
+                            panel.implementation = Some(snapshot.implementation);
+                            panel.operation = snapshot.operation;
+                            panel.loading = LoadingState::Ready;
                             if let Some((milestone, task)) = &panel.requested_task
                                 && let Some(path) = task_scope(&m, milestone, task)
                             {
@@ -143,7 +279,12 @@ impl MissionPanel {
                             panel.mission = Some(m);
                             panel.error = None;
                         },
-                        Err(e) => panel.error = Some(e),
+                        Ok(LoadOutcome::Stale) if !retried => panel.reload_once(true, cx),
+                        Ok(LoadOutcome::Stale) => panel.loading = LoadingState::Changed,
+                        Err(e) => {
+                            panel.error = Some(e);
+                            panel.loading = LoadingState::Ready;
+                        },
                     }
                     cx.notify();
                 });
@@ -163,16 +304,64 @@ fn lane_color(lane: Lane) -> Hsla {
     }
 }
 
-/// A step as a small capsule: its role color, its label, and how it went.
-fn step_chip(id: String, step: &Step) -> Stateful<Div> {
-    let role = lane_color(step.lane);
+/// Final colors actually consumed by the capsule border, tint and live cue.
+struct StepChipStyle {
+    border: Hsla,
+    background: Hsla,
+    activity: Option<Hsla>,
+    icon: Option<IconName>,
+    outcome: Hsla,
+}
+
+fn step_chip_style(
+    step: &Step,
+    available: bool,
+    attribution: Option<mission::PlanningAttribution>,
+) -> StepChipStyle {
+    let unavailable = attribution == Some(mission::PlanningAttribution::Unavailable);
+    let role = if unavailable {
+        Semantic::External.color()
+    } else {
+        lane_color(step.lane)
+    };
     let (icon, tone): (Option<IconName>, Hsla) = match &step.state {
         StepState::Done(_) => (Some(IconName::Check), theme::success()),
         StepState::Failed(_) => (Some(IconName::Close), theme::error()),
-        StepState::WaitingOnYou => (None, theme::warning()),
+        StepState::WaitingOnYou | StepState::RecoveryRequired => (None, theme::warning()),
         StepState::Working => (None, theme::accent()),
         StepState::Unknown | StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
     };
+    let live = available && matches!(step.state, StepState::Working | StepState::WaitingOnYou);
+    let activity = if unavailable {
+        Semantic::External.color()
+    } else {
+        tone
+    };
+    StepChipStyle {
+        border: if live {
+            theme::stroke(activity)
+        } else {
+            theme::stroke(role).opacity(0.5)
+        },
+        background: if live {
+            theme::tint(activity)
+        } else {
+            theme::tint(role)
+        },
+        activity: live.then_some(activity),
+        icon,
+        outcome: tone,
+    }
+}
+
+/// A step as a small capsule: its role color, its label, and how it went.
+fn step_chip(
+    id: String,
+    step: &Step,
+    available: bool,
+    attribution: Option<mission::PlanningAttribution>,
+) -> impl IntoElement {
+    let style = step_chip_style(step, available, attribution);
     let tip = match &step.state {
         StepState::Done(outcome) => step
             .summary
@@ -180,7 +369,13 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
             .unwrap_or_else(|| format!("finished · {outcome}")),
         StepState::Failed(reason) => format!("failed · {reason}"),
         StepState::WaitingOnYou => "waiting for your answer".into(),
-        StepState::Working => "working now".into(),
+        StepState::RecoveryRequired => "paused · recovery requires review".into(),
+        StepState::Working => if available {
+            "working now"
+        } else {
+            "last recorded progress"
+        }
+        .into(),
         StepState::Unknown => "continuation unknown after a journal gap".into(),
         StepState::Unfinished => "the run ended before this step reported".into(),
     };
@@ -189,9 +384,11 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
     } else {
         tip
     };
-    let live = matches!(step.state, StepState::Working | StepState::WaitingOnYou);
     div()
         .id(SharedString::from(id))
+        .test_support()
+        .role(Role::Group)
+        .aria_label(format!("{}: {tip}", step.label))
         .flex_none()
         .h_flex()
         .gap(px(5.0))
@@ -200,34 +397,30 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
         .px(px(8.0))
         .rounded(px(999.0))
         .border_1()
-        .border_color(if live {
-            theme::stroke(tone)
-        } else {
-            theme::stroke(role).opacity(0.5)
-        })
-        .bg(if live {
-            theme::tint(tone)
-        } else {
-            theme::tint(role)
-        })
+        .border_color(style.border)
+        .bg(style.background)
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-        .when(live, |el| el.child(ui::live_dot(tone)))
+        .children(style.activity.map(ui::live_dot))
         .child(
             div()
                 .text_size(px(10.5))
                 .text_color(theme::text_primary())
                 .child(step.label.clone()),
         )
-        .children(icon.map(|i| Icon::new(i).size(px(10.0)).text_color(tone)))
+        .children(
+            style
+                .icon
+                .map(|i| Icon::new(i).size(px(10.0)).text_color(style.outcome)),
+        )
 }
 
-fn step_row(prefix: &str, steps: &[Step]) -> Div {
+fn step_row(prefix: &str, steps: &[Step], available: bool) -> Div {
     let mut row = div().h_flex().flex_wrap().gap(px(4.0)).items_center();
     for (i, step) in steps.iter().enumerate() {
         if i > 0 {
             row = row.child(div().w(px(6.0)).h(px(1.0)).bg(theme::graph_line()));
         }
-        row = row.child(step_chip(format!("{prefix}-{i}"), step));
+        row = row.child(step_chip(format!("{prefix}-{i}"), step, available, None));
     }
     row
 }
@@ -252,7 +445,7 @@ impl MissionPanel {
                 );
             }
             let (note, tone, icon) = match step.state {
-                PlanState::NotStarted => ("not started".to_string(), theme::slate(), None),
+                PlanState::NotStarted => ("No review recorded".to_string(), theme::slate(), None),
                 PlanState::Drafting { edits } => (
                     if edits > 0 {
                         format!("redrafting · {edits} edit")
@@ -279,6 +472,10 @@ impl MissionPanel {
             };
             row = row.child(
                 ui::node_card(Semantic::Plan.color())
+                    .id(SharedString::from(format!("planning-review-{i}")))
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(format!("{}: {note}", plan_label(step.stage)))
                     .flex_1()
                     .min_w(px(0.0))
                     .v_flex()
@@ -309,7 +506,88 @@ impl MissionPanel {
             .child(row)
     }
 
-    fn render_subtask(task: &TaskView, path: &str) -> AnyElement {
+    fn render_planning(&self, planning: &mission::PlanningExecution) -> Div {
+        let available = self.observes_run(planning.run, &planning.recovery, planning.end.is_some());
+        let coverage = if planning.recovery.is_complete() {
+            "complete loaded prefix"
+        } else {
+            "incomplete history"
+        };
+        let facts = format!(
+            "Planning run {} · {coverage} · through event {}",
+            planning.run,
+            planning
+                .through
+                .map_or_else(|| "unknown".into(), |seq| seq.to_string())
+        );
+        let mut group = div()
+            .v_flex()
+            .gap(px(8.0))
+            .child(ui::section_label("Recorded planning steps"))
+            .child(
+                div()
+                    .id("planning-history-facts")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(facts.clone())
+                    .child(ui::meta(facts)),
+            );
+        if let Some(end) = &planning.end {
+            let text = match end {
+                RunEnd::Completed => "Planning run: Completed".into(),
+                RunEnd::Failed(error) => format!("Planning run: Failed · {error}"),
+                RunEnd::Aborted(reason) => format!("Planning run: Stopped · {reason}"),
+            };
+            group = group.child(
+                div()
+                    .id("planning-terminal")
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(text.clone())
+                    .child(ui::meta(text)),
+            );
+        }
+        for caveat in &planning.caveats {
+            group = group.child(ui::meta(caveat.clone()));
+        }
+        if let Some(problem) = mission::recovery_problem(&planning.recovery, false) {
+            group = group.child(
+                div()
+                    .id("planning-recovery")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(problem.clone())
+                    .child(ui::meta(problem)),
+            );
+        }
+        for occurrence in &planning.steps {
+            let id = format!("planning-step-{}", occurrence.entered);
+            let mut row = div().v_flex().gap(px(4.0)).child(step_chip(
+                id.clone(),
+                &occurrence.step,
+                available,
+                Some(occurrence.attribution),
+            ));
+            if let Some(summary) = &occurrence.step.summary {
+                row = row.child(ui::meta(summary.clone()));
+            }
+            for (index, participant) in occurrence.sessions.iter().enumerate() {
+                row = row.child(process_evidence(
+                    format!("{id}-session-{index}"),
+                    format!(
+                        "Performed by {} · Runtime: {} · Session: {}",
+                        participant.profile,
+                        participant.runtime.as_deref().unwrap_or("not recorded"),
+                        participant.session
+                    ),
+                ));
+            }
+            group = group.child(row);
+        }
+        group
+    }
+
+    fn render_subtask(&self, task: &TaskView, path: &str) -> AnyElement {
         let (state, color) = match &task.iteration {
             mission::IterationState::Planned => ("Planned".to_string(), theme::text_muted()),
             mission::IterationState::Discovered => {
@@ -319,7 +597,15 @@ impl MissionPanel {
             mission::IterationState::Replaced => {
                 ("Split into smaller tasks".into(), theme::text_muted())
             },
-            mission::IterationState::Running => ("Running".to_string(), theme::accent()),
+            mission::IterationState::Running => (
+                if self.current_observation() {
+                    "Running"
+                } else {
+                    "Last recorded in progress"
+                }
+                .to_string(),
+                theme::accent(),
+            ),
             mission::IterationState::Finished(outcome) => {
                 (format!("Process finished · {outcome}"), theme::text_muted())
             },
@@ -364,13 +650,13 @@ impl MissionPanel {
                 item.child(ui::meta("Verification recorded"))
             })
             .when(!task.steps.is_empty(), |item| {
-                item.child(step_row(path, &task.steps))
+                item.child(step_row(path, &task.steps, self.current_observation()))
             })
             .children(
                 task.subtasks
                     .iter()
                     .enumerate()
-                    .map(|(index, child)| Self::render_subtask(child, &format!("{path}-s{index}"))),
+                    .map(|(index, child)| self.render_subtask(child, &format!("{path}-s{index}"))),
             )
             .into_any_element()
     }
@@ -379,9 +665,14 @@ impl MissionPanel {
         let (label, role) = match task.status {
             RoadmapStatus::Completed if task.verified => ("verified", Semantic::Verified),
             RoadmapStatus::Completed => ("done · unverified", Semantic::External),
-            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => {
-                ("in progress", Semantic::Agent)
-            },
+            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             RoadmapStatus::Failed | RoadmapStatus::FailedVerification => {
                 ("failed", Semantic::Failure)
             },
@@ -396,9 +687,14 @@ impl MissionPanel {
             },
             mission::IterationState::Queued => ("queued after split", Semantic::External),
             mission::IterationState::Replaced => ("split into smaller tasks", Semantic::External),
-            mission::IterationState::Running if task.status == RoadmapStatus::Pending => {
-                ("in progress", Semantic::Agent)
-            },
+            mission::IterationState::Running if task.status == RoadmapStatus::Pending => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             mission::IterationState::Finished(_) if task.status == RoadmapStatus::Pending => {
                 ("process finished · unverified", Semantic::External)
             },
@@ -408,10 +704,11 @@ impl MissionPanel {
             _ => (label, role),
         };
         let color = role.color();
-        let live = task
-            .steps
-            .iter()
-            .any(|s| matches!(s.state, StepState::Working | StepState::WaitingOnYou));
+        let live = self.current_observation()
+            && task
+                .steps
+                .iter()
+                .any(|s| matches!(s.state, StepState::Working | StepState::WaitingOnYou));
         div()
             .id(SharedString::from(format!("task-state-{m}-{t}")))
             .test_support()
@@ -468,16 +765,16 @@ impl MissionPanel {
                     }),
             )
             .when(!task.steps.is_empty(), |el| {
-                el.child(
-                    div()
-                        .pl(px(17.0))
-                        .child(step_row(&format!("t{m}-{t}"), &task.steps)),
-                )
+                el.child(div().pl(px(17.0)).child(step_row(
+                    &format!("t{m}-{t}"),
+                    &task.steps,
+                    self.current_observation(),
+                )))
             })
             .when(!task.subtasks.is_empty(), |el| {
                 el.child(ui::meta("Subtasks"))
                     .children(task.subtasks.iter().enumerate().map(|(index, child)| {
-                        Self::render_subtask(child, &format!("t{m}-{t}-s{index}"))
+                        self.render_subtask(child, &format!("t{m}-{t}-s{index}"))
                     }))
             })
             .into_any_element()
@@ -496,7 +793,14 @@ impl MissionPanel {
                 ("done", Semantic::Verified)
             },
             (Some(_), _) => ("ended", Semantic::Failure),
-            (None, true) => ("in progress", Semantic::Agent),
+            (None, true) => (
+                if self.current_observation() {
+                    "in progress"
+                } else {
+                    "last recorded in progress"
+                },
+                Semantic::Agent,
+            ),
             (None, false) => ("planned", Semantic::External),
         };
         let color = role.color();
@@ -564,7 +868,11 @@ impl MissionPanel {
                         .px(px(14.0))
                         .pb(px(10.0))
                         .child(ui::section_label("Milestone steps"))
-                        .child(step_row(&format!("m{index}"), &m.steps)),
+                        .child(step_row(
+                            &format!("m{index}"),
+                            &m.steps,
+                            self.current_observation(),
+                        )),
                 )
             })
             .child(
@@ -603,27 +911,42 @@ impl MissionPanel {
                     .child(caveat.clone()),
             );
         }
-        if mission
-            .plan
-            .iter()
-            .any(|p| p.state != PlanState::NotStarted)
+        if mission.planning.is_some()
+            || mission
+                .plan
+                .iter()
+                .any(|p| p.state != PlanState::NotStarted)
         {
             body = body.child(self.render_plan(mission));
         }
+        if let Some(planning) = &mission.planning {
+            body = body.child(self.render_planning(planning));
+        }
         if let Some(now) = &mission.now {
+            let activity = if self.current_observation() {
+                format!("Working on  {now}")
+            } else {
+                format!("Last recorded activity  {now}")
+            };
             body = body.child(
                 ui::node_card(theme::accent())
+                    .id("mission-current-activity")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(activity.clone())
                     .h_flex()
                     .gap(px(10.0))
                     .items_center()
                     .px(px(14.0))
                     .py(px(10.0))
-                    .child(ui::live_dot(theme::accent()))
+                    .when(self.current_observation(), |el| {
+                        el.child(ui::live_dot(theme::accent()))
+                    })
                     .child(
                         div()
                             .text_size(px(12.0))
                             .text_color(theme::text_primary())
-                            .child(format!("Working on  {now}")),
+                            .child(activity),
                     ),
             );
         }
@@ -688,13 +1011,17 @@ impl MissionPanel {
                     .v_flex()
                     .gap(px(8.0))
                     .child(ui::section_label("Whole-project steps"))
-                    .child(step_row("run", &mission.steps)),
+                    .child(step_row("run", &mission.steps, self.current_observation())),
             );
         }
         if mission.milestones.is_empty() && mission.steps.is_empty() && mission.end.is_none() {
             body = body.child(ui::empty_state(
                 "◎",
-                "Nothing has run yet",
+                if mission.planning.is_some() {
+                    "Implementation has no recorded work yet"
+                } else {
+                    "Nothing has run yet"
+                },
                 "Milestones, tasks and their steps appear here as the build moves.",
             ));
         }
@@ -820,7 +1147,15 @@ impl MissionPanel {
                 StepState::Done(_) => ("Finished", theme::success()),
                 StepState::Failed(_) => ("Failed", theme::error()),
                 StepState::WaitingOnYou => ("Needs your decision", theme::warning()),
-                StepState::Working => ("Working", theme::accent()),
+                StepState::Working => (
+                    if self.current_observation() {
+                        "Working"
+                    } else {
+                        "Last recorded progress"
+                    },
+                    theme::accent(),
+                ),
+                StepState::RecoveryRequired => ("Recovery requires review", theme::warning()),
                 StepState::Unknown => ("Continuation unknown", theme::text_muted()),
                 StepState::Unfinished => ("No completion recorded", theme::text_muted()),
             };
@@ -994,6 +1329,67 @@ impl Render for MissionPanel {
                 .child("Reading the run…")
                 .into_any_element(),
         };
+        let mut body = div().v_flex().gap(px(12.0));
+        if let Some(message) = self.mission.as_ref().and_then(|mission| {
+            let unknown = self.operation.as_ref().is_some_and(|status| matches!(
+                status.state,
+                BootstrapState::NeedsAttention {
+                    reason: surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+                    ..
+                }
+            ));
+            mission::recovery_problem(&mission.recovery, unknown)
+        }) {
+            body = body.child(div().id("mission-recovery").test_support()
+                .role(Role::Group).aria_label(message.clone())
+                .text_size(px(12.0)).text_color(theme::warning()).child(message));
+        }
+        if let Some(status) = &self.operation {
+            let message = history::operation_message(status);
+            body = body.child(
+                div()
+                    .id("mission-operation")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(message.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(message),
+            );
+        }
+        let message = match &self.implementation {
+            Some(ImplementationHistory::PlanningOnly) => {
+                Some("No implementation launch is recorded.".into())
+            },
+            Some(ImplementationHistory::AwaitingStartup) => {
+                Some(match self.operation.as_ref().map(|status| &status.state) {
+                    Some(BootstrapState::Cancelling { .. }) => {
+                        "Implementation start not recorded; cancelling.".into()
+                    },
+                    Some(BootstrapState::NeedsAttention { .. }) => {
+                        "Implementation start not recorded; operator attention is required.".into()
+                    },
+                    _ => "Implementation awaiting startup.".into(),
+                })
+            },
+            Some(ImplementationHistory::Unavailable(issue)) => Some(issue.message()),
+            _ => None,
+        };
+        if let Some(message) = message {
+            body = body.child(
+                div()
+                    .id("mission-implementation-history")
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label(message.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(message),
+            );
+        }
+        if self.loading == LoadingState::Changed {
+            body = body.child("Run changed while reading; waiting for the next update.");
+        }
         div()
             .id("run-mission")
             .flex_1()
@@ -1001,18 +1397,213 @@ impl Render for MissionPanel {
             .overflow_y_scroll()
             .px(px(20.0))
             .py(px(16.0))
-            .child(div().max_w(px(980.0)).child(content))
+            .child(div().max_w(px(980.0)).child(body.child(content)))
     }
 }
 
 #[cfg(test)]
 mod hierarchy_tests {
-    use super::{MissionPanel, MissionRuns};
+    use super::{LoadingState, MissionPanel, MissionRequest};
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext as _, TestAppContext};
     use surge_core::keys::{NodeKey, SubgraphKey};
     use surge_core::loop_config::IterableSource;
     use surge_core::{ContentHash, EventPayload, RunId};
+
+    #[gpui_kit::test]
+    fn recovery_observability_offline_mission_does_not_claim_current_worker(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let mission = crate::mission::Mission {
+            now: Some("Recorded stage".into()),
+            ..Default::default()
+        };
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
+            },
+            mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
+            error: None,
+            generation: 0,
+            loaded_refresh: None,
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let label = window
+                .find("mission-current-activity")
+                .label()
+                .unwrap()
+                .to_owned();
+            assert_eq!(label, "Last recorded activity  Recorded stage");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn recovery_observability_availability_changes_render_without_history_reload(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let run = RunId::new();
+        let other = RunId::new();
+        let mission = crate::mission::Mission {
+            now: Some("Recorded stage".into()),
+            recovery: surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+                through: 7,
+                latest: None,
+            },
+            ..Default::default()
+        };
+        let refresh = |live| super::MissionRefresh {
+            operation: None,
+            streams: vec![(run, Some(7), Some(7)), (other, Some(7), Some(7))],
+            observations: vec![(run, live), (other, true)],
+        };
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: run,
+                project: None,
+            },
+            mission: Some(mission),
+            implementation: Some(super::ImplementationHistory::Recorded),
+            operation: None,
+            loading: LoadingState::Ready,
+            error: None,
+            generation: 5,
+            loaded_refresh: Some(refresh(false)),
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(panel.clone(), window, cx)
+        });
+        for live in [false, true, false] {
+            window.update(|window, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.sync(refresh(live), cx);
+                    assert_eq!(
+                        panel.generation, 5,
+                        "availability cannot reload journal history"
+                    );
+                    assert_eq!(panel.current_observation(), live);
+                });
+                window.render_frame(cx);
+                let label = window
+                    .find("mission-current-activity")
+                    .label()
+                    .unwrap()
+                    .to_owned();
+                assert!(label.starts_with(if live {
+                    "Working on"
+                } else {
+                    "Last recorded activity"
+                }));
+            });
+        }
+        window.update(|_, cx| {
+            panel.update(cx, |panel, _| {
+                panel.loading = LoadingState::Reading;
+                assert!(!panel.current_observation());
+                panel.loading = LoadingState::Ready;
+                let mut advanced = refresh(true);
+                advanced.streams[0].2 = Some(8);
+                panel.loaded_refresh = Some(advanced);
+                assert!(
+                    !panel.current_observation(),
+                    "old stage cannot be current after a newer watermark"
+                );
+                panel.loaded_refresh = Some(refresh(false));
+                panel.operation = Some(surge_core::bootstrap_operation::BootstrapOperationStatus {
+                    operation_id: run,
+                    planning_run: run,
+                    implementation_run: other,
+                    state: surge_core::bootstrap_operation::BootstrapState::Pending {
+                        phase: surge_core::bootstrap_operation::BootstrapPhase::Implementing,
+                    },
+                    result: None,
+                    revision: 1,
+                    cancel_requested: false,
+                    queue_sequence: 1,
+                    payload_version: 1,
+                });
+                panel.implementation = Some(super::ImplementationHistory::PlanningOnly);
+                assert!(
+                    !panel.current_observation(),
+                    "live child is not live planning history"
+                );
+                panel.implementation = Some(super::ImplementationHistory::Recorded);
+                assert!(
+                    panel.current_observation(),
+                    "recorded child uses its exact attributed observation"
+                );
+                panel.mission.as_mut().unwrap().recovery =
+                    surge_core::recovery_observation::RecoveryObservation::PartialPrefix {
+                        through: Some(7),
+                        latest: None,
+                    };
+                assert!(
+                    !panel.current_observation(),
+                    "partial history cannot show a current worker"
+                );
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn recovery_observability_native_problem_keeps_old_reason_unknown(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let run = RunId::new();
+        let mission = crate::mission::fixture_fold(
+            &[EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: "gate occurrence mismatch <literal> [inspect](https://example.test)"
+                    .into(),
+            }],
+            &[],
+            None,
+        );
+        let panel = cx.new(|_| MissionPanel {
+            controlled_loads: None, active_loads: Default::default(), home: None,
+            request: MissionRequest { selected: run, project: None }, mission: Some(mission),
+            implementation: Some(super::ImplementationHistory::PlanningOnly),
+            operation: Some(surge_core::bootstrap_operation::BootstrapOperationStatus {
+                operation_id: run, planning_run: run, implementation_run: RunId::new(),
+                state: surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
+                    phase: surge_core::bootstrap_operation::BootstrapPhase::Planning, run_id: Some(run),
+                    reason: surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+                }, result: None, revision: 1, cancel_requested: false, queue_sequence: 1, payload_version: 1,
+            }), loading: LoadingState::Ready, error: None, generation: 0, loaded_refresh: None,
+            scope: Vec::new(), requested_task: None, expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let label = window.find("mission-recovery").label().unwrap().to_owned();
+            assert!(label.contains("confirmation unconfirmed"));
+            assert!(
+                label
+                    .contains("gate occurrence mismatch <literal> [inspect](https://example.test)")
+            );
+            assert!(!label.contains("free disk"));
+        });
+    }
 
     #[gpui_kit::test]
     fn started_pending_task_displays_progress_without_a_ledger_promotion(cx: &mut TestAppContext) {
@@ -1035,14 +1626,20 @@ mod hierarchy_tests {
         );
         assert!(!mission.milestones[0].tasks[0].verified);
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1053,7 +1650,7 @@ mod hierarchy_tests {
             window.render_frame(cx);
             assert_eq!(
                 window.find("task-state-0-0").label(),
-                Some("Login: in progress")
+                Some("Login: last recorded in progress")
             );
         });
     }
@@ -1130,14 +1727,20 @@ mod hierarchy_tests {
         );
         assert!(super::task_scope(&mission, &"missing".into(), &"t1".into()).is_none());
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(mission),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: Vec::new(),
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1148,7 +1751,7 @@ mod hierarchy_tests {
             window.render_frame(cx);
             assert_eq!(
                 window.find("t0-0-s0").label(),
-                Some(format!("{title}: Running").as_str())
+                Some(format!("{title}: Last recorded in progress").as_str())
             );
         });
     }
@@ -1234,14 +1837,20 @@ mod hierarchy_tests {
             },
         ]);
         let panel = cx.new(|_| MissionPanel {
-            runs: MissionRuns {
-                planning: None,
-                implementation: RunId::new(),
+            controlled_loads: None,
+            active_loads: Default::default(),
+            home: None,
+            request: MissionRequest {
+                selected: RunId::new(),
+                project: None,
             },
             mission: Some(crate::mission::fixture_fold(&[], &events, None)),
+            implementation: None,
+            operation: None,
+            loading: LoadingState::Ready,
             error: None,
             generation: 0,
-            loaded_seq: None,
+            loaded_refresh: None,
             scope: vec![0, 0],
             requested_task: None,
             expanded_steps: Default::default(),
@@ -1366,3 +1975,7 @@ mod hierarchy_tests {
         assert_eq!(super::inputs_text(&human.steps[0]), "Resolved inputs: none");
     }
 }
+
+#[cfg(test)]
+#[path = "run_mission/results_history_tests.rs"]
+mod results_history_tests;

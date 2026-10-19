@@ -60,6 +60,7 @@ pub mod migrations;
 mod pool;
 pub mod pragmas;
 pub mod process;
+mod projection;
 pub mod query;
 pub mod reader;
 mod reader_views;
