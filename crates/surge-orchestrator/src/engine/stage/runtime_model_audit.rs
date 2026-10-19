@@ -2,10 +2,12 @@
 use surge_core::{RunEvent, SessionId, graph::Graph};
 
 pub(super) fn render(
-    graph: &Graph,
+    graph: Option<&Graph>,
     events: &[RunEvent],
     current: SessionId,
     cwd: &std::path::Path,
+    node: &surge_core::NodeKey,
+    agent: &surge_core::agent_config::AgentConfig,
 ) -> String {
     const MAX_CONTEXT_BYTES: usize = 64 * 1024;
     let mut declared = Vec::new();
@@ -45,12 +47,14 @@ pub(super) fn render(
             );
         }
     }
-    for (scope, nodes) in std::iter::once(("root", &graph.nodes)).chain(
-        graph
-            .subgraphs
-            .iter()
-            .map(|(key, body)| (key.as_str(), &body.nodes)),
-    ) {
+    for (scope, nodes) in graph.into_iter().flat_map(|graph| {
+        std::iter::once(("root", &graph.nodes)).chain(
+            graph
+                .subgraphs
+                .iter()
+                .map(|(key, body)| (key.as_str(), &body.nodes)),
+        )
+    }) {
         for node in nodes.values() {
             if let surge_core::node::NodeConfig::Agent(agent) = &node.config {
                 append(
@@ -63,7 +67,11 @@ pub(super) fn render(
     }
     format!(
         "Host runtime/model audit context. Declared bindings are requests; observed models come only from provider option responses. Legacy absent observations remain unknown and require independently attributable primary evidence.\n{}\n\n",
-        serde_json::json!({"declared_bindings":declared,"observed_sessions":observed,"omitted_entries":omitted})
+        serde_json::json!({"graph_declarations": if graph.is_some() { "available" } else { "unavailable" },
+            "declared_bindings":graph.map(|_| declared),
+            "current_stage_declaration":{"node":node,"profile":agent.profile,
+                "declared_runtime":agent.runtime_override(),"declared_model":agent.model_override()},
+            "observed_sessions":observed,"omitted_entries":omitted})
     )
 }
 
@@ -81,10 +89,22 @@ mod tests {
             }
         }
         let context = render(
-            &graph,
+            Some(&graph),
             &[],
             SessionId::new(),
             std::path::Path::new("/fixture"),
+            &graph.nodes.values().next().unwrap().id,
+            graph
+                .nodes
+                .values()
+                .find_map(|node| {
+                    if let surge_core::node::NodeConfig::Agent(agent) = &node.config {
+                        Some(agent)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap(),
         );
         assert!(context.contains("gpt-6.1-sol"));
         assert!(context.contains("declared_bindings"));
@@ -153,7 +173,18 @@ mod observation_tests {
                 },
             });
         }
-        let context = render(&graph, &events, current, std::path::Path::new("/child"));
+        let stage = graph.nodes.values().next().unwrap();
+        let surge_core::node::NodeConfig::Agent(agent) = &stage.config else {
+            panic!("fixture agent")
+        };
+        let context = render(
+            Some(&graph),
+            &events,
+            current,
+            std::path::Path::new("/child"),
+            &stage.id,
+            agent,
+        );
         assert!(context.len() < 70 * 1024);
         let data: serde_json::Value =
             serde_json::from_str(context.lines().nth(1).unwrap()).unwrap();

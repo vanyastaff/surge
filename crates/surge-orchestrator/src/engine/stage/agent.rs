@@ -1392,12 +1392,24 @@ async fn execute_agent_attempt(
     let prompt_text = prepend_interrupted_mcp_calls(prompt_text, interrupted);
     let audit_events = p.writer.reader().read_run_events().await
         .map_err(|error| StageError::Storage(error.to_string()))?;
-    let audit_state = crate::engine::execution_state::load(&p.writer.reader(),
-        crate::engine::execution_state::Position::AtSeq(opened_seq)).await
-        .map_err(|error| StageError::Storage(error.to_string()))?;
+    let audit_graph = match crate::engine::execution_state::load(
+        &p.writer.reader(),
+        crate::engine::execution_state::Position::AtSeq(opened_seq),
+    ).await {
+        Ok(state) => Some(state.graph),
+        // The public stage entry point also supports a standalone invocation.
+        // Missing graph declarations are unavailable, not an authoritative empty graph.
+        Err(crate::engine::execution_state::ExecutionStateLoadError {
+            error: crate::engine::execution_state::ExecutionStateError::NoGraph(_),
+            ..
+        }) => None,
+        Err(error) => return Err(StageError::Storage(error.to_string())),
+    };
     let audit_cwd = p.worktree_path.canonicalize().map_err(|error| StageError::Storage(error.to_string()))?;
-    let audit = super::runtime_model_audit::render(&audit_state.graph, &audit_events, session_id, &audit_cwd);
-    lease.start_turn(MessageContent::Text(format!("{audit}{prompt_text}")))?;
+    let audit = super::runtime_model_audit::render(
+        audit_graph.as_ref(), &audit_events, session_id, &audit_cwd, p.node, p.agent_config,
+    );
+    lease.start_turn(MessageContent::Text(format!("{prompt_text}\n\n{audit}")))?;
     let mut prompt_success = false;
     let mut candidates = std::collections::VecDeque::new();
     let mut retry_feedback: Option<String> = None;
