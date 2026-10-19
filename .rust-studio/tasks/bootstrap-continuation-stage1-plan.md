@@ -1335,3 +1335,45 @@ original twelve/twenty/three-second waits and all readiness/corruption/transport
 prompt/Attention assertions. Root owns Git/remote; builder freezes complete source
 and publication closure with appropriate local gates before independent diagnostic
 review. Current native CI665 continues; publication timing remains root-owned.
+
+
+## Original WG7 native worktree-registration oracle correction
+
+This remains the original authorized seventh Windows gate attempt, not a new repair
+round or an expansion to UI. Published ec6468a0 preserves the bounded six-case
+observation and full-suite comparison; its native result remains pending.
+
+The completed 665cb261 run39175364865 had Windows4527/4547 passing and20 failing.
+All three native resolver regressions, eight read-only opening regressions and48
+standard-user executions passed. Fixed-five serial5/5 passed with identical actual
+source and binary identities before/after serial/full execution; empty MCP, cold
+startup and TaskSplit then failed in the full suite. This supports a causal
+comparison, not a proven contention or semantic diagnosis. The original recovery
+caller phases remain under observation; deadlines and assertions remain unchanged.
+
+The authentic Windows continuation outer reached fixture430 after completed
+planning, accepted source prefix, common Git directory and expected branch proofs.
+Its raw log records failure of Git porcelain text containing Rust canonical path
+text; exact spelling difference is inferred because the two rendered values were
+not logged. Unix outers still reach the genuine missing-continuation endpoint.
+
+Owning builder, independent critic and security pre-code verdicts: ACCEPTABLE for
+ONE test-only correction in bootstrap_implementation_continuation.rs. Replace the
+substring oracle with actual `git worktree list --porcelain -z` strict NUL-record
+parsing and lossless path handling. Require exactly one existing canonical-path
+match, with captured original HEAD and exact refs/heads/run branch on THAT record.
+Missing/malformed fields, duplicate matches, wrong directory/HEAD/branch refuse.
+No textual prefix stripping/case repair, lossy decode or production authority.
+Keep every independent common-dir/branch/.git/sentinel/dirty/source/history/eight-
+task assertion unchanged. Cover actual registered worktree success and negative
+controls, spaces/Unicode and sibling-prefix distinction, malformed/duplicate rows.
+
+Release the sole builder for that fixture only. Native failure above is the actual
+platform RED; local correction must exercise actual Git and retain the authentic
+outer's expected missing-endpoint RED with real cleanup, not claim outer GREEN.
+Record literal command denominators, bounded build resource ownership, fresh strict
+workspace default/all-feature/fmt/diff results and frozen hashes; independent review
+before checkpoint publication. No production, runtime scheduler, nextest scheduling,
+timeout, retry, skipped assertion or new UI change is authorized by this slice.
+Root owns canonical plan, all Git/CI/evidence metadata and next push. Preserve the
+in-flight ec6468a0 native serial/full comparison before another push.

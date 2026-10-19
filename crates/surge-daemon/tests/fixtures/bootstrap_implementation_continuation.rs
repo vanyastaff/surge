@@ -357,6 +357,199 @@ fn git_output(project: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+struct RegisteredWorktree<'a> {
+    path: &'a str,
+    head: Option<&'a str>,
+    branch: Option<&'a str>,
+}
+
+fn git_worktree_records(output: &str) -> Result<Vec<RegisteredWorktree<'_>>, &'static str> {
+    let output = output
+        .strip_suffix("\0\0")
+        .ok_or("unterminated worktree records")?;
+    let mut records = Vec::new();
+    for record in output.split("\0\0") {
+        let mut fields = record.split('\0');
+        let path = fields
+            .next()
+            .and_then(|field| field.strip_prefix("worktree "))
+            .filter(|path| Path::new(path).is_absolute())
+            .ok_or("invalid worktree path")?;
+        let mut parsed = RegisteredWorktree {
+            path,
+            head: None,
+            branch: None,
+        };
+        let mut flags = std::collections::HashSet::new();
+        for field in fields {
+            if let Some(head) = field.strip_prefix("HEAD ") {
+                if parsed.head.replace(head).is_some()
+                    || !matches!(head.len(), 40 | 64)
+                    || !head.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err("invalid or duplicate worktree HEAD");
+                }
+            } else if let Some(branch) = field.strip_prefix("branch ") {
+                if parsed.branch.replace(branch).is_some()
+                    || !branch.starts_with("refs/heads/")
+                    || branch == "refs/heads/"
+                {
+                    return Err("invalid or duplicate worktree branch");
+                }
+            } else if field == "bare"
+                || field == "detached"
+                || field == "locked"
+                || field.starts_with("locked ")
+                || field == "prunable"
+                || field.starts_with("prunable ")
+            {
+                let key = field.split(' ').next().ok_or("invalid worktree flag")?;
+                if !flags.insert(key) {
+                    return Err("duplicate worktree flag");
+                }
+            } else {
+                return Err("unknown worktree field");
+            }
+        }
+        if (flags.contains("bare")
+            && (parsed.head.is_some() || parsed.branch.is_some() || flags.contains("detached")))
+            || (!flags.contains("bare")
+                && (parsed.head.is_none()
+                    || (parsed.branch.is_some() == flags.contains("detached"))))
+        {
+            return Err("contradictory worktree record");
+        }
+        records.push(parsed);
+    }
+    Ok(records)
+}
+
+fn registered_worktree(
+    output: &str,
+    expected: &Path,
+    head: &str,
+    branch: &str,
+) -> Result<(), &'static str> {
+    let expected = expected
+        .canonicalize()
+        .map_err(|_| "expected worktree unavailable")?;
+    let mut matching = Vec::new();
+    for record in git_worktree_records(output)? {
+        let physical = Path::new(record.path)
+            .canonicalize()
+            .map_err(|_| "listed worktree unavailable")?;
+        if physical == expected {
+            matching.push(record);
+        }
+    }
+    let [record] = matching.as_slice() else {
+        return Err("worktree registration is not unique");
+    };
+    if record.head != Some(head) || record.branch != Some(branch) {
+        return Err("worktree HEAD or branch differs");
+    }
+    Ok(())
+}
+
+fn registered_worktree_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String, String) {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("repository");
+    std::fs::create_dir(&project).unwrap();
+    git(&project, &["init", "-q"]);
+    git(
+        &project,
+        &["config", "user.email", "oracle@example.invalid"],
+    );
+    git(&project, &["config", "user.name", "Worktree oracle"]);
+    std::fs::write(project.join("tracked.txt"), b"fixed registration fixture\n").unwrap();
+    git(&project, &["add", "tracked.txt"]);
+    git(&project, &["commit", "-q", "-m", "fixed registration"]);
+    let workspace = root.path().join("work tree Юникод child");
+    git(
+        &project,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "registered-oracle",
+            workspace.to_str().unwrap(),
+        ],
+    );
+    let head = git_output(&workspace, &["rev-parse", "HEAD"]);
+    let records = git_output(&project, &["worktree", "list", "--porcelain", "-z"]);
+    (root, project, workspace, head.trim().into(), records)
+}
+
+#[test]
+fn registered_worktree_uses_real_git_records_for_space_unicode_and_exact_identity() {
+    let (root, _project, workspace, head, records) = registered_worktree_fixture();
+    let branch = "refs/heads/registered-oracle";
+    assert_eq!(
+        registered_worktree(&records, &workspace, &head, branch),
+        Ok(())
+    );
+    let sibling_prefix = root.path().join("work tree Юникод");
+    std::fs::create_dir(&sibling_prefix).unwrap();
+    assert_eq!(
+        registered_worktree(&records, &sibling_prefix, &head, branch),
+        Err("worktree registration is not unique")
+    );
+    assert_eq!(
+        registered_worktree(&records, &workspace, &"0".repeat(head.len()), branch),
+        Err("worktree HEAD or branch differs")
+    );
+    assert_eq!(
+        registered_worktree(&records, &workspace, &head, "refs/heads/wrong-branch"),
+        Err("worktree HEAD or branch differs")
+    );
+    assert_eq!(
+        registered_worktree(&records, &root.path().join("missing"), &head, branch),
+        Err("expected worktree unavailable")
+    );
+}
+
+#[test]
+fn registered_worktree_refuses_malformed_and_duplicate_real_git_records() {
+    let (_root, _project, workspace, head, records) = registered_worktree_fixture();
+    let branch = "refs/heads/registered-oracle";
+    assert_eq!(
+        registered_worktree(&records, &workspace, &head, branch),
+        Ok(())
+    );
+    assert_eq!(
+        registered_worktree(&records.repeat(2), &workspace, &head, branch),
+        Err("worktree registration is not unique")
+    );
+    for (malformed, expected) in [
+        (
+            records.trim_end_matches('\0').to_owned(),
+            "unterminated worktree records",
+        ),
+        (
+            records.replacen("HEAD ", "HEAD invalid", 1),
+            "invalid or duplicate worktree HEAD",
+        ),
+        (
+            records.replacen("HEAD ", &format!("HEAD {head}\0HEAD "), 1),
+            "invalid or duplicate worktree HEAD",
+        ),
+        (
+            records.replacen("HEAD ", "unknown field\0HEAD ", 1),
+            "unknown worktree field",
+        ),
+        (
+            format!("worktree relative-path\0HEAD {head}\0branch {branch}\0\0"),
+            "invalid worktree path",
+        ),
+    ] {
+        assert_eq!(
+            registered_worktree(&malformed, &workspace, &head, branch),
+            Err(expected)
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_bootstrap_continues_original_eight_tasks_without_rebuilding() {
     let home = FixtureHome::new().unwrap();
@@ -427,9 +620,15 @@ async fn run_continuation(home: &FixtureHome) {
         git_output(&workspace, &["branch", "--show-current"]).trim(),
         surge_git::run_branch_name(&implementation)
     );
-    assert!(
-        git_output(&project, &["worktree", "list", "--porcelain"])
-            .contains(&workspace.canonicalize().unwrap().display().to_string())
+    assert_eq!(
+        registered_worktree(
+            &git_output(&project, &["worktree", "list", "--porcelain", "-z"]),
+            &workspace,
+            head.trim(),
+            &format!("refs/heads/{}", surge_git::run_branch_name(&implementation)),
+        ),
+        Ok(()),
+        "original linked worktree has one physical Git registration with its exact HEAD and branch"
     );
     let index = std::fs::read(workspace.join(".git")).unwrap();
     assert!(
