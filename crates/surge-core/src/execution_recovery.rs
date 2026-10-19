@@ -68,6 +68,8 @@ pub struct ProviderSessionDescriptor {
     launch_hash: ContentHash,
     cwd: PathBuf,
     capabilities: SessionRestoreCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observed_model: Option<String>,
 }
 #[derive(Deserialize)]
 struct RawDescriptor {
@@ -77,6 +79,8 @@ struct RawDescriptor {
     launch_hash: ContentHash,
     cwd: PathBuf,
     capabilities: SessionRestoreCapabilities,
+    #[serde(default)]
+    observed_model: Option<String>,
 }
 impl TryFrom<RawDescriptor> for ProviderSessionDescriptor {
     type Error = RecoveryIdentityError;
@@ -88,6 +92,7 @@ impl TryFrom<RawDescriptor> for ProviderSessionDescriptor {
             raw.launch_hash,
             raw.cwd,
             raw.capabilities,
+            raw.observed_model,
         )
     }
 }
@@ -100,10 +105,16 @@ impl ProviderSessionDescriptor {
         launch_hash: ContentHash,
         cwd: PathBuf,
         capabilities: SessionRestoreCapabilities,
+        observed_model: Option<String>,
     ) -> Result<Self, RecoveryIdentityError> {
         if runtime.trim().is_empty() || runtime.len() > 512 || runtime.chars().any(char::is_control)
         {
             return Err(RecoveryIdentityError::InvalidRuntime);
+        }
+        if observed_model.as_ref().is_some_and(|model| {
+            model.trim().is_empty() || model.len() > 512 || model.chars().any(char::is_control)
+        }) {
+            return Err(RecoveryIdentityError::InvalidModel);
         }
         if !cwd.is_absolute() {
             return Err(RecoveryIdentityError::RelativeDirectory);
@@ -118,6 +129,7 @@ impl ProviderSessionDescriptor {
             launch_hash,
             cwd,
             capabilities,
+            observed_model,
         })
     }
     /// Provider identity, never the internal Surge ID.
@@ -131,6 +143,10 @@ impl ProviderSessionDescriptor {
     /// Canonical registered runtime identity.
     pub fn runtime(&self) -> &str {
         &self.runtime
+    }
+    /// Exact model acknowledged by the peer; absent legacy metadata remains unknown.
+    pub fn observed_model(&self) -> Option<&str> {
+        self.observed_model.as_deref()
     }
     /// Fingerprint of the provider launch contract.
     pub fn launch_hash(&self) -> &ContentHash {
@@ -212,6 +228,9 @@ pub enum RecoveryIdentityError {
     /// Runtime identity is not bounded and nonempty.
     #[error("invalid provider runtime identity")]
     InvalidRuntime,
+    /// Observed model identity must be bounded and nonempty.
+    #[error("invalid observed provider model")]
+    InvalidModel,
     /// Relative directories cannot establish durable cwd identity.
     #[error("provider session directory must be absolute")]
     RelativeDirectory,
@@ -238,6 +257,30 @@ mod tests {
         }
     }
     #[test]
+    fn descriptor_rejects_invalid_observed_model_but_preserves_legacy_unknown() {
+        let descriptor = ProviderSessionDescriptor::new(
+            ProviderSessionId::new("provider-model".into()).unwrap(),
+            StageInvocationId::new(),
+            "fixture".into(),
+            ContentHash::compute(b"model"),
+            std::env::temp_dir(),
+            SessionRestoreCapabilities::default(),
+            None,
+        )
+        .unwrap();
+        let legacy = serde_json::to_value(&descriptor).unwrap();
+        for invalid in ["", " ", "bad\nmodel"] {
+            let mut encoded = legacy.clone();
+            encoded["observed_model"] = invalid.into();
+            assert!(serde_json::from_value::<ProviderSessionDescriptor>(encoded).is_err());
+        }
+        assert_eq!(
+            serde_json::from_value::<ProviderSessionDescriptor>(legacy).unwrap(),
+            descriptor
+        );
+    }
+
+    #[test]
     fn descriptor_decode_cannot_bypass_absolute_cwd() {
         let descriptor = ProviderSessionDescriptor::new(
             ProviderSessionId::new("provider-1".into()).unwrap(),
@@ -249,6 +292,7 @@ mod tests {
                 resume: true,
                 load: false,
             },
+            None,
         )
         .unwrap();
         let mut encoded = serde_json::to_value(&descriptor).unwrap();

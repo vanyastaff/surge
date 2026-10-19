@@ -1573,6 +1573,7 @@ mod paged_owned_history_tests {
                         resume: true,
                         load: true,
                     },
+                    None,
                 )
                 .unwrap();
                 let opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();

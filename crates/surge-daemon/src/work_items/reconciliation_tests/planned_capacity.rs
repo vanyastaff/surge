@@ -54,6 +54,32 @@ fn policy() -> FrozenQuotaPolicy {
 
 // Establish the earlier exact recipe through the same public admission, journal
 // binding and typed-rate-limit APIs used by the host. No SQL grants authority.
+fn prior_capacity_opened(
+    workspace: &WorkItemWorkspace,
+    target: &FrozenQuotaCandidate,
+    invocation: StageInvocationId,
+    execution_writer: ExecutionWriterId,
+    session: SessionId,
+) -> OpenedSession {
+    let descriptor = ProviderSessionDescriptor::new(
+        ProviderSessionId::new("prior-capacity-fixture-session".into()).unwrap(),
+        invocation,
+        target.candidate().runtime().into(),
+        *target.launch_hash(),
+        workspace.path.clone(),
+        SessionRestoreCapabilities {
+            resume: true,
+            load: true,
+        },
+        None,
+    )
+    .unwrap();
+    let mut opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
+    opened.execution_writer =
+        Some(ExecutionWriterObservation::new(execution_writer, None).unwrap());
+    opened
+}
+
 async fn exhaust_prior_recipe(
     storage: &Arc<Storage>,
     claim: &WorkItemLaunchClaim,
@@ -77,21 +103,7 @@ async fn exhaust_prior_recipe(
         .attach_admitted_configured_pin(execution_writer, target.configured_pin().unwrap())
         .unwrap();
     let session = SessionId::new();
-    let descriptor = ProviderSessionDescriptor::new(
-        ProviderSessionId::new("prior-capacity-fixture-session".into()).unwrap(),
-        invocation,
-        target.candidate().runtime().into(),
-        *target.launch_hash(),
-        workspace.path.clone(),
-        SessionRestoreCapabilities {
-            resume: true,
-            load: true,
-        },
-    )
-    .unwrap();
-    let mut opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
-    opened.execution_writer =
-        Some(ExecutionWriterObservation::new(execution_writer, None).unwrap());
+    let opened = prior_capacity_opened(workspace, target, invocation, execution_writer, session);
     writer
         .append_events(vec![
             V::new(E::StageEntered {

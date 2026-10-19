@@ -237,3 +237,5 @@ impl From<StageError> for EngineError {
 // persisted string) has no live consumer to describe.
 
 pub(crate) mod verification;
+
+mod runtime_model_audit;

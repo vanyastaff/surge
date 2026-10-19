@@ -32,6 +32,18 @@ fn successor_with_start(
 ) -> (SeventhFixture, RunId) {
     let graph: surge_core::Graph =
         toml::from_str(include_str!("../../../../examples/flow_minimal_agent.toml")).unwrap();
+    successor_with_graph(runtime, foreign, late_start, graph, None)
+}
+fn successor_with_graph(
+    runtime: &tokio::runtime::Runtime,
+    foreign: bool,
+    late_start: bool,
+    graph: surge_core::Graph,
+    repair: Option<surge_core::escalation::binding_repair::GeneratedBindingRepair>,
+) -> (SeventhFixture, RunId) {
+    let child_graph = repair
+        .as_ref()
+        .map_or_else(|| graph.clone(), |repair| repair.apply(&graph).unwrap());
     let mut fixture =
         SeventhFixture::with_operation_graph(runtime, true, false, true, Some(graph.clone()));
     let _source_repository = git2::Repository::init(&fixture.project).unwrap();
@@ -75,6 +87,7 @@ fn successor_with_start(
         run,
         boundary: 2,
         runtime: surge_core::ContentHash::compute(b"host runtime"),
+        binding_repair: repair.clone(),
         state: A::Reserved,
     };
     store
@@ -83,19 +96,26 @@ fn successor_with_start(
     store
         .advance_attempt(attempt.continuation_id, A::Reserved, A::ForkReady)
         .unwrap();
-    store
-        .advance_attempt(attempt.continuation_id, A::ForkReady, A::Running)
-        .unwrap();
+    if repair.is_none() {
+        store
+            .advance_attempt(attempt.continuation_id, A::ForkReady, A::Running)
+            .unwrap();
+    }
     fixture.record = store.get(attempt.operation_id).unwrap().unwrap();
     runtime.block_on(async {
         let writer = fixture.storage.create_run(run, &path, None).await.unwrap();
         let mut payloads = vec![
             VersionedEventPayload::new(start(&path)),
             VersionedEventPayload::new(E::PipelineMaterialized {
-                graph_hash: graph.identity().unwrap(),
-                graph: Box::new(graph),
+                graph_hash: child_graph.identity().unwrap(),
+                graph: Box::new(child_graph),
             }),
         ];
+        if repair.is_some() {
+            payloads.push(VersionedEventPayload::new(E::VerificationSubjectObserved {
+                subject: None,
+            }));
+        }
         if late_start {
             payloads.swap(0, 1);
         }
@@ -575,4 +595,133 @@ fn assert_identity_fault(fault: IdentityFault) {
         (true, true, true),
         "actual App/Home/Results refusal for {fault:?}"
     );
+}
+
+#[test]
+fn binding_repair_fork_ready_cold_app_home_and_identity_guards_agree() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _entered = runtime.enter();
+    let mut graph = surge_core::bundled_flows::BundledFlows::by_name_latest("multi-milestone")
+        .unwrap()
+        .graph;
+    for body in graph.subgraphs.values_mut() {
+        for node in body.nodes.values_mut() {
+            if let surge_core::node::NodeConfig::Agent(agent) = &mut node.config {
+                *agent = agent.with_runtime_override("codex-acp", Some("gpt-6.1-sol"));
+            }
+        }
+    }
+    let mut graph = surge_core::escalation::with_default_escalation_gates(&graph);
+    for body in graph.subgraphs.values_mut() {
+        for node in body.nodes.values_mut() {
+            if surge_core::escalation::is_split_planner(node)
+                && let surge_core::node::NodeConfig::Agent(agent) = &mut node.config
+            {
+                agent.custom_fields.remove("runtime");
+            }
+        }
+    }
+    let repair = surge_core::escalation::binding_repair::GeneratedBindingRepair::prepare(&graph)
+        .unwrap()
+        .unwrap();
+    let (fixture, run) = successor_with_graph(&runtime, false, false, graph, Some(repair));
+    assert_eq!(fixture.record.status.continuations[0].state, A::ForkReady);
+    let rows = runtime
+        .block_on(
+            surge_persistence::runs::Storage::inspect_existing_run_events(
+                fixture.home.path().join("runs"),
+                run,
+            ),
+        )
+        .unwrap();
+    crate::app_state::validate_bootstrap_history(
+        &fixture.record,
+        run,
+        &rows,
+        Some(fixture.home.path()),
+    )
+    .unwrap();
+    let events = rows
+        .iter()
+        .map(|row| row.to_run_event(run).unwrap())
+        .collect::<Vec<_>>();
+    runtime
+        .block_on(crate::app_state::validate_bootstrap_successor(
+            &fixture.record,
+            fixture.home.path(),
+            run,
+            &events,
+        ))
+        .unwrap();
+    let h = cold(&fixture);
+    assert_eq!(
+        h.cx.read(|cx| h.state.read(cx).run_prompt(&run).map(str::to_owned)),
+        Some("build timer".into())
+    );
+    drop(h);
+    let scope = crate::project_lifecycle::HistoryScope {
+        generation: 1,
+        root: fixture.project.clone(),
+        repository: None,
+        home: fixture.home.path().into(),
+    };
+    let observed = runtime
+        .block_on(crate::project_lifecycle::load_run(
+            scope,
+            run,
+            crate::project_lifecycle::RunOwnership::Bootstrap {
+                operation: fixture.record.status.operation_id,
+                planning: false,
+            },
+            Arc::default(),
+            None,
+            Arc::default(),
+        ))
+        .unwrap();
+    assert!(matches!(
+        observed.ownership,
+        crate::project_lifecycle::RunOwnership::Bootstrap { .. }
+    ));
+    let mut changed = rows.clone();
+    let mut tampered_record = fixture.record.clone();
+    for row in &mut changed {
+        if let E::PipelineMaterialized { graph, graph_hash } = &mut row.payload.payload {
+            graph.metadata.name.push_str(" arbitrary drift");
+            *graph_hash = graph.identity().unwrap();
+            let mut encoded = serde_json::to_value(
+                tampered_record.status.continuations[0]
+                    .binding_repair
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap();
+            encoded["repaired"] = serde_json::to_value(*graph_hash).unwrap();
+            tampered_record.status.continuations[0].binding_repair =
+                Some(serde_json::from_value(encoded).unwrap());
+        }
+    }
+    assert!(
+        crate::app_state::validate_bootstrap_history(
+            &tampered_record,
+            run,
+            &changed,
+            Some(fixture.home.path())
+        )
+        .is_err()
+    );
+    let changed_events = changed
+        .iter()
+        .map(|row| row.to_run_event(run).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        runtime
+            .block_on(crate::app_state::validate_bootstrap_successor(
+                &tampered_record,
+                fixture.home.path(),
+                run,
+                &changed_events
+            ))
+            .is_err()
+    );
+    fixture.close();
 }

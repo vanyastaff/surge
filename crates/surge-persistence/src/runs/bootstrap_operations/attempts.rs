@@ -52,7 +52,7 @@ impl BootstrapOperationStore {
             return Err(BootstrapStoreError::InvalidTransition);
         }
         transaction.execute(
-            "INSERT INTO bootstrap_attempts VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO bootstrap_attempts (continuation_id,operation_id,source_run,run,boundary,runtime,state_json,binding_repair_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 attempt.continuation_id.to_string(),
                 attempt.operation_id.to_string(),
@@ -60,7 +60,8 @@ impl BootstrapOperationStore {
                 attempt.run.to_string(),
                 attempt.boundary,
                 attempt.runtime.to_string(),
-                serde_json::to_string(&attempt.state)?
+                serde_json::to_string(&attempt.state)?,
+                attempt.binding_repair.as_ref().map(serde_json::to_string).transpose()?,
             ],
         )?;
         let changed = transaction.execute("UPDATE bootstrap_operations SET revision=revision+1 WHERE operation_id=?1 AND revision=?2",
@@ -126,7 +127,18 @@ pub(super) fn attempts(
     if !exists {
         return Ok(Vec::new());
     }
-    let mut statement = connection.prepare("SELECT continuation_id,operation_id,source_run,run,boundary,runtime,state_json FROM bootstrap_attempts WHERE ?1 IS NULL OR operation_id=?1 ORDER BY rowid")?;
+    let mut columns = connection.prepare("PRAGMA table_info(bootstrap_attempts)")?;
+    let has_repair = columns
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "binding_repair_json");
+    let repair_column = if has_repair {
+        "binding_repair_json"
+    } else {
+        "NULL"
+    };
+    let mut statement = connection.prepare(&format!("SELECT continuation_id,operation_id,source_run,run,boundary,runtime,state_json,{repair_column} FROM bootstrap_attempts WHERE ?1 IS NULL OR operation_id=?1 ORDER BY rowid"))?;
     let rows = statement.query_map([operation.map(|id| id.to_string())], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -136,10 +148,11 @@ pub(super) fn attempts(
             row.get::<_, u64>(4)?,
             row.get::<_, String>(5)?,
             row.get::<_, String>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (request, operation, source, run, boundary, runtime, state) = row?;
+        let (request, operation, source, run, boundary, runtime, state, repair) = row?;
         let corrupt = || BootstrapStoreError::CorruptRecord;
         Ok(BootstrapAttempt {
             continuation_id: request.parse().map_err(|_| corrupt())?,
@@ -148,6 +161,7 @@ pub(super) fn attempts(
             run: run.parse().map_err(|_| corrupt())?,
             boundary,
             runtime: runtime.parse().map_err(|_| corrupt())?,
+            binding_repair: repair.map(|json| serde_json::from_str(&json)).transpose()?,
             state: serde_json::from_str(&state)?,
         })
     })

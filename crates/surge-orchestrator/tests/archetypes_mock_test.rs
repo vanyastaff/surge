@@ -131,6 +131,7 @@ impl BridgeFacade for DeterministicMockBridge {
                 surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
                 config.working_dir,
                 Default::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,

@@ -1390,7 +1390,14 @@ async fn execute_agent_attempt(
         );
     }
     let prompt_text = prepend_interrupted_mcp_calls(prompt_text, interrupted);
-    lease.start_turn(MessageContent::Text(prompt_text))?;
+    let audit_events = p.writer.reader().read_run_events().await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    let audit_state = crate::engine::execution_state::load(&p.writer.reader(),
+        crate::engine::execution_state::Position::AtSeq(opened_seq)).await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    let audit_cwd = p.worktree_path.canonicalize().map_err(|error| StageError::Storage(error.to_string()))?;
+    let audit = super::runtime_model_audit::render(&audit_state.graph, &audit_events, session_id, &audit_cwd);
+    lease.start_turn(MessageContent::Text(format!("{audit}{prompt_text}")))?;
     let mut prompt_success = false;
     let mut candidates = std::collections::VecDeque::new();
     let mut retry_feedback: Option<String> = None;

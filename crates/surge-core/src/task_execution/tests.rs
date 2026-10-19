@@ -241,6 +241,7 @@ fn connection(
             resume: true,
             load: false,
         },
+        None,
     )
     .unwrap();
     let mut opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();

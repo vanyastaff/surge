@@ -1,4 +1,5 @@
 //! Isolated implementation attempts; original bootstrap result is never retried.
+mod milestone_retry;
 use super::{
     BootstrapError, BootstrapOperationStatus, BootstrapStoreError, BootstrapStoredPayload,
     BootstrapSupervisor, BootstrapTerminal, RunId, RunOutcome, State, TrackingContext, WorkerKey,
@@ -106,12 +107,7 @@ impl BootstrapSupervisor {
             .await
             .map_err(|_| BootstrapError::Continuation("source history is unavailable"))?;
         validate_failed_state(&state)?;
-        let (boundary, snapshot) = reader
-            .latest_snapshot_at_or_before(surge_persistence::runs::EventSeq(state.position))
-            .await
-            .map_err(|_| BootstrapError::Continuation("checkpoint unavailable"))?
-            .ok_or(BootstrapError::Continuation("no saved stage boundary"))?;
-        let boundary = boundary.as_u64();
+        let (boundary, snapshot, prefix) = select_attempt_boundary(&reader, &state).await?;
         let expected_source = if source == record.status.implementation_run {
             capture.fields().implementation_worktree.clone()
         } else {
@@ -129,9 +125,7 @@ impl BootstrapSupervisor {
             &capture.fields().git_common_dir,
         )
         .await?;
-        let prefix = execution_state::load(&reader, execution_state::Position::AtSeq(boundary))
-            .await
-            .map_err(|_| BootstrapError::Continuation("checkpoint cannot reconstruct execution"))?;
+
         if !matches!(prefix.terminal_verdict, TerminalVerdict::Open)
             || prefix.cursor_source != (execution_state::CursorSource::Checkpoint { seq: boundary })
         {
@@ -139,14 +133,34 @@ impl BootstrapSupervisor {
                 "checkpoint is not an executable boundary",
             ));
         }
-        validate_tail(&reader, boundary, state.position).await?;
         let runtime = self
             .services
             .runtime
             .as_ref()
             .ok_or(BootstrapError::NotReady)?;
+        let mut binding_repair =
+            surge_core::escalation::binding_repair::GeneratedBindingRepair::prepare(&prefix.graph)
+                .map_err(|_| {
+                    BootstrapError::Continuation("generated binding derivation refused")
+                })?;
+        if binding_repair.is_none() {
+            binding_repair = record
+                .status
+                .continuations
+                .iter()
+                .find(|attempt| attempt.run == source)
+                .and_then(|attempt| attempt.binding_repair.clone());
+        }
+        if let Some(repair) = &binding_repair
+            && record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original())
+        {
+            return Err(BootstrapError::Continuation(
+                "binding source differs from accepted graph",
+            ));
+        }
+        let graph = checked_attempt_graph(&prefix.graph, binding_repair.as_ref())?;
         let (fingerprint, _) =
-            runtime.implementation_runtime(&capture.fields().repository, &prefix.graph)?;
+            runtime.implementation_runtime(&capture.fields().repository, &graph)?;
         let attempt = BootstrapAttempt {
             continuation_id: request,
             operation_id: operation,
@@ -154,6 +168,7 @@ impl BootstrapSupervisor {
             run: RunId::new(),
             boundary,
             runtime: fingerprint,
+            binding_repair,
             state: A::Reserved,
         };
         self.store.reserve_attempt(revision, &attempt)?;
@@ -169,7 +184,11 @@ impl BootstrapSupervisor {
             fork_with_parent(
                 &self.services.storage,
                 ForkRequest::new(attempt.source_run, attempt.run, attempt.boundary)
-                    .with_worktree(runtime.attempt_worktree(attempt.run)),
+                    .with_worktree(runtime.attempt_worktree(attempt.run))
+                    .with_edits(surge_orchestrator::engine::fork::ForkEdits {
+                        binding_repair: attempt.binding_repair.clone(),
+                        ..Default::default()
+                    }),
                 &writer,
             )
             .await
@@ -280,6 +299,31 @@ impl BootstrapSupervisor {
         let state = execution_state::load(&reader, execution_state::Position::Latest)
             .await
             .map_err(|_| BootstrapError::Continuation("successor history invalid"))?;
+        if let Some(repair) = &attempt.binding_repair {
+            if record.child.as_ref().map(|child| child.graph().digest) != Some(repair.original()) {
+                return Err(BootstrapError::Continuation(
+                    "binding source differs from accepted graph",
+                ));
+            }
+            repair
+                .verify_repaired(&state.graph)
+                .map_err(|_| BootstrapError::Continuation("successor binding repair changed"))?;
+            let source = self
+                .services
+                .storage
+                .open_run_reader(attempt.source_run)
+                .await
+                .map_err(|_| BootstrapError::Continuation("binding source history unavailable"))?;
+            let original =
+                execution_state::load(&source, execution_state::Position::AtSeq(attempt.boundary))
+                    .await
+                    .map_err(|_| BootstrapError::Continuation("binding source history invalid"))?;
+            if checked_attempt_graph(&original.graph, Some(repair))? != state.graph {
+                return Err(BootstrapError::Continuation(
+                    "successor binding derivation differs",
+                ));
+            }
+        }
         let (fingerprint, catalog) =
             runtime.implementation_runtime(&capture.fields().repository, &state.graph)?;
         drop(reader);
@@ -330,6 +374,122 @@ impl BootstrapSupervisor {
         result.ok_or(BootstrapError::Continuation(
             "successor completion unconfirmed",
         ))
+    }
+}
+
+async fn select_attempt_boundary(
+    reader: &surge_persistence::runs::RunReader,
+    latest: &execution_state::ExecutionState,
+) -> Result<(u64, Vec<u8>, execution_state::ExecutionState), BootstrapError> {
+    let invalid =
+        || BootstrapError::Continuation("no positively proven executable continuation boundary");
+    let boundaries = reader.list_snapshots().await.map_err(|_| invalid())?;
+    for (index, seq) in boundaries.iter().rev().enumerate() {
+        let boundary = seq.as_u64();
+        let Some((actual, bytes)) = reader
+            .latest_snapshot_at_or_before(*seq)
+            .await
+            .map_err(|_| invalid())?
+        else {
+            return Err(invalid());
+        };
+        if actual != *seq {
+            return Err(invalid());
+        }
+        let prefix = execution_state::load(reader, execution_state::Position::AtSeq(boundary))
+            .await
+            .map_err(|_| invalid())?;
+        if index == 0
+            && validate_tail(reader, boundary, latest.position)
+                .await
+                .is_ok()
+        {
+            return Ok((boundary, bytes, prefix));
+        }
+        let snapshot = surge_orchestrator::engine::snapshot::EngineSnapshot::deserialize(&bytes)
+            .map_err(|_| invalid())?;
+        let tail = reader
+            .read_events(
+                surge_persistence::runs::EventSeq(boundary + 1)
+                    ..surge_persistence::runs::EventSeq(latest.position + 1),
+            )
+            .await
+            .map_err(|_| invalid())?;
+        if milestone_retry::prove(&prefix, &snapshot, latest, &tail, *reader.run_id()).is_ok()
+            && historically_accepted_tasks(reader, &prefix).await?
+        {
+            let history = surge_core::run_verdict::TerminalHistory::of(
+                tail.iter()
+                    .map(|event| (event.seq.as_u64(), &event.payload.payload)),
+            );
+            if !history.post_terminal_activity().is_empty() {
+                return Err(invalid());
+            }
+            return Ok((boundary, bytes, prefix));
+        }
+    }
+    Err(invalid())
+}
+
+async fn historically_accepted_tasks(
+    reader: &surge_persistence::runs::RunReader,
+    prefix: &execution_state::ExecutionState,
+) -> Result<bool, BootstrapError> {
+    let Some(surge_orchestrator::engine::frames::Frame::Loop(tasks)) = prefix.frames.last() else {
+        return Ok(false);
+    };
+    for item in &tasks.items {
+        let Some(id) = item.get("id").and_then(toml::Value::as_str) else {
+            return Ok(false);
+        };
+        let id = surge_core::roadmap::RoadmapTaskId::from(id);
+        let Some(task) = prefix.memory.ledger.tasks.get(&id) else {
+            return Ok(false);
+        };
+        let accepted =
+            execution_state::load(reader, execution_state::Position::AtSeq(task.updated_seq))
+                .await
+                .map_err(|_| {
+                    BootstrapError::Continuation("historical task verification unavailable")
+                })?;
+        if !accepted
+            .memory
+            .ledger
+            .tasks
+            .get(&id)
+            .is_some_and(|historical| {
+                historical.verified
+                    && historical.status == surge_core::roadmap::RoadmapStatus::Completed
+                    && historical.updated_seq == task.updated_seq
+                    && historical.last_authority_node == task.last_authority_node
+            })
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn checked_attempt_graph(
+    graph: &surge_core::graph::Graph,
+    repair: Option<&surge_core::escalation::binding_repair::GeneratedBindingRepair>,
+) -> Result<surge_core::graph::Graph, BootstrapError> {
+    let Some(repair) = repair else {
+        return Ok(graph.clone());
+    };
+    if graph
+        .identity()
+        .map_err(|_| BootstrapError::Continuation("graph identity unavailable"))?
+        == repair.repaired()
+    {
+        repair
+            .verify_repaired(graph)
+            .map_err(|_| BootstrapError::Continuation("binding derivation changed"))?;
+        Ok(graph.clone())
+    } else {
+        repair
+            .apply(graph)
+            .map_err(|_| BootstrapError::Continuation("binding derivation changed"))
     }
 }
 

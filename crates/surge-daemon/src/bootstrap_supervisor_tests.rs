@@ -198,6 +198,7 @@ impl BridgeFacade for AuthorBridge {
                 hash,
                 config.working_dir,
                 surge_core::execution_recovery::SessionRestoreCapabilities::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,
@@ -1579,6 +1580,7 @@ async fn reserve_collision_attempt(
         run: RunId::new(),
         boundary: 87,
         runtime: ContentHash::compute(b"host runtime"),
+        binding_repair: None,
         state: A::Reserved,
     };
     fixture

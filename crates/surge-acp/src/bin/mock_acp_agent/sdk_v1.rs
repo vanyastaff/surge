@@ -142,7 +142,7 @@ async fn dispatch(agent: &MockAgent, request: acp::ClientRequest) -> acp::Result
             if std::env::args().any(|arg| arg == "--stall-config-option") {
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             }
-            let mut options = super::mock_config_options();
+            let mut options = agent.config_options.borrow().clone();
             if std::env::args().any(|arg| arg == "--ack-config-choice") {
                 for option in &mut options {
                     if option.id == request.config_id
@@ -152,6 +152,34 @@ async fn dispatch(agent: &MockAgent, request: acp::ClientRequest) -> acp::Result
                     }
                 }
             }
+            if std::env::args().any(|arg| arg == "--reset-model-on-effort")
+                && request.config_id.to_string() == "effort"
+            {
+                options = super::mock_config_options();
+            }
+            if std::env::args().any(|arg| arg == "--missing-model-ack") {
+                options.retain(|option| {
+                    option.category.as_ref() != Some(&acp::SessionConfigOptionCategory::Model)
+                });
+            }
+            if std::env::args().any(|arg| arg == "--duplicate-model-ack")
+                && let Some(model) = options
+                    .iter()
+                    .find(|option| {
+                        option.category.as_ref() == Some(&acp::SessionConfigOptionCategory::Model)
+                    })
+                    .cloned()
+            {
+                options.push(model);
+            }
+            if std::env::args().any(|arg| arg == "--wrong-model-option-id") {
+                for option in &mut options {
+                    if option.category.as_ref() == Some(&acp::SessionConfigOptionCategory::Model) {
+                        option.id = "different-model-option".into();
+                    }
+                }
+            }
+            *agent.config_options.borrow_mut() = options.clone();
             serde_json::to_value(acp::SetSessionConfigOptionResponse::new(options))
         },
         _ => return Err(acp::Error::method_not_found()),

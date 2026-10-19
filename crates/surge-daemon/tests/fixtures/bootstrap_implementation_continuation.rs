@@ -2,6 +2,7 @@
 //! The separately retained original Flow exposes an unrelated milestone binding refusal.
 //! The controlled provider proves protocol mechanics, not native Sol delivery.
 use super::*;
+use surge_core::VersionedEventPayload;
 use surge_core::graph::Graph;
 use surge_core::node::NodeConfig;
 
@@ -1019,4 +1020,266 @@ fn report_turn(prompt: &str, report: Value) -> Value {
     json!({"prompt_contains":prompt,"outcome":"passed","fixture_report":report,
         "fixture_files":{"verification-report.toml":toml::to_string(&artifact).unwrap()},
         "fixture_artifacts":["verification-report.toml"]})
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_milestone_continuation_selects_completed_task_boundary_and_repairs_only_child() {
+    let home = FixtureHome::new().unwrap();
+    let result = std::panic::AssertUnwindSafe(run_failed_milestone_continuation(&home, false))
+        .catch_unwind()
+        .await;
+    finish_home(home, result);
+}
+
+async fn run_failed_milestone_continuation(home: &FixtureHome, forbidden_tail: bool) {
+    let project = home.path().join("milestone-project");
+    prepare_continuation(home.path(), &project);
+    let script_path = home.path().join("bootstrap-script.json");
+    let mut turns: Vec<Value> =
+        serde_json::from_slice(&std::fs::read(&script_path).unwrap()).unwrap();
+    turns.truncate(4);
+    let mut retained = surge_core::escalation::with_default_escalation_gates(&fixture_graph());
+    for node in retained
+        .subgraphs
+        .values_mut()
+        .flat_map(|body| body.nodes.values_mut())
+    {
+        if surge_core::escalation::is_split_planner(node)
+            && let NodeConfig::Agent(agent) = &mut node.config
+        {
+            agent.custom_fields.remove("runtime");
+        }
+    }
+    turns[2]["bootstrap_artifacts"]["flow.toml"] = toml::to_string(&retained).unwrap().into();
+    let roadmap: surge_core::roadmap::RoadmapArtifact = toml::from_str(ORIGINAL_ROADMAP).unwrap();
+    for task in &roadmap.milestones[0].tasks {
+        turns.push(
+            json!({"prompt_contains":task.id.as_str(), "outcome":"ready_for_verification",
+            "fixture_node":"impl_task", "fixture_task":task.id.as_str()}),
+        );
+        let criteria = surge_core::verification_evidence::VerificationCriteria::from_task(
+            task,
+            &roadmap
+                .missions
+                .iter()
+                .flat_map(|mission| mission.validation_contract.iter().cloned())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let report = json!({"schema_version":1,"task_id":task.id.as_str(),"outcome":"passed",
+            "summary":"Controlled retained task verification", "checks":[{"command":"controlled fixture", "result":"passed", "covers":criteria.required}]});
+        turns.push(report_turn(task.id.as_str(), report.clone()));
+        turns.push(report_turn(task.id.as_str(), report));
+    }
+    let mut failed = report_turn(
+        "",
+        json!({"schema_version":1,"task_id":"m1", "outcome":"failed",
+        "summary":"Controlled host binding refusal", "checks":[{"command":"controlled audit", "result":"failed"}]}),
+    );
+    failed["outcome"] = "failed".into();
+    turns.push(failed);
+    turns.push(
+        json!({"prompt_contains":"", "outcome":"blocked", "fixture_node":"rework_milestone"}),
+    );
+    std::fs::write(&script_path, serde_json::to_vec(&turns).unwrap()).unwrap();
+    let project = project.canonicalize().unwrap();
+    let mut host = Host::spawn_configured(home.path(), &project, false, None, true);
+    ready(&mut host).await;
+    let socket = home.path().join("bootstrap.sock");
+    let operation = RunId::new();
+    let intent = surge_core::bootstrap_operation::BootstrapIntent::new(
+        project,
+        include_str!("bootstrap-continuation/prompt.txt").into(),
+        Default::default(),
+    )
+    .unwrap();
+    let accepted = rpc(
+        &socket,
+        json!({"method":"start_bootstrap","request_id":1,"operation_id":operation,"intent":intent}),
+    )
+    .await;
+    let planning: RunId =
+        serde_json::from_value(accepted["status"]["planning_run"].clone()).unwrap();
+    let source: RunId =
+        serde_json::from_value(accepted["status"]["implementation_run"].clone()).unwrap();
+    host.run = Some(planning);
+    for node in ["description_gate", "roadmap_gate", "flow_gate"] {
+        let (_, _, call) = gate(&mut host, node, 0).await;
+        assert_eq!(
+            answer(&host, node, &call, "approve").await["method"],
+            "resolve_human_input_ok"
+        );
+    }
+    let failed = failed_operation(&mut host, operation).await;
+    let before = read_events(home.path(), source);
+    let verified: Vec<_> = before
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::TaskVerified { .. }))
+        .collect();
+    assert_eq!(verified.len(), 4);
+    let last_verified = verified.last().unwrap().seq;
+    let boundary = before
+        .iter()
+        .find(|event| {
+            event.seq > last_verified
+                && matches!(event.payload, EventPayload::StageRouteCommitted { .. })
+        })
+        .unwrap()
+        .seq;
+    // A single provider turn lets the test observe the first resumed stage without replaying a task.
+    let mut success = report_turn(
+        "",
+        json!({"schema_version":1,"task_id":"m1","outcome":"passed",
+        "summary":"Controlled repaired milestone", "checks":[{"command":"controlled audit", "result":"passed"}]}),
+    );
+    success["fixture_node"] = "app_milestone".into();
+    turns.push(success);
+    turns.push(json!({"prompt_contains":"", "outcome":"blocked"}));
+    std::fs::write(&script_path, serde_json::to_vec(&turns).unwrap()).unwrap();
+    if forbidden_tail {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let writer = storage.open_run_writer(source).await.unwrap();
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::TaskSplit {
+                loop_id: surge_core::keys::NodeKey::try_from("task_loop").unwrap(),
+                index: 3,
+                task: Some("m1-t4".into()),
+                into: vec![],
+            }))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        let unchanged = read_events(home.path(), source);
+        let refused = raw_request(&socket, json!({"method":"continue_bootstrap_implementation", "request_id":2,
+            "continuation_id":RunId::new(),"operation_id":operation,"revision":failed["revision"],"source_run":source})).await;
+        assert_eq!(refused["method"], "error", "{refused}");
+        assert_eq!(read_events(home.path(), source), unchanged);
+        let status = rpc(
+            &socket,
+            json!({"method":"bootstrap_status", "request_id":3,"operation_id":operation}),
+        )
+        .await;
+        assert_eq!(status["status"]["continuations"], json!([]));
+        drop(host);
+        return;
+    }
+    let response = raw_request(&socket, json!({"method":"continue_bootstrap_implementation", "request_id":2,
+        "continuation_id":RunId::new(),"operation_id":operation,"revision":failed["revision"],"source_run":source})).await;
+    assert_eq!(response["method"], "bootstrap_operation", "{response}");
+    let attempt = &response["status"]["continuations"][0];
+    let successor: RunId = serde_json::from_value(attempt["run"].clone()).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let events = read_events(home.path(), successor);
+            if events.iter().any(|event| {
+                matches!(
+                    event.payload,
+                    EventPayload::RunFailed { .. } | EventPayload::RunCompleted { .. }
+                )
+            }) {
+                break;
+            }
+            assert!(
+                host.child.try_wait().unwrap().is_none(),
+                "{}",
+                host.diagnostic()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        attempt["boundary"], boundary,
+        "owner must select the last completed-task checkpoint, not the failed audit/rework cursor"
+    );
+    let child = read_events(home.path(), successor);
+    assert_eq!(
+        child
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::TaskVerified { .. }))
+            .count(),
+        4
+    );
+    let first_new = child.iter().find_map(|event| {
+        if event.seq > boundary {
+            if let EventPayload::SessionOpened { node, .. } = &event.payload {
+                Some(node.as_str())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+    assert_eq!(first_new, Some("app_milestone"));
+    let repair: surge_core::escalation::binding_repair::GeneratedBindingRepair =
+        serde_json::from_value(attempt["binding_repair"].clone()).unwrap();
+    let graph = child
+        .iter()
+        .find_map(|event| {
+            if let EventPayload::PipelineMaterialized { graph, .. } = &event.payload {
+                Some(graph)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    repair.verify_repaired(graph).unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
+    let reader = storage.open_run_reader(successor).await.unwrap();
+    let cold = surge_orchestrator::engine::execution_state::load(
+        &reader,
+        surge_orchestrator::engine::execution_state::Position::Latest,
+    )
+    .await
+    .unwrap();
+    let roadmap = &cold.memory.artifacts["roadmap"];
+    let original_requirements: surge_core::roadmap::RoadmapArtifact =
+        toml::from_str(&std::fs::read_to_string(&roadmap.path).unwrap()).unwrap();
+    assert_eq!(
+        original_requirements
+            .milestones
+            .iter()
+            .flat_map(|milestone| &milestone.tasks)
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        TASKS
+    );
+    for id in &TASKS[..4] {
+        let task = &cold.memory.ledger.tasks[&surge_core::roadmap::RoadmapTaskId::from(*id)];
+        assert_eq!(task.status, surge_core::roadmap::RoadmapStatus::Completed);
+        assert!(
+            !task.verified,
+            "freshness remains invalidated on the changed child"
+        );
+    }
+    assert!(matches!(
+        child
+            .iter()
+            .find(|event| event.seq == boundary + 1)
+            .unwrap()
+            .payload,
+        EventPayload::VerificationSubjectObserved { subject: None }
+    ));
+    drop(reader);
+    drop(storage);
+    let after = read_events(home.path(), source);
+    assert_eq!(&after[..before.len()], &before);
+    assert!(matches!(
+        after.last().unwrap().payload,
+        EventPayload::ForkCreated { .. }
+    ));
+    assert_eq!(after.len(), before.len() + 1);
+    drop(host);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_milestone_forbidden_tail_refuses_before_reservation_or_fork() {
+    let home = FixtureHome::new().unwrap();
+    let result = std::panic::AssertUnwindSafe(run_failed_milestone_continuation(&home, true))
+        .catch_unwind()
+        .await;
+    finish_home(home, result);
 }
