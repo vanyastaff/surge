@@ -538,6 +538,24 @@ impl Engine {
         .await
     }
 
+    /// Resume a host-owned isolated continuation using its captured project catalog.
+    ///
+    /// # Errors
+    /// Returns ordinary replay/admission refusals; no client configuration is accepted.
+    pub async fn resume_run_scoped(
+        &self,
+        run_id: RunId,
+        worktree_path: PathBuf,
+        catalog: Arc<surge_acp::Registry>,
+    ) -> Result<RunHandle, EngineError> {
+        self.admit_and_launch(super::admission::AdmissionKind::ScopedReplay {
+            run_id,
+            worktree: worktree_path,
+            catalog,
+        })
+        .await
+    }
+
     /// Validate the exact durable startup association before any host reconciliation.
     pub async fn validate_work_item_startup(
         &self,

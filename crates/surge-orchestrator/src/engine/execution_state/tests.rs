@@ -652,10 +652,15 @@ async fn a_checkpoint_that_contradicts_the_consumed_route_is_refused() {
 /// prefix before the route forks.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_refuses_a_prefix_whose_consumed_route_lacks_its_checkpoint() {
-    use crate::engine::fork::{ForkRequest, fork};
+    use crate::engine::fork::{ForkRequest, fork, fork_with_parent};
     let fx = Fixture::new().await;
     let route = consumed_route(&fx).await;
-    let refused = fork(&fx.storage, ForkRequest::new(fx.run, RunId::new(), route)).await;
+    let refused = fork_with_parent(
+        &fx.storage,
+        ForkRequest::new(fx.run, RunId::new(), route),
+        &fx.writer,
+    )
+    .await;
     assert!(
         matches!(&refused, Err(EngineError::ForkInvalid(reason))
             if reason.contains("lacks its durable execution checkpoint")

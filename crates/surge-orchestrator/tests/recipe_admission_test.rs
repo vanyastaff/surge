@@ -117,6 +117,7 @@ async fn failed_opening_receipt_and_restart_never_grant_replay() {
                     resume: true,
                     load: true,
                 },
+                None,
             )
             .unwrap(),
         );

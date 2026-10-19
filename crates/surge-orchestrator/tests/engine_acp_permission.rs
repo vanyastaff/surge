@@ -905,6 +905,7 @@ impl BridgeFacade for SpoofedBroadcast {
                 surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
                 config.working_dir,
                 Default::default(),
+                None,
             )
             .unwrap(),
             SessionOpenMode::New,

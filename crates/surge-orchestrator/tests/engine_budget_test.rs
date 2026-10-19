@@ -93,6 +93,7 @@ impl BridgeFacade for BudgetMockBridge {
                         resume: true,
                         load: true,
                     },
+                    None,
                 )
                 .unwrap(),
                 SessionOpenMode::New,

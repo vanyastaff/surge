@@ -30,6 +30,7 @@ fn config(
                 "--scenario".into(),
                 "echo".into(),
                 "--config-options".into(),
+                "--ack-config-choice".into(),
                 "--config-file".into(),
                 record.display().to_string(),
             ],
@@ -67,6 +68,7 @@ async fn chosen_model_and_reasoning_level_are_set_on_the_agent_session() {
         .open_session(config(&wt, &record, selections))
         .await
         .expect("session opens with offered options");
+    assert_eq!(session.descriptor.observed_model(), Some("opus"));
     let recorded = std::fs::read_to_string(&record).expect("agent recorded the choices");
     assert_eq!(
         recorded.lines().collect::<Vec<_>>(),
@@ -130,4 +132,117 @@ async fn a_best_effort_option_the_agent_does_not_offer_is_skipped() {
     assert_eq!(recorded.lines().collect::<Vec<_>>(), ["model=opus"]);
     bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unacknowledged_model_cannot_open_a_promptable_session() {
+    let wt = TempDir::new().unwrap();
+    let record = wt.path().join("config-choices.txt");
+    let bridge = AcpBridge::with_defaults().unwrap();
+    let mut settings = config(
+        &wt,
+        &record,
+        vec![ConfigSelection {
+            category: ConfigCategory::Model,
+            value: "opus".into(),
+            best_effort: false,
+        }],
+    );
+    if let AgentKind::Mock { args } = &mut settings.agent_kind {
+        args.retain(|arg| arg != "--ack-config-choice");
+    }
+    let result = bridge.open_session(settings).await;
+    if let Ok(opened) = &result {
+        bridge.close_session(opened.session).await.unwrap();
+    }
+    bridge.shutdown().await.unwrap();
+    assert!(
+        result.is_err(),
+        "the provider returned sonnet after selecting opus: {result:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn later_reasoning_selection_cannot_reset_the_required_model() {
+    let wt = TempDir::new().unwrap();
+    let record = wt.path().join("config-choices.txt");
+    let bridge = AcpBridge::with_defaults().unwrap();
+    let mut settings = config(
+        &wt,
+        &record,
+        vec![
+            ConfigSelection {
+                category: ConfigCategory::Model,
+                value: "opus".into(),
+                best_effort: false,
+            },
+            ConfigSelection {
+                category: ConfigCategory::ThoughtLevel,
+                value: "high".into(),
+                best_effort: false,
+            },
+        ],
+    );
+    if let AgentKind::Mock { args } = &mut settings.agent_kind {
+        args.push("--reset-model-on-effort".into());
+    }
+    let result = bridge.open_session(settings).await;
+    if let Ok(opened) = &result {
+        bridge.close_session(opened.session).await.unwrap();
+    }
+    bridge.shutdown().await.unwrap();
+    assert!(
+        result.is_err(),
+        "effort response reset model after its first acknowledgement"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn missing_ambiguous_and_foreign_option_ack_settle_the_actual_writer_before_prompt() {
+    for flag in [
+        "--missing-model-ack",
+        "--duplicate-model-ack",
+        "--wrong-model-option-id",
+    ] {
+        let wt = TempDir::new().unwrap();
+        let record = wt.path().join("choices");
+        let pid = wt.path().join("pid");
+        let prompt = wt.path().join("prompt");
+        let bridge = AcpBridge::with_defaults().unwrap();
+        let mut settings = config(
+            &wt,
+            &record,
+            vec![ConfigSelection {
+                category: ConfigCategory::Model,
+                value: "opus".into(),
+                best_effort: false,
+            }],
+        );
+        if let AgentKind::Mock { args } = &mut settings.agent_kind {
+            args.extend([
+                flag.into(),
+                "--pid-file".into(),
+                pid.display().to_string(),
+                "--prompt-file".into(),
+                prompt.display().to_string(),
+            ]);
+        }
+        let result = bridge.open_session(settings).await;
+        if let Ok(opened) = &result {
+            bridge.close_session(opened.session).await.unwrap();
+        }
+        bridge.shutdown().await.unwrap();
+        assert!(result.is_err(), "{flag}: {result:?}");
+        assert!(
+            !prompt.exists(),
+            "{flag} sent a prompt before model agreement"
+        );
+        let pid = std::fs::read_to_string(pid).unwrap().parse().unwrap();
+        let tracker = surge_acp::ProcessTracker::new(wt.path().join("tracking")).unwrap();
+        tracker.track("owned-peer", pid).unwrap();
+        assert!(
+            !tracker.is_running("owned-peer"),
+            "{flag} did not reap actual peer"
+        );
+    }
 }

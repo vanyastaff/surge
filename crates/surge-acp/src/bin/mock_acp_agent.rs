@@ -156,6 +156,7 @@ struct MockAgent {
     verbose: bool,
     /// Counts how many `prompt` calls have been received (for `crash_after=N`).
     prompt_count: Cell<u32>,
+    config_options: std::cell::RefCell<Vec<acp::SessionConfigOption>>,
     cancel_prompt: tokio_util::sync::CancellationToken,
     stage_peer: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<stage_mcp::Peer>>>>,
     /// Channel to push `SessionNotification`s to the background sender task.
@@ -176,6 +177,7 @@ impl MockAgent {
             usage_on,
             verbose,
             prompt_count: Cell::new(0),
+            config_options: std::cell::RefCell::new(mock_config_options()),
             cancel_prompt: tokio_util::sync::CancellationToken::new(),
             stage_peer: Default::default(),
             notif_tx,

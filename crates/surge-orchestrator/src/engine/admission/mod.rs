@@ -83,6 +83,12 @@ pub(crate) enum AdmissionKind<'c> {
         /// The run's worktree.
         worktree: PathBuf,
     },
+    /// Host-owned replay with a captured project catalog.
+    ScopedReplay {
+        run_id: RunId,
+        worktree: PathBuf,
+        catalog: Arc<surge_acp::Registry>,
+    },
     /// Start a durable task reservation under its launch claim.
     TaskStart(&'c WorkItemLaunchClaim),
     /// Resume a durable task run under its launch claim.
@@ -292,7 +298,16 @@ impl Admission<'_> {
             },
             AdmissionKind::Replayed { run_id, worktree } => {
                 self.refuse_reserved_task(run_id, "task resume requires host ownership")?;
-                self.resume(run_id, worktree, None, None).await
+                self.resume(run_id, worktree, None, None, None).await
+            },
+            AdmissionKind::ScopedReplay {
+                run_id,
+                worktree,
+                catalog,
+            } => {
+                self.refuse_reserved_task(run_id, "task resume requires host ownership")?;
+                self.resume(run_id, worktree, None, None, Some(catalog))
+                    .await
             },
             AdmissionKind::TaskResume(claim) => {
                 let attempt = self
@@ -329,7 +344,7 @@ impl Admission<'_> {
                 let worktree = crate::engine::work_items::validate_resume(self.storage, claim)
                     .await
                     .map_err(engine)?;
-                self.resume(claim.run(), worktree, Some(claim), continue_evidence)
+                self.resume(claim.run(), worktree, Some(claim), continue_evidence, None)
                     .await
             },
         }
@@ -680,6 +695,7 @@ impl Admission<'_> {
         worktree_path: PathBuf,
         claim: Option<&WorkItemLaunchClaim>,
         continue_control: Option<ContinueEvidence>,
+        catalog: Option<Arc<surge_acp::Registry>>,
     ) -> Result<Admitted, AdmissionRejection> {
         tracing::info!(
             target: "surge.path.exercised",
@@ -708,6 +724,9 @@ impl Admission<'_> {
         refuse_terminal_conflict(run_id, &preview.terminal_verdict)?;
         let run_config = if preview.terminal_verdict.terminal().is_none() {
             let mut run_config = self.restored_run_config(claim, &preview)?;
+            if let Some(catalog) = catalog {
+                run_config.agent_registry = Some(catalog);
+            }
             self.validate(
                 &preview.graph,
                 &mut run_config,

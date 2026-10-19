@@ -105,3 +105,52 @@ async fn public_reader_pool_refuses_actual_sql_write() {
         "public reader must reject actual SQL with SQLITE_READONLY and create no table: write={write:?}; created={created}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checked_writer_reader_requires_actual_storage_token() {
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let other_home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
+    let independent = Storage::open(home.path()).await.unwrap();
+    let foreign = Storage::open(other_home.path()).await.unwrap();
+    let run = RunId::new();
+    let writer = storage.create_run(run, home.path(), None).await.unwrap();
+    let matching = storage.clone().reader_for_writer(&writer).await;
+    let same_home = independent.reader_for_writer(&writer).await;
+    let other_home_result = foreign.reader_for_writer(&writer).await;
+    let matching_run = matching.as_ref().ok().map(|reader| *reader.run_id());
+    drop(matching);
+    writer.close().await.unwrap();
+    drop(independent);
+    drop(foreign);
+    drop(storage);
+    home.close().unwrap();
+    other_home.close().unwrap();
+    assert_eq!(matching_run.unwrap(), run);
+    assert!(matches!(same_home, Err(OpenError::WriterOwnerMismatch { run_id }) if run_id == run));
+    assert!(
+        matches!(other_home_result, Err(OpenError::WriterOwnerMismatch { run_id }) if run_id == run)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checked_writer_reader_preserves_permanent_deletion_admission() {
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
+    let run = RunId::new();
+    let writer = storage.create_run(run, home.path(), None).await.unwrap();
+    {
+        let connection = storage.registry_pool.get().unwrap();
+        connection.execute(
+            "INSERT INTO run_host_tombstones(run_id,deletion_id,journal_identity,provenance,inventory_version,inventory_count,inventory_bytes,inventory_digest,outside_parent,state) VALUES(?1,?2,?3,'ExplicitStorageDelete',1,1,1,?4,?5,'DeletePending')",
+            rusqlite::params![run.to_string(), "fixed-tombstone", b"journal".as_slice(), [0_u8;32].as_slice(), b"parent".as_slice()],
+        ).unwrap();
+    }
+    let refused = storage.reader_for_writer(&writer).await;
+    writer.close().await.unwrap();
+    drop(storage);
+    home.close().unwrap();
+    assert!(
+        matches!(refused, Err(OpenError::Authority(message)) if message.contains("permanent deletion intent"))
+    );
+}

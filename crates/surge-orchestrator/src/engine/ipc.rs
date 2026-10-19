@@ -120,6 +120,19 @@ pub enum DaemonRequest {
         /// Last observed revision, used to reject stale retries.
         revision: u64,
     },
+    /// Continue failed bootstrap implementation from a host-selected saved boundary.
+    ContinueBootstrapImplementation {
+        /// Client frame identity.
+        request_id: RequestId,
+        /// Original bootstrap owner.
+        operation_id: RunId,
+        /// Observed original operation revision.
+        revision: u64,
+        /// Failed implementation source.
+        source_run: RunId,
+        /// Stable idempotency identity, retained across reconnects.
+        continuation_id: RunId,
+    },
     /// Begin a new run.
     StartRun {
         /// Client-assigned identifier echoed in the response.
@@ -293,6 +306,7 @@ impl DaemonRequest {
             | Self::BootstrapStatus { request_id, .. }
             | Self::CancelBootstrap { request_id, .. }
             | Self::RetryBootstrap { request_id, .. }
+            | Self::ContinueBootstrapImplementation { request_id, .. }
             | Self::StartRun { request_id, .. }
             | Self::ResumeRun { request_id, .. }
             | Self::StopRun { request_id, .. }

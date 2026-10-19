@@ -198,6 +198,7 @@ impl BridgeFacade for AuthorBridge {
                 hash,
                 config.working_dir,
                 surge_core::execution_recovery::SessionRestoreCapabilities::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,
@@ -1439,4 +1440,275 @@ async fn incoming_bootstrap_cannot_bypass_older_durable_queue() {
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
     drop(tap);
     fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_continuation_cold_reserved_is_unknown_without_second_fork() {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    let fixture = Fixture::new().await;
+    let (status, attempt) = reserve_collision_attempt(&fixture, RunId::new()).await;
+    let operation = status.operation_id;
+    let restarted = fixture.reopened_owner().await;
+    restarted.reconcile().await.unwrap();
+    let cold = restarted.status(operation).unwrap();
+    assert_eq!(
+        cold.state,
+        surge_core::bootstrap_operation::BootstrapState::Failed
+    );
+    assert_eq!(cold.continuations.len(), 1);
+    assert_eq!(cold.continuations[0].state, A::NeedsAttention);
+    assert_eq!(cold.continuations[0].run, attempt.run);
+    let repeated = restarted
+        .continue_implementation(
+            operation,
+            status.revision,
+            status.implementation_run,
+            attempt.continuation_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated, cold);
+    assert_eq!(
+        restarted.services.engine.snapshot_active_runs().await.len(),
+        0
+    );
+    assert!(
+        !fixture
+            .home
+            .path()
+            .join("runs")
+            .join(attempt.run.to_string())
+            .exists()
+    );
+    assert!(matches!(
+        fixture.owner.store.advance_attempt(
+            attempt.continuation_id,
+            A::NeedsAttention,
+            A::ForkReady
+        ),
+        Err(BootstrapStoreError::InvalidTransition)
+    ));
+    drop(restarted);
+    fixture.close().await;
+}
+
+async fn reserve_collision_attempt(
+    fixture: &Fixture,
+    nonce: RunId,
+) -> (
+    BootstrapOperationStatus,
+    surge_core::bootstrap_attempt::BootstrapAttempt,
+) {
+    use surge_core::bootstrap_continuation::{
+        BootstrapContinuation, BootstrapFailure, BootstrapTerminal,
+    };
+    use surge_core::bootstrap_operation::BootstrapContentRef;
+    use surge_core::{
+        ContentHash,
+        bootstrap_attempt::{BootstrapAttempt, BootstrapAttemptState as A},
+    };
+    let operation = RunId::new();
+    let status = fixture
+        .owner
+        .submit(operation, &fixture.intent())
+        .await
+        .unwrap();
+    let claimed = fixture
+        .owner
+        .store
+        .claim(operation, status.revision)
+        .unwrap();
+    let planning = fixture
+        .owner
+        .store
+        .mark_started(operation, claimed.status.revision)
+        .unwrap();
+    let child = BootstrapContinuation::new(
+        status.planning_run,
+        BootstrapContentRef {
+            name: "fixed flow".into(),
+            digest: ContentHash::compute(b"fixed graph"),
+        },
+        ["description", "roadmap", "flow"]
+            .into_iter()
+            .map(|name| surge_core::run_state::ArtifactRef {
+                hash: ContentHash::compute(name.as_bytes()),
+                path: name.into(),
+                name: name.into(),
+                produced_by: surge_core::keys::NodeKey::try_new("generator").unwrap(),
+                produced_at_seq: 1,
+            })
+            .collect(),
+        surge_core::budget::BudgetGuard::default(),
+    )
+    .unwrap();
+    let queued = fixture
+        .owner
+        .store
+        .continue_planning(operation, planning.status.revision, &child)
+        .unwrap();
+    let claimed = fixture
+        .owner
+        .store
+        .claim(operation, queued.status.revision)
+        .unwrap();
+    let implementation = fixture
+        .owner
+        .store
+        .mark_started(operation, claimed.status.revision)
+        .unwrap();
+    let failed = fixture
+        .owner
+        .store
+        .settle(
+            operation,
+            implementation.status.revision,
+            &BootstrapTerminal::Failed {
+                run_id: status.implementation_run,
+                reason: BootstrapFailure::RunFailed,
+            },
+        )
+        .unwrap();
+    let attempt = BootstrapAttempt {
+        continuation_id: nonce,
+        operation_id: operation,
+        source_run: status.implementation_run,
+        run: RunId::new(),
+        boundary: 87,
+        runtime: ContentHash::compute(b"host runtime"),
+        state: A::Reserved,
+    };
+    fixture
+        .owner
+        .store
+        .reserve_attempt(failed.status.revision, &attempt)
+        .unwrap();
+    (failed.status, attempt)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_continuation_live_nonce_collision_keeps_original_writer_and_reconciles_attempt() {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    let fixture = Fixture::with_capacity(2, 2).await;
+    let nonce = RunId::new();
+    let (_, attempt) = reserve_collision_attempt(&fixture, nonce).await;
+    let original = fixture
+        .owner
+        .submit(nonce, &fixture.intent())
+        .await
+        .unwrap();
+    let writer = fixture
+        .storage
+        .create_run(
+            original.planning_run,
+            fixture.project.to_str().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        released.await.unwrap();
+        writer.close().await.unwrap();
+    });
+    let original_worker = worker.id();
+    fixture
+        .owner
+        .workers
+        .lock()
+        .await
+        .insert(WorkerKey::Operation(nonce), worker);
+    fixture.owner.reconcile().await.unwrap();
+    let observed = fixture.owner.status(attempt.operation_id).unwrap();
+    let retained = fixture
+        .owner
+        .workers
+        .lock()
+        .await
+        .get(&WorkerKey::Operation(nonce))
+        .map(tokio::task::JoinHandle::id);
+    release.send(()).unwrap();
+    fixture.close().await;
+    assert_eq!(
+        retained,
+        Some(original_worker),
+        "unrelated original native writer must remain owned and joined"
+    );
+    assert_eq!(observed.continuations[0].state, A::NeedsAttention);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_continuation_cold_nonce_collision_reconciles_both_namespaces() {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    let fixture = Fixture::with_capacity(2, 2).await;
+    let nonce = RunId::new();
+    let (_, attempt) = reserve_collision_attempt(&fixture, nonce).await;
+    fixture
+        .owner
+        .submit(nonce, &fixture.intent())
+        .await
+        .unwrap();
+    let restarted = fixture.reopened_owner().await;
+    restarted.reconcile().await.unwrap();
+    let observed = restarted.status(attempt.operation_id).unwrap();
+    let original_owned = restarted
+        .workers
+        .lock()
+        .await
+        .contains_key(&WorkerKey::Operation(nonce));
+    restarted.services.shutdown.cancel();
+    restarted.clone().run().await;
+    drop(restarted);
+    fixture.close().await;
+    assert!(
+        original_owned,
+        "cold original operation retains its own worker"
+    );
+    assert_eq!(observed.continuations[0].state, A::NeedsAttention);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_continuation_shared_registration_cannot_replace_live_original_owner() {
+    let fixture = Fixture::new().await;
+    let collision = RunId::new();
+    let original_run = RunId::new();
+    let successor_run = RunId::new();
+    let original = fixture
+        .storage
+        .create_run(original_run, fixture.project.to_str().unwrap(), None)
+        .await
+        .unwrap();
+    let successor = fixture
+        .storage
+        .create_run(successor_run, fixture.project.to_str().unwrap(), None)
+        .await
+        .unwrap();
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let original_worker = tokio::spawn(async move {
+        wait.await.unwrap();
+        original.close().await.unwrap();
+    });
+    let original_id = original_worker.id();
+    let successor_worker = tokio::spawn(async move {
+        successor.close().await.unwrap();
+    });
+    let mut workers = fixture.owner.workers.lock().await;
+    workers.insert(WorkerKey::Operation(collision), original_worker);
+    let replaced =
+        super::attempts::register_continuation_worker(&mut workers, collision, successor_worker);
+    let replaced_original = replaced
+        .as_ref()
+        .is_some_and(|worker| worker.id() == original_id);
+    let count = workers.len();
+    drop(workers);
+    release.send(()).unwrap();
+    if let Some(worker) = replaced {
+        worker.await.unwrap();
+    }
+    fixture.close().await;
+    assert!(
+        !replaced_original,
+        "actual shared Continue/reconcile registration dropped an unrelated native owner"
+    );
+    assert_eq!(count, 2);
 }

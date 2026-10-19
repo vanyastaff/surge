@@ -230,6 +230,7 @@ impl BridgeFacade for MockBridge {
                         resume: true,
                         load: true,
                     },
+                    None,
                 )
                 .unwrap(),
                 SessionOpenMode::New,
@@ -421,6 +422,7 @@ mod tests {
                     resume: true,
                     load: true,
                 },
+                None,
             )
             .unwrap(),
         );

@@ -113,15 +113,35 @@ impl MissionPanel {
         panel
     }
 
+    #[cfg(all(test, unix))]
+    pub(super) fn continuation_through_for_test(&self) -> Option<u64> {
+        match self.mission.as_ref()?.recovery {
+            surge_core::recovery_observation::RecoveryObservation::CompletePrefix {
+                through,
+                ..
+            } => Some(through),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn continuation_error_for_test(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
     pub(super) fn request(&self) -> &MissionRequest {
         &self.request
     }
 
     /// Read-only exact ownership learned by the existing cold history lookup.
     pub(super) fn operation_for(&self, run: RunId) -> Option<&BootstrapOperationStatus> {
-        self.operation
-            .as_ref()
-            .filter(|status| [status.planning_run, status.implementation_run].contains(&run))
+        self.operation.as_ref().filter(|status| {
+            [status.planning_run, status.implementation_run].contains(&run)
+                || status
+                    .continuations
+                    .iter()
+                    .any(|attempt| attempt.run == run)
+        })
     }
 
     /// Both reserved streams and operation transitions can change this composition.
@@ -131,11 +151,20 @@ impl MissionPanel {
             .values()
             .find(|status| {
                 [status.planning_run, status.implementation_run].contains(&self.request.selected)
+                    || status
+                        .continuations
+                        .iter()
+                        .any(|attempt| attempt.run == self.request.selected)
             })
             .or(self.operation.as_ref());
         let ids = operation.map_or_else(
             || vec![self.request.selected],
-            |status| vec![status.planning_run, status.implementation_run],
+            |status| {
+                std::iter::once(status.planning_run)
+                    .chain(std::iter::once(status.implementation_run))
+                    .chain(status.continuations.iter().map(|a| a.run))
+                    .collect()
+            },
         );
         let observations = ids
             .iter()
@@ -190,7 +219,13 @@ impl MissionPanel {
             .operation
             .as_ref()
             .map_or(self.request.selected, |status| {
-                if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
+                if status
+                    .continuations
+                    .iter()
+                    .any(|attempt| attempt.run == self.request.selected)
+                {
+                    self.request.selected
+                } else if matches!(self.implementation, Some(ImplementationHistory::Recorded)) {
                     status.implementation_run
                 } else {
                     status.planning_run
@@ -1541,6 +1576,7 @@ mod hierarchy_tests {
                     cancel_requested: false,
                     queue_sequence: 1,
                     payload_version: 1,
+                    continuations: Vec::new(),
                 });
                 panel.implementation = Some(super::ImplementationHistory::PlanningOnly);
                 assert!(
@@ -1587,7 +1623,7 @@ mod hierarchy_tests {
                 state: surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
                     phase: surge_core::bootstrap_operation::BootstrapPhase::Planning, run_id: Some(run),
                     reason: surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
-                }, result: None, revision: 1, cancel_requested: false, queue_sequence: 1, payload_version: 1,
+                }, result: None, revision: 1, cancel_requested: false, queue_sequence: 1, payload_version: 1, continuations: Vec::new(),
             }), loading: LoadingState::Ready, error: None, generation: 0, loaded_refresh: None,
             scope: Vec::new(), requested_task: None, expanded_steps: Default::default(),
         });

@@ -521,9 +521,11 @@ async fn open_session_attempt(
     };
     // Apply requested session options (model, reasoning level) through the
     // standard `session/set_config_option`, before any prompt is sent.
-    if !config.config_selections.is_empty() {
-        let offered = response.config_options.clone().unwrap_or_default();
+    let mut observed_model = None;
+    {
+        let mut offered = response.config_options.clone().unwrap_or_default();
         let applied = async {
+            let mut required_model = None;
             for selection in &config.config_selections {
                 let (config_id, value) = match resolve_config_selection(&offered, selection) {
                     Ok(resolved) => resolved,
@@ -533,7 +535,10 @@ async fn open_session_attempt(
                     },
                     Err(error) => return Err(error),
                 };
-                handshake_step(
+                if selection.category == super::session::ConfigCategory::Model {
+                    required_model = Some((config_id.clone(), value.clone()));
+                }
+                let applied = handshake_step(
                     connection.set_session_config_option(
                         agent_client_protocol::schema::v1::SetSessionConfigOptionRequest::new(
                             response.session_id.clone(),
@@ -549,6 +554,21 @@ async fn open_session_attempt(
                     config.effect_fence.as_ref(),
                 )
                 .await?;
+                offered = applied.config_options;
+                if let Some((id, expected)) = &required_model {
+                    observed_model = Some(acknowledged_model(&offered, id, expected)?);
+                }
+            }
+            if required_model.is_none() {
+                observed_model = observed_model_value(&offered)?;
+            }
+            if let surge_core::execution_recovery::SessionOpening::Continue(saved) = &config.opening
+                && saved.observed_model().is_some()
+                && saved.observed_model() != observed_model.as_deref()
+            {
+                return Err(OpenSessionError::HandshakeFailed {
+                    reason: "restored provider model differs from its observed model".into(),
+                });
             }
             Ok::<(), OpenSessionError>(())
         }
@@ -579,6 +599,7 @@ async fn open_session_attempt(
             launch_hash,
             canonical_cwd,
             capabilities,
+            observed_model.clone(),
         )?;
         let mut opened =
             surge_core::execution_recovery::OpenedSession::new(session_id, descriptor, mode)?;
@@ -648,6 +669,57 @@ async fn open_session_attempt(
     })
 }
 
+/// Missing optional model metadata stays unknown; contradictory model categories refuse.
+fn observed_model_value(
+    options: &[agent_client_protocol::schema::v1::SessionConfigOption],
+) -> Result<Option<String>, OpenSessionError> {
+    use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigOptionCategory};
+    let mut models = options
+        .iter()
+        .filter(|option| option.category.as_ref() == Some(&SessionConfigOptionCategory::Model));
+    let Some(option) = models.next() else {
+        return Ok(None);
+    };
+    if models.next().is_some() {
+        return Err(OpenSessionError::HandshakeFailed {
+            reason: "ambiguous observed model option".into(),
+        });
+    }
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return Ok(None);
+    };
+    Ok(Some(select.current_value.to_string()))
+}
+
+/// A model observation is the exact current value returned by the peer, never a request.
+fn acknowledged_model(
+    options: &[agent_client_protocol::schema::v1::SessionConfigOption],
+    id: &agent_client_protocol::schema::v1::SessionConfigId,
+    expected: &agent_client_protocol::schema::v1::SessionConfigValueId,
+) -> Result<String, OpenSessionError> {
+    use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigOptionCategory};
+    let failure = || OpenSessionError::HandshakeFailed {
+        reason: "provider did not acknowledge the exact selected model".into(),
+    };
+    let model_options: Vec<_> = options
+        .iter()
+        .filter(|option| option.category.as_ref() == Some(&SessionConfigOptionCategory::Model))
+        .collect();
+    let [option] = model_options.as_slice() else {
+        return Err(failure());
+    };
+    if &option.id != id || options.iter().filter(|option| &option.id == id).count() != 1 {
+        return Err(failure());
+    }
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return Err(failure());
+    };
+    if &select.current_value != expected {
+        return Err(failure());
+    }
+    Ok(select.current_value.to_string())
+}
+
 /// Find the advertised select option and value for `selection`. Value ids
 /// and display names both match, case-insensitively, so an operator can
 /// write `opus` or `claude-opus-4-7` or the display name the agent shows.
@@ -673,6 +745,7 @@ pub(crate) fn resolve_config_selection(
     };
     let requested = selection.value.trim();
     let mut offered_values = Vec::new();
+    let mut matches = Vec::new();
     for option in offered
         .iter()
         .filter(|o| o.category.as_ref() == Some(&wanted))
@@ -692,9 +765,12 @@ pub(crate) fn resolve_config_selection(
             if choice.value.to_string().eq_ignore_ascii_case(requested)
                 || choice.name.eq_ignore_ascii_case(requested)
             {
-                return Ok((option.id.clone(), choice.value.clone()));
+                matches.push((option.id.clone(), choice.value.clone()));
             }
         }
+    }
+    if matches.len() == 1 {
+        return Ok(matches.remove(0));
     }
     Err(OpenSessionError::ConfigOptionUnavailable {
         category: label,

@@ -104,6 +104,53 @@ impl BootstrapRuntime {
         Arc::clone(&self.agents)
     }
 
+    /// Capture current host execution inputs for a new isolated implementation attempt.
+    /// The old operation's configuration is deliberately not rewritten or revalidated here.
+    pub(crate) fn implementation_runtime(
+        &self,
+        repository: &Path,
+        graph: &Graph,
+    ) -> Result<(ContentHash, Arc<surge_acp::Registry>), BootstrapRuntimeError> {
+        supported(&self.config)?;
+        let runtime = self.for_project(repository)?;
+        runtime.validate_graph(graph)?;
+        for node in graph
+            .nodes
+            .values()
+            .chain(graph.subgraphs.values().flat_map(|g| g.nodes.values()))
+        {
+            if let surge_core::node::NodeConfig::Agent(agent) = &node.config {
+                let key = surge_core::profile::keyref::parse_key_ref(agent.profile.as_str())
+                    .map_err(|_| BootstrapRuntimeError::Configuration)?;
+                let profile = runtime
+                    .profiles
+                    .resolve(&key)
+                    .map_err(|_| BootstrapRuntimeError::Configuration)?;
+                if !profile.profile.tools.default_mcp.is_empty()
+                    || agent
+                        .tool_overrides
+                        .as_ref()
+                        .is_some_and(|tools| !tools.mcp_add.is_empty())
+                {
+                    return Err(BootstrapRuntimeError::Configuration);
+                }
+            }
+        }
+        let fingerprint = digest(&(
+            runtime.runtime_identity()?,
+            runtime.configuration(repository)?,
+            graph
+                .identity()
+                .map_err(|_| BootstrapRuntimeError::Configuration)?,
+            &self.worktrees_root,
+        ))?;
+        Ok((fingerprint, runtime.agents()))
+    }
+
+    pub(crate) fn attempt_worktree(&self, run: RunId) -> PathBuf {
+        self.worktrees_root.join(run.to_string())
+    }
+
     /// Capture clean repository and immutable execution references outside a DB transaction.
     pub async fn capture(
         &self,

@@ -71,7 +71,7 @@ impl PreparedOpening {
     }
     fn bind(self, database: Database) -> Arc<WriterLease> {
         Arc::new(WriterLease {
-            _token: self.token,
+            token: self.token,
             file_lock: self.lock,
             #[cfg(windows)]
             namespace: database.clone(),

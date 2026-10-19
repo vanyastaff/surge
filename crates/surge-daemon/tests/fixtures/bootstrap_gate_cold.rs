@@ -223,6 +223,15 @@ struct Host {
 }
 impl Host {
     fn spawn(home: &Path, project: &Path, cut: bool, run: Option<RunId>) -> Self {
+        Self::spawn_configured(home, project, cut, run, false)
+    }
+    fn spawn_configured(
+        home: &Path,
+        project: &Path,
+        cut: bool,
+        run: Option<RunId>,
+        continuation: bool,
+    ) -> Self {
         let log = home.join(if cut {
             "first-host.log"
         } else {
@@ -241,6 +250,21 @@ impl Host {
             .env_remove("SURGE_ROUTE_COMMIT_EXIT")
             .stdout(output.try_clone().unwrap())
             .stderr(output);
+        if continuation {
+            command
+                .env(
+                    "SURGE_TEST_CONTINUATION_MCP_PROXY",
+                    home.join("artifact-proxy.py"),
+                )
+                .env(
+                    "SURGE_TEST_CONTINUATION_PYTHON",
+                    implementation_continuation::python(),
+                )
+                .env(
+                    "SURGE_TEST_CONTINUATION_SCRIPT",
+                    home.join("bootstrap-script.json"),
+                );
+        }
         if cut {
             command.env("SURGE_ROUTE_COMMIT_EXIT", "flow_generator@2");
         }
@@ -435,6 +459,8 @@ fn git(project: &Path, args: &[&str]) {
 
 fn prepare(home: &Path, project: &Path) {
     std::fs::create_dir_all(project).unwrap();
+    git(project, &["init"]);
+    git(project, &["config", "core.autocrlf", "false"]);
     let binary = std::env::var_os("SURGE_TEST_MOCK_ACP_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -449,7 +475,6 @@ fn prepare(home: &Path, project: &Path) {
         toml::to_string(&config).unwrap(),
     )
     .unwrap();
-    git(project, &["init"]);
     git(project, &["config", "user.name", "Gate fixture"]);
     git(
         project,
@@ -982,3 +1007,6 @@ fn assert_preserved(home: &Path, run: RunId, cut: u64, captured: &RawPrefix) {
         "raw events, snapshots and every original accepted commit column including routed_seq stay unchanged"
     );
 }
+
+#[path = "bootstrap_implementation_continuation.rs"]
+mod implementation_continuation;

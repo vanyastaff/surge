@@ -23,6 +23,12 @@ pub enum OpenError {
     /// The in-process writer ownership registry is poisoned.
     #[error("writer ownership registry is poisoned")]
     WriterOwnershipPoisoned,
+    /// The supplied writer was not issued by this storage instance.
+    #[error("writer belongs to another storage for run {run_id}")]
+    WriterOwnerMismatch {
+        /// The run whose writer association did not match.
+        run_id: RunId,
+    },
     /// Another writer (this process or another) currently holds the slot for this run.
     #[error("writer already held for run {run_id}")]
     WriterAlreadyHeld {

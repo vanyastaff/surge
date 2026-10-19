@@ -1,0 +1,614 @@
+# Synthetic protocol regression: milestone is an audit, not a task-verification claim.
+# Approved roadmap; sequential tasks and integrated milestone verification.
+schema_version = 1
+start = "milestone_loop"
+
+[metadata]
+name = "Habit tracker local release"
+created_at = "2026-10-16T21:11:15Z"
+description = "Multi-milestone: two milestones and eight tasks deliver one mission with 12 validation assertions, using sequential task loops and running-app checks followed by sealed task and integrated milestone verification of fulfilled assertions before advancing. Every agent explicitly uses codex-acp and exact gpt-6.1-sol as required, so verification intentionally uses the same runtime; failures return to bounded implementation rework."
+
+[metadata.archetype]
+name = "multi-milestone"
+
+[nodes.milestone_loop]
+id = "milestone_loop"
+[[nodes.milestone_loop.declared_outcomes]]
+id = "completed"
+description = "All items completed and verified in sequence"
+edge_kind_hint = "forward"
+is_terminal = false
+[nodes.milestone_loop.position]
+x = 0.0
+y = 0.0
+[nodes.milestone_loop.config]
+node_kind = "loop"
+body = "milestone_body"
+iteration_var_name = "milestone"
+parallelism = "sequential"
+gate_after_each = false
+[nodes.milestone_loop.config.iterates_over]
+type = "run_artifact"
+[nodes.milestone_loop.config.iterates_over.value]
+name = "roadmap"
+jsonpath = "milestones"
+[nodes.milestone_loop.config.exit_condition]
+type = "all_items"
+[nodes.milestone_loop.config.on_iteration_failure]
+type = "abort"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+[nodes.end.position]
+x = 480.0
+y = 0.0
+[nodes.end.config]
+node_kind = "terminal"
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_milestones_done"
+to = "end"
+kind = "forward"
+[edges.from]
+node = "milestone_loop"
+outcome = "completed"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[subgraphs.milestone_body]
+start = "milestone_spec"
+
+[subgraphs.milestone_body.nodes.milestone_spec]
+id = "milestone_spec"
+[[subgraphs.milestone_body.nodes.milestone_spec.declared_outcomes]]
+id = "drafted"
+description = "Milestone specification and acceptance criteria produced"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.milestone_spec.declared_outcomes]]
+id = "needs_clarification"
+description = "Required direction is unresolved"
+edge_kind_hint = "escalate"
+is_terminal = false
+[subgraphs.milestone_body.nodes.milestone_spec.position]
+x = 0.0
+y = 0.0
+[subgraphs.milestone_body.nodes.milestone_spec.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[subgraphs.milestone_body.nodes.milestone_spec.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[[subgraphs.milestone_body.nodes.milestone_spec.config.bindings]]
+target = "milestone"
+optional = false
+[subgraphs.milestone_body.nodes.milestone_spec.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+[[subgraphs.milestone_body.nodes.milestone_spec.config.bindings]]
+target = "project_context"
+optional = false
+[subgraphs.milestone_body.nodes.milestone_spec.config.bindings.source]
+type = "run_artifact"
+name = "description"
+
+[subgraphs.milestone_body.nodes.task_loop]
+id = "task_loop"
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "completed"
+description = "All items completed and verified in sequence"
+edge_kind_hint = "forward"
+is_terminal = false
+[subgraphs.milestone_body.nodes.task_loop.position]
+x = 240.0
+y = 0.0
+[subgraphs.milestone_body.nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
+type = "loop_item"
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over.value]
+var = "milestone"
+jsonpath = "tasks"
+[subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
+type = "all_items"
+[subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+[subgraphs.milestone_body.nodes.app_milestone]
+id = "app_milestone"
+[[subgraphs.milestone_body.nodes.app_milestone.declared_outcomes]]
+id = "passed"
+description = "Running application satisfies the current scope; observations recorded as evidence"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.app_milestone.declared_outcomes]]
+id = "failed"
+description = "Running application failed acceptance checks"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.app_milestone.declared_outcomes]]
+id = "cannot_run"
+description = "Application startup failed; commands and errors recorded"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[subgraphs.milestone_body.nodes.app_milestone.position]
+x = 480.0
+y = 0.0
+[subgraphs.milestone_body.nodes.app_milestone.config]
+node_kind = "agent"
+profile = "app-tester@1.0"
+[subgraphs.milestone_body.nodes.app_milestone.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.milestone_body.nodes.app_milestone.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.milestone_body.nodes.app_milestone.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.milestone_body.nodes.app_milestone.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.milestone_body.nodes.app_milestone.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.milestone_body.nodes.app_milestone.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.milestone_body.nodes.verify_milestone]
+id = "verify_milestone"
+[[subgraphs.milestone_body.nodes.verify_milestone.declared_outcomes]]
+id = "passed"
+description = "Sealed checks pass for this scope, including applicable fulfilled mission assertions and evidence"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.verify_milestone.declared_outcomes]]
+id = "failed"
+description = "Sealed checks or required evidence fail; implementation rework required"
+edge_kind_hint = "backtrack"
+is_terminal = false
+ledger_effect = "failed_verification"
+[subgraphs.milestone_body.nodes.verify_milestone.position]
+x = 720.0
+y = 0.0
+[subgraphs.milestone_body.nodes.verify_milestone.config]
+node_kind = "agent"
+profile = "verifier@2.0"
+[subgraphs.milestone_body.nodes.verify_milestone.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.milestone_body.nodes.verify_milestone.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.milestone_body.nodes.verify_milestone.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.milestone_body.nodes.verify_milestone.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.milestone_body.nodes.verify_milestone.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.milestone_body.nodes.verify_milestone.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.milestone_body.nodes.rework_milestone]
+id = "rework_milestone"
+[[subgraphs.milestone_body.nodes.rework_milestone.declared_outcomes]]
+id = "ready_for_verification"
+description = "Implementation and executed checks ready for independent verification"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.rework_milestone.declared_outcomes]]
+id = "blocked"
+description = "Implementation requires unresolved input"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[subgraphs.milestone_body.nodes.rework_milestone.declared_outcomes]]
+id = "partial"
+description = "Implementation remains incomplete"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[subgraphs.milestone_body.nodes.rework_milestone.position]
+x = 480.0
+y = 240.0
+[subgraphs.milestone_body.nodes.rework_milestone.config]
+node_kind = "agent"
+profile = "implementer@2.0"
+[subgraphs.milestone_body.nodes.rework_milestone.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.milestone_body.nodes.rework_milestone.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.milestone_body.nodes.rework_milestone.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.milestone_body.nodes.rework_milestone.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.milestone_body.nodes.rework_milestone.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.milestone_body.nodes.rework_milestone.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.milestone_body.nodes.milestone_end]
+id = "milestone_end"
+declared_outcomes = []
+[subgraphs.milestone_body.nodes.milestone_end.position]
+x = 960.0
+y = 0.0
+[subgraphs.milestone_body.nodes.milestone_end.config]
+node_kind = "terminal"
+[subgraphs.milestone_body.nodes.milestone_end.config.kind]
+type = "success"
+
+[subgraphs.milestone_body.nodes.milestone_failed]
+id = "milestone_failed"
+declared_outcomes = []
+[subgraphs.milestone_body.nodes.milestone_failed.position]
+x = 960.0
+y = 240.0
+[subgraphs.milestone_body.nodes.milestone_failed.config]
+node_kind = "terminal"
+[subgraphs.milestone_body.nodes.milestone_failed.config.kind]
+type = "failure"
+exit_code = 1
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mspec_ready"
+to = "task_loop"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "milestone_spec"
+outcome = "drafted"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mspec_unclear"
+to = "milestone_failed"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "milestone_spec"
+outcome = "needs_clarification"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_tasks_done"
+to = "app_milestone"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "task_loop"
+outcome = "completed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mapp_pass"
+to = "verify_milestone"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "app_milestone"
+outcome = "passed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mapp_fail"
+to = "rework_milestone"
+kind = "backtrack"
+[subgraphs.milestone_body.edges.from]
+node = "app_milestone"
+outcome = "failed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mapp_startup"
+to = "rework_milestone"
+kind = "backtrack"
+[subgraphs.milestone_body.edges.from]
+node = "app_milestone"
+outcome = "cannot_run"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mverify_pass"
+to = "milestone_end"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "verify_milestone"
+outcome = "passed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mverify_retry"
+to = "rework_milestone"
+kind = "backtrack"
+[subgraphs.milestone_body.edges.from]
+node = "verify_milestone"
+outcome = "failed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mrework_ready"
+to = "app_milestone"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "rework_milestone"
+outcome = "ready_for_verification"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mrework_blocked"
+to = "milestone_failed"
+kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "rework_milestone"
+outcome = "blocked"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mrework_partial"
+to = "rework_milestone"
+kind = "backtrack"
+[subgraphs.milestone_body.edges.from]
+node = "rework_milestone"
+outcome = "partial"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[subgraphs.task_body]
+start = "impl_task"
+
+[subgraphs.task_body.nodes.impl_task]
+id = "impl_task"
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "ready_for_verification"
+description = "Implementation and executed checks ready for independent verification"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "blocked"
+description = "Implementation requires unresolved input"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "partial"
+description = "Implementation remains incomplete"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[subgraphs.task_body.nodes.impl_task.position]
+x = 0.0
+y = 0.0
+[subgraphs.task_body.nodes.impl_task.config]
+node_kind = "agent"
+profile = "implementer@2.0"
+[subgraphs.task_body.nodes.impl_task.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.task_body.nodes.impl_task.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.task_body.nodes.impl_task.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.task_body.nodes.impl_task.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.task_body.nodes.impl_task.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.task_body.nodes.impl_task.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.task_body.nodes.app_task]
+id = "app_task"
+[[subgraphs.task_body.nodes.app_task.declared_outcomes]]
+id = "passed"
+description = "Running application satisfies the current scope; observations recorded as evidence"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.task_body.nodes.app_task.declared_outcomes]]
+id = "failed"
+description = "Running application failed acceptance checks"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[[subgraphs.task_body.nodes.app_task.declared_outcomes]]
+id = "cannot_run"
+description = "Application startup failed; commands and errors recorded"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[subgraphs.task_body.nodes.app_task.position]
+x = 240.0
+y = 0.0
+[subgraphs.task_body.nodes.app_task.config]
+node_kind = "agent"
+profile = "app-tester@1.0"
+[subgraphs.task_body.nodes.app_task.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.task_body.nodes.app_task.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.task_body.nodes.app_task.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.task_body.nodes.app_task.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.task_body.nodes.app_task.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.task_body.nodes.app_task.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.task_body.nodes.verify_task]
+id = "verify_task"
+[[subgraphs.task_body.nodes.verify_task.declared_outcomes]]
+id = "passed"
+description = "Sealed checks pass for this scope, including applicable fulfilled mission assertions and evidence"
+edge_kind_hint = "forward"
+is_terminal = false
+ledger_effect = "verified"
+[[subgraphs.task_body.nodes.verify_task.declared_outcomes]]
+id = "failed"
+description = "Sealed checks or required evidence fail; implementation rework required"
+edge_kind_hint = "backtrack"
+is_terminal = false
+ledger_effect = "failed_verification"
+[subgraphs.task_body.nodes.verify_task.position]
+x = 480.0
+y = 0.0
+[subgraphs.task_body.nodes.verify_task.config]
+node_kind = "agent"
+profile = "verifier@2.0"
+[subgraphs.task_body.nodes.verify_task.config.custom_fields.runtime]
+agent_id = "codex-acp"
+model = "gpt-6.1-sol"
+[subgraphs.task_body.nodes.verify_task.config.tool_overrides]
+shell_allowlist_add = ["node", "npm", "npx", "git"]
+[[subgraphs.task_body.nodes.verify_task.config.bindings]]
+target = "spec"
+optional = false
+[subgraphs.task_body.nodes.verify_task.config.bindings.source]
+type = "node_output"
+node = "milestone_spec"
+artifact = "spec.toml"
+[[subgraphs.task_body.nodes.verify_task.config.bindings]]
+target = "project_memory"
+optional = false
+[subgraphs.task_body.nodes.verify_task.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[subgraphs.task_body.nodes.task_end]
+id = "task_end"
+declared_outcomes = []
+[subgraphs.task_body.nodes.task_end.position]
+x = 720.0
+y = 0.0
+[subgraphs.task_body.nodes.task_end.config]
+node_kind = "terminal"
+[subgraphs.task_body.nodes.task_end.config.kind]
+type = "success"
+
+[subgraphs.task_body.nodes.task_failed]
+id = "task_failed"
+declared_outcomes = []
+[subgraphs.task_body.nodes.task_failed.position]
+x = 720.0
+y = 240.0
+[subgraphs.task_body.nodes.task_failed.config]
+node_kind = "terminal"
+[subgraphs.task_body.nodes.task_failed.config.kind]
+type = "failure"
+exit_code = 1
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_ready"
+to = "app_task"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "ready_for_verification"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_blocked"
+to = "task_failed"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "blocked"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_partial"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "partial"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.task_body.edges]]
+id = "e_app_pass"
+to = "verify_task"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "app_task"
+outcome = "passed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_app_fail"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "app_task"
+outcome = "failed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.task_body.edges]]
+id = "e_app_startup"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "app_task"
+outcome = "cannot_run"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.task_body.edges]]
+id = "e_verify_pass"
+to = "task_end"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "verify_task"
+outcome = "passed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_verify_retry"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "verify_task"
+outcome = "failed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3

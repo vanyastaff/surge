@@ -1286,6 +1286,7 @@ mod tests {
                     resume: true,
                     load: true,
                 },
+                None,
             )
             .unwrap();
             let mode = match index {

@@ -36,6 +36,7 @@ impl BridgeFacade for MinimalMock {
                 surge_core::ContentHash::compute(b"fixture"),
                 config.working_dir,
                 Default::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,

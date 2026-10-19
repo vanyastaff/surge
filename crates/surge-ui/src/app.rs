@@ -138,6 +138,8 @@ pub struct SurgeApp {
     next_offline_retry: u64,
     operation_polls: HashMap<surge_core::RunId, (crate::run_observation::Scope, u64)>,
     next_operation_poll: u64,
+    #[cfg(all(test, unix))]
+    operation_poll_settlements: HashMap<surge_core::RunId, (u64, u64)>,
 }
 
 impl SurgeApp {
@@ -282,6 +284,8 @@ impl SurgeApp {
             next_offline_retry: 0,
             operation_polls: HashMap::new(),
             next_operation_poll: 0,
+            #[cfg(all(test, unix))]
+            operation_poll_settlements: HashMap::new(),
         }
     }
 
@@ -513,12 +517,21 @@ impl SurgeApp {
         self.next_operation_poll = self.next_operation_poll.saturating_add(1);
         let poll = (scope.clone(), self.next_operation_poll);
         self.operation_polls.insert(operation_id, poll.clone());
+        #[cfg(all(test, unix))]
+        self.operation_poll_settlements
+            .insert(operation_id, (poll.1, 0));
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 let status = facade.bootstrap_status(operation_id).await;
                 match status {
                     Ok(status) => {
-                        let is_terminal = status.state.phase().is_none();
+                        let is_terminal = status.state.phase().is_none()
+                            && !status.continuations.iter().any(|attempt| {
+                                matches!(attempt.state,
+                                surge_core::bootstrap_attempt::BootstrapAttemptState::Reserved
+                                | surge_core::bootstrap_attempt::BootstrapAttemptState::ForkReady
+                                | surge_core::bootstrap_attempt::BootstrapAttemptState::Running)
+                            });
                         let accepted = this
                             .update(cx, |app, cx| {
                                 if app.operation_polls.get(&operation_id) != Some(&poll)
@@ -534,6 +547,13 @@ impl SurgeApp {
                                     &display_project,
                                     cx,
                                 );
+                                #[cfg(all(test, unix))]
+                                if let Some((generation, completed)) =
+                                    app.operation_poll_settlements.get_mut(&operation_id)
+                                    && *generation == poll.1
+                                {
+                                    *completed = completed.saturating_add(1);
+                                }
                                 Some(
                                     app.bootstrap_operations
                                         .get(&operation_id)
@@ -568,6 +588,38 @@ impl SurgeApp {
         .detach();
     }
 
+    fn accept_bootstrap_continuation(
+        &mut self,
+        operation: surge_core::RunId,
+        status: &surge_core::bootstrap_operation::BootstrapOperationStatus,
+        scope: &crate::run_observation::Scope,
+        cx: &mut Context<Self>,
+    ) {
+        if status.operation_id != operation
+            || self
+                .state
+                .update(cx, |state, _| state.observation_scope())
+                .as_ref()
+                != Some(scope)
+        {
+            return;
+        }
+        self.update_bootstrap_view(operation, status.clone(), &scope.project, cx);
+        if !self
+            .bootstrap_operations
+            .get(&operation)
+            .is_some_and(|(_, current)| current == status)
+        {
+            return;
+        }
+        if let Some(facade) = self.state.read(cx).daemon_state.facade() {
+            // Replace any older terminal poll lease before it can retire this
+            // continuation's observation. Old callbacks remain generation fenced.
+            self.operation_polls.remove(&operation);
+            self.track_bootstrap_operation(facade, operation, scope.project.clone(), cx);
+        }
+    }
+
     fn update_bootstrap_view(
         &mut self,
         operation_id: surge_core::RunId,
@@ -598,6 +650,13 @@ impl SurgeApp {
             .canonicalize()
             .unwrap_or_else(|_| root.unwrap_or(project_path).to_path_buf());
         let project_path = project_path.as_path();
+        if let Err(reason) = crate::app_state::bootstrap_related_runs(&status) {
+            self.state.update(cx, |state, cx| {
+                state.set_operation_refusal(operation_id, reason.into());
+                cx.notify();
+            });
+            return;
+        }
         if let Some((project, previous)) = self.bootstrap_operations.get(&operation_id) {
             if project != project_path
                 || status.planning_run != previous.planning_run
@@ -905,18 +964,17 @@ impl SurgeApp {
         use surge_orchestrator::engine::handle::RunStatus;
 
         // Prune bookkeeping for runs that vanished from the daemon's list.
-        let known: HashSet<surge_core::id::RunId> =
-            {
-                let state = self.state.read(cx);
-                state
-                    .runs
-                    .iter()
-                    .map(|r| r.run_id)
-                    .chain(state.bootstrap_operations.values().flat_map(|operation| {
-                        [operation.planning_run, operation.implementation_run]
-                    }))
-                    .collect()
-            };
+        let known: HashSet<surge_core::id::RunId> = {
+            let state = self.state.read(cx);
+            state
+                .runs
+                .iter()
+                .map(|r| r.run_id)
+                .chain(state.bootstrap_operations.values().flat_map(|operation| {
+                    crate::app_state::bootstrap_related_runs(operation).unwrap_or_default()
+                }))
+                .collect()
+        };
         self.stream_subscribed.retain(|id| known.contains(id));
         self.state.update(cx, |s, cx| {
             s.observations.retain_runs(&known);
@@ -1752,6 +1810,15 @@ impl SurgeApp {
                             cx.subscribe(&r, |this: &mut Self, _r, event: &RunsEvent, cx| {
                                 match event {
                                     RunsEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                                    RunsEvent::BootstrapContinuationAccepted {
+                                        operation,
+                                        status,
+                                        scope,
+                                    } => {
+                                        this.accept_bootstrap_continuation(
+                                            *operation, status, scope, cx,
+                                        );
+                                    },
                                 }
                             })
                             .detach();

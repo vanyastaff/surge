@@ -149,6 +149,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0033-graph-authority",
         include_str!("migrations/registry/0033_graph_authority.sql"),
     ),
+    (
+        "registry-0034-bootstrap-attempts",
+        include_str!("migrations/registry/0034_bootstrap_attempts.sql"),
+    ),
+    (
+        "registry-0035-bootstrap-binding-repair",
+        include_str!("migrations/registry/0035_bootstrap_binding_repair.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

@@ -275,6 +275,7 @@ fn engine_config(home: &Path, all_exhausted: bool) -> EngineConfig {
         }
         flags.push("--stage-mcp".into());
         flags.push("--config-options".into());
+        flags.push("--ack-config-choice".into());
         flags.push("--usage".into());
         let auth_file = home.join(format!("{runtime}-auth-source"));
         if !auth_file.exists() {

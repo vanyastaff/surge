@@ -66,6 +66,7 @@ fn status(
         cancel_requested: false,
         queue_sequence: 1,
         payload_version: 1,
+        continuations: Vec::new(),
     }
 }
 struct Harness {
@@ -1663,14 +1664,24 @@ impl SeventhFixture {
         completed_child: bool,
         settled: bool,
     ) -> Self {
+        Self::with_operation_graph(runtime, child_terminal, completed_child, settled, None)
+    }
+    fn with_operation_graph(
+        runtime: &tokio::runtime::Runtime,
+        child_terminal: bool,
+        completed_child: bool,
+        settled: bool,
+        graph: Option<surge_core::Graph>,
+    ) -> Self {
         use surge_core::bootstrap_operation::{
             BootstrapCapture, BootstrapCaptureFields, BootstrapContentRef, BootstrapIntent,
         };
         let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = home.path().join("project");
         std::fs::create_dir(&project).unwrap();
-        let graph: surge_core::Graph =
-            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+        let graph = graph.unwrap_or_else(|| {
+            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap()
+        });
         let digest = graph.identity().unwrap();
         let pins: BootstrapCapture = BootstrapCaptureFields {
             version: 1,
@@ -5023,3 +5034,7 @@ fn tenth_obsolete_checked_retirements_cannot_touch_new_live_read_error_or_marker
     drop(h);
     fixture.close();
 }
+
+#[cfg(unix)]
+#[path = "failed_continuation_history.rs"]
+mod failed_continuation_history;

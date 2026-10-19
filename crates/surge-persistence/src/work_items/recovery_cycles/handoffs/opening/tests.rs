@@ -41,6 +41,7 @@ fn descriptor(invocation: StageInvocationId, cwd: std::path::PathBuf) -> Provide
             resume: true,
             load: true,
         },
+        None,
     )
     .unwrap()
 }
@@ -2494,6 +2495,7 @@ async fn fixture_with_two_fresh_pinned_sources()
             resume: true,
             load: true,
         },
+        None,
     )
     .unwrap();
     let mut opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();

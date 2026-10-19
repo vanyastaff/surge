@@ -368,9 +368,22 @@ fn add_gates(
             split: alternate && loop_body,
             accept_to,
         };
-        let Some(addition) = gate_for(&source, &target, &loop_edges, ladder, names) else {
+        let Some(mut addition) = gate_for(&source, &target, &loop_edges, ladder, names) else {
             continue;
         };
+        if let Some(Node {
+            config: NodeConfig::Agent(retry),
+            ..
+        }) = nodes.get(&target)
+        {
+            for node in &mut addition.nodes {
+                if is_split_planner(node)
+                    && let NodeConfig::Agent(splitter) = &mut node.config
+                {
+                    inherit_explicit_bindings(splitter, retry);
+                }
+            }
+        }
         for node in addition.nodes {
             nodes.insert(node.id.clone(), node);
         }
@@ -616,6 +629,25 @@ fn gate_for(
     ));
     edges.push(edge(stop_edge, &gate, &stop, &stopped, EdgeKind::Forward));
     Some(Addition { nodes, edges })
+}
+
+/// Copy only the retry target's explicit provider/model contract into a generated role.
+fn inherit_explicit_bindings(
+    splitter: &mut crate::agent_config::AgentConfig,
+    retry: &crate::agent_config::AgentConfig,
+) {
+    let mut runtime = toml::map::Map::new();
+    if let Some(agent) = retry.runtime_override() {
+        runtime.insert("agent_id".into(), toml::Value::String(agent.into()));
+    }
+    if let Some(model) = retry.model_override() {
+        runtime.insert("model".into(), toml::Value::String(model.into()));
+    }
+    if !runtime.is_empty() {
+        splitter
+            .custom_fields
+            .insert("runtime".into(), toml::Value::Table(runtime));
+    }
 }
 
 fn split_planner_node(id: &NodeKey, split: &OutcomeKey, cannot: &OutcomeKey) -> Option<Node> {
@@ -970,6 +1002,48 @@ mod tests {
                 .iter()
                 .all(|(to, _)| to == "verify_1_escalation")
         );
+    }
+
+    #[test]
+    fn generated_splitters_inherit_only_explicit_retry_target_bindings() {
+        let mut graph = BundledFlows::by_name_latest("multi-milestone")
+            .unwrap()
+            .graph;
+        for body in graph.subgraphs.values_mut() {
+            for node in body.nodes.values_mut() {
+                if let NodeConfig::Agent(agent) = &mut node.config {
+                    *agent = agent.with_runtime_override("codex-acp", Some("gpt-6.1-sol"));
+                    agent
+                        .custom_fields
+                        .get_mut("runtime")
+                        .unwrap()
+                        .as_table_mut()
+                        .unwrap()
+                        .insert("effort".into(), toml::Value::String("high".into()));
+                    agent
+                        .custom_fields
+                        .insert("unrelated".into(), toml::Value::Boolean(true));
+                }
+            }
+        }
+        let effective = with_default_escalation_gates(&graph);
+        let mut count = 0;
+        for body in effective.subgraphs.values() {
+            for node in body.nodes.values().filter(|node| is_split_planner(node)) {
+                let NodeConfig::Agent(agent) = &node.config else {
+                    panic!("split agent")
+                };
+                assert_eq!(agent.runtime_override(), Some("codex-acp"));
+                assert_eq!(agent.model_override(), Some("gpt-6.1-sol"));
+                assert_eq!(agent.effort_override(), None);
+                assert!(!agent.custom_fields.contains_key("unrelated"));
+                assert_eq!(agent.profile.as_str(), SPLIT_PLANNER_PROFILE);
+                assert_eq!(agent.sandbox_override, None);
+                count += 1;
+            }
+        }
+        assert!(count > 0);
+        assert_eq!(effective, with_default_escalation_gates(&effective));
     }
 
     #[test]

@@ -47,6 +47,7 @@ impl BridgeFacade for NoOpBridge {
                 surge_core::ContentHash::compute(b"noop"),
                 config.working_dir,
                 Default::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,

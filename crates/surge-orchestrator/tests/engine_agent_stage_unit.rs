@@ -151,6 +151,20 @@ async fn agent_stage_loops_until_outcome_reported() {
 
         assert_eq!(result.as_ref(), "done");
         let prompt = mock.last_prompt().await.unwrap();
+        let audit: serde_json::Value = serde_json::from_str(
+            prompt
+                .split("Host runtime/model audit context.")
+                .nth(1)
+                .unwrap()
+                .lines()
+                .nth(1)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(audit["graph_declarations"], "unavailable");
+        assert!(audit["declared_bindings"].is_null());
+        assert_eq!(audit["current_stage_declaration"]["node"], "plan_1");
+        assert_eq!(audit["observed_sessions"][0]["origin"], "current_opening");
         assert!(prompt.contains("pause-timer"));
         assert!(prompt.find("timer-controls").unwrap() < prompt.find("pause-timer").unwrap());
         assert!(prompt.contains("Pause keeps remaining time"));
@@ -175,6 +189,18 @@ async fn reentered_stage_prompt_carries_the_verifier_findings() {
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let graph = surge_core::bundled_flows::BundledFlows::by_name_latest("linear-3")
+            .unwrap()
+            .graph;
+        writer
+            .append_event(surge_core::VersionedEventPayload::new(
+                surge_core::EventPayload::PipelineMaterialized {
+                    graph_hash: graph.identity().unwrap(),
+                    graph: Box::new(graph),
+                },
+            ))
+            .await
+            .unwrap();
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 

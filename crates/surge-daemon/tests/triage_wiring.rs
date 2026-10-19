@@ -86,6 +86,7 @@ impl BridgeFacade for MockBridge {
                 surge_core::ContentHash::compute(b"triage"),
                 config.working_dir,
                 Default::default(),
+                None,
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,
