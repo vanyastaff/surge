@@ -470,6 +470,8 @@ impl Storage {
             self.clock.as_ref(),
         )
         .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
+        super::projection::upgrade_owned(super::connection::raw_mut(&mut conn))
+            .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
         tracing::debug!(path = %events_path.display(), "run database schema validated before writer startup");
         Ok(())
     }
@@ -1078,16 +1080,51 @@ mod existing_run_upgrade_tests {
 
         let mut conn = rusqlite::Connection::open(storage.events_db_path(run_id)).unwrap();
         apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &MockClock::new(100)).unwrap();
-        let payload = VersionedEventPayload::new(EventPayload::RunAborted {
-            reason: "historical reason".into(),
-        });
+        // Every legacy stage field has a journal cause. Rebuilding must not retain
+        // an arbitrary precomputed row that has no corresponding durable event.
+        let session = surge_core::SessionId::new();
+        for (index, payload) in [
+            EventPayload::StageEntered {
+                node: "worker".parse().unwrap(),
+                attempt: 2,
+            },
+            EventPayload::SessionOpened {
+                handoff: None,
+                opened: None,
+                node: "worker".parse().unwrap(),
+                session,
+                agent: "legacy-profile".into(),
+                agent_id: None,
+            },
+            EventPayload::TokensConsumed {
+                session,
+                prompt_tokens: 11,
+                output_tokens: 7,
+                cache_hits: 0,
+                model: "legacy".into(),
+                cost_usd: Some(1.25),
+            },
+            EventPayload::RunAborted {
+                reason: "historical reason".into(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let payload = VersionedEventPayload::new(payload);
+            conn.execute(
+                "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(?,42,?,?,?)",
+                rusqlite::params![
+                    index as i64 + 1,
+                    payload.payload().discriminant_str(),
+                    serde_json::to_vec(&payload).unwrap(),
+                    payload.schema_version()
+                ],
+            )
+            .unwrap();
+        }
         conn.execute(
-            "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(1,42,'RunAborted',?,?)",
-            rusqlite::params![serde_json::to_vec(&payload).unwrap(), payload.schema_version()],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO stage_executions(node_id,attempt,started_seq,started_at,cost_usd,tokens_in,tokens_out) VALUES('worker',2,1,42,1.25,11,7)",
-            [],
+            "INSERT INTO stage_executions(node_id,attempt,started_seq,started_at,cost_usd,tokens_in,tokens_out) VALUES('worker',2,1,42,1.25,11,7)", [],
         ).unwrap();
     }
 
@@ -1098,6 +1135,19 @@ mod existing_run_upgrade_tests {
             let storage = Storage::open(dir.path()).await.unwrap();
             let run_id = RunId::new();
             seed_legacy_run(&storage, &run_id);
+            {
+                let mut conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
+                apply(&mut conn, PER_RUN_MIGRATIONS, &MockClock::new(100)).unwrap();
+                let known: Option<f64> = conn
+                    .query_row("SELECT known_cost_usd FROM stage_executions", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(
+                    known, None,
+                    "schema upgrade alone cannot turn an old aggregate into known spend"
+                );
+            }
 
             for _ in 0..2 {
                 let writer = storage.open_run_writer(run_id.clone()).await.unwrap();
@@ -1113,9 +1163,9 @@ mod existing_run_upgrade_tests {
                     (stage.cost_usd, stage.tokens_in, stage.tokens_out),
                     (1.25, 11, 7)
                 );
-                assert_eq!(stage.known_cost_usd, None);
+                assert_eq!(stage.known_cost_usd, Some(1.25));
                 assert!(!stage.cost_unknown);
-                let event = reader.read_event(EventSeq(1)).await.unwrap().unwrap();
+                let event = reader.read_event(EventSeq(4)).await.unwrap().unwrap();
                 assert_eq!(event.timestamp_ms, 42);
                 assert_eq!(event.kind, "RunAborted");
                 assert!(

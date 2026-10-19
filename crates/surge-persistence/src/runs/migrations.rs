@@ -145,6 +145,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0032-host-settlement",
         include_str!("migrations/registry/0032_host_settlement.sql"),
     ),
+    (
+        "registry-0033-graph-authority",
+        include_str!("migrations/registry/0033_graph_authority.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -188,6 +192,10 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
     (
         "per-run-0010-stage-tokens-unknown",
         include_str!("migrations/per_run/0010_stage_tokens_unknown.sql"),
+    ),
+    (
+        "per-run-0011-graph-authority",
+        include_str!("migrations/per_run/0011_graph_authority.sql"),
     ),
 ];
 
@@ -283,6 +291,272 @@ pub fn apply(
 mod tests {
     use super::*;
     use crate::runs::clock::MockClock;
+
+    const OLD_TASK_LEDGER_UPSERT: &str = r"INSERT INTO task_ledger_index
+                (run_id, task_id, project_path, status, verified, discovered_from,
+                 last_authority_node, updated_seq, updated_at, accepted_by_human,
+                 requirement_revised)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(run_id, task_id) DO UPDATE SET
+                project_path = excluded.project_path,
+                status = excluded.status,
+                verified = excluded.verified,
+                accepted_by_human = excluded.accepted_by_human,
+                requirement_revised = excluded.requirement_revised,
+                discovered_from = COALESCE(excluded.discovered_from, discovered_from),
+                last_authority_node = excluded.last_authority_node,
+                updated_seq = excluded.updated_seq,
+                updated_at = excluded.updated_at";
+
+    #[test]
+    fn graph_authority_registry_rejects_queued_old_upsert_on_two_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.sqlite");
+        let mut old = rusqlite::Connection::open(&path).unwrap();
+        let clock = MockClock::new(100);
+        let boundary = REGISTRY_MIGRATIONS
+            .iter()
+            .position(|(id, _)| *id == "registry-0033-graph-authority")
+            .unwrap_or(REGISTRY_MIGRATIONS.len());
+        apply(&mut old, &REGISTRY_MIGRATIONS[..boundary], &clock).unwrap();
+        let legacy_sql = OLD_TASK_LEDGER_UPSERT;
+        let bind = |task: &str| {
+            vec![
+                "legacy".to_owned(),
+                task.to_owned(),
+                "/repo".to_owned(),
+                "completed".to_owned(),
+                "1".to_owned(),
+                "source".to_owned(),
+                "verifier".to_owned(),
+                "7".to_owned(),
+                "100".to_owned(),
+                "1".to_owned(),
+                "1".to_owned(),
+            ]
+        };
+        let mut queued = old.prepare(legacy_sql).unwrap();
+        queued
+            .execute(rusqlite::params_from_iter(bind("existing")))
+            .unwrap();
+        let old_snapshot: bool = old
+            .query_row(
+                "SELECT verified FROM task_ledger_index WHERE task_id='existing'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(old_snapshot);
+        let mut current = rusqlite::Connection::open(&path).unwrap();
+        apply(&mut current, REGISTRY_MIGRATIONS, &clock).unwrap();
+        let preserved: (bool, String, String, i64, i64, bool, bool) = current.query_row("SELECT verified,discovered_from,last_authority_node,updated_seq,updated_at,accepted_by_human,requirement_revised FROM task_ledger_index", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).unwrap();
+        assert_eq!(
+            preserved,
+            (
+                false,
+                "source".into(),
+                "verifier".into(),
+                7,
+                100,
+                true,
+                true
+            )
+        );
+        current
+            .execute(
+                crate::task_ledger::UPSERT_SQL,
+                rusqlite::params![
+                    "legacy",
+                    "existing",
+                    "/repo",
+                    "completed",
+                    1,
+                    "source",
+                    "verifier",
+                    9,
+                    100,
+                    1,
+                    1
+                ],
+            )
+            .unwrap();
+        let row_bytes = |conn: &rusqlite::Connection| {
+            conn.query_row(
+                "SELECT * FROM task_ledger_index WHERE task_id='existing'",
+                [],
+                |row| {
+                    (0..12)
+                        .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                },
+            )
+            .unwrap()
+        };
+        let before = row_bytes(&current);
+        for task in ["absent", "existing"] {
+            let error = queued
+                .execute(rusqlite::params_from_iter(bind(task)))
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("NOT NULL constraint failed: task_ledger_index.projection_semantics"),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            before,
+            row_bytes(&current),
+            "legacy conflict update cannot change any current row bytes"
+        );
+        let row: (i64, bool) = current
+            .query_row(
+                "SELECT updated_seq,verified FROM task_ledger_index WHERE task_id='existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (9, true));
+        let indexes: i64 = current.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='task_ledger_index' AND name LIKE 'idx_task_ledger_index_%'",[],|row|row.get(0)).unwrap();
+        assert_eq!(indexes, 4);
+        let columns: Vec<String> = current
+            .prepare("SELECT name FROM pragma_table_info('task_ledger_index') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            [
+                "run_id",
+                "task_id",
+                "project_path",
+                "status",
+                "verified",
+                "discovered_from",
+                "last_authority_node",
+                "updated_seq",
+                "updated_at",
+                "accepted_by_human",
+                "requirement_revised",
+                "projection_semantics"
+            ]
+        );
+        let primary: Vec<String> = current
+            .prepare(
+                "SELECT name FROM pragma_table_info('task_ledger_index') WHERE pk>0 ORDER BY pk",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(primary, ["run_id", "task_id"]);
+        let mandatory: (bool,Option<String>) = current.query_row("SELECT [notnull],dflt_value FROM pragma_table_info('task_ledger_index') WHERE name='projection_semantics'",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(mandatory, (true, None));
+        for (name, expected) in [
+            ("idx_task_ledger_index_status", vec!["status"]),
+            (
+                "idx_task_ledger_index_project_status",
+                vec!["project_path", "status"],
+            ),
+            ("idx_task_ledger_index_run", vec!["run_id"]),
+            ("idx_task_ledger_index_discovered", vec!["discovered_from"]),
+        ] {
+            let actual: Vec<String> = current
+                .prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno")
+                .unwrap()
+                .query_map([name], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(actual, expected);
+        }
+        let status: (String, String) = current
+            .query_row(
+                "SELECT project_path,status FROM task_ledger_index WHERE task_id='existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, ("/repo".into(), "completed".into()));
+    }
+
+    #[test]
+    fn graph_authority_registry_downgrades_writer_that_finishes_before_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.sqlite");
+        let mut old = rusqlite::Connection::open(&path).unwrap();
+        let clock = MockClock::new(100);
+        let boundary = REGISTRY_MIGRATIONS
+            .iter()
+            .position(|(id, _)| *id == "registry-0033-graph-authority")
+            .unwrap_or(REGISTRY_MIGRATIONS.len());
+        apply(&mut old, &REGISTRY_MIGRATIONS[..boundary], &clock).unwrap();
+        old.execute_batch("BEGIN IMMEDIATE").unwrap();
+        old.execute(
+            OLD_TASK_LEDGER_UPSERT,
+            rusqlite::params![
+                "legacy",
+                "held",
+                "/repo",
+                "completed",
+                1,
+                "source",
+                "verify",
+                7,
+                100,
+                1,
+                1
+            ],
+        )
+        .unwrap();
+        let (ready, waiting) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut conn = rusqlite::Connection::open(path).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            ready.send(()).unwrap();
+            apply(&mut conn, REGISTRY_MIGRATIONS, &MockClock::new(100)).unwrap();
+        });
+        waiting.recv().unwrap();
+        // SQLite's exclusive migration cannot obtain writer ownership until
+        // this old transaction commits; its positive joins the downgraded copy.
+        old.execute_batch("COMMIT").unwrap();
+        worker.join().unwrap();
+        let verified: bool = old
+            .query_row(
+                "SELECT verified FROM task_ledger_index WHERE task_id='held'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!verified);
+        let error = old
+            .execute(
+                OLD_TASK_LEDGER_UPSERT,
+                rusqlite::params![
+                    "legacy",
+                    "held",
+                    "/repo",
+                    "completed",
+                    1,
+                    "source",
+                    "verify",
+                    7,
+                    100,
+                    1,
+                    1
+                ],
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("NOT NULL constraint failed: task_ledger_index.projection_semantics")
+        );
+    }
 
     #[test]
     fn apply_registry_to_fresh_db() {

@@ -848,3 +848,49 @@ fn gap_preserves_recorded_completions() {
     assert!(view.stages[0].result.is_some());
     assert_eq!(view.stages[0].continuity_unknown, None);
 }
+
+#[test]
+fn recorded_recovery_cold_projection_preserves_tasks_stages_and_nonterminal_result() {
+    let start = E::RunStarted {
+        pipeline_template: None,
+        project_path: "/project".into(),
+        initial_prompt: "build".into(),
+        config: crate::run_event::RunConfig {
+            bootstrap_edit_loop_cap: None,
+            sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
+            approval_default: crate::approvals::ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: vec![],
+            budget: Default::default(),
+        },
+    };
+    let log = events(vec![
+        start,
+        iteration("tasks", "login", 0),
+        enter(1),
+        E::RunRecoveryRequired {
+            control_generation: 0,
+            diagnostic: "operator inspection".into(),
+        },
+    ]);
+    let view = TaskExecutionView::compile(run(), &log).unwrap();
+    assert_eq!(view.tasks.len(), 1);
+    assert_eq!(view.stages.len(), 1);
+    assert!(view.tasks[0].finished.is_none());
+    assert!(!view.tasks[0].verified);
+    assert!(view.stages[0].result.is_none());
+    assert!(view.stages[0].failure.is_none());
+    assert!(view.terminal.is_none());
+    assert_eq!(view.recovery.active().unwrap().seq, 4);
+    let cold_log: Vec<RunEvent> =
+        serde_json::from_slice(&serde_json::to_vec(&log).unwrap()).unwrap();
+    assert_eq!(TaskExecutionView::compile(run(), &cold_log).unwrap(), view);
+    let partial = TaskExecutionView::compile(run(), &cold_log[1..]).unwrap();
+    assert!(partial.recovery.active().is_none());
+    assert_eq!(
+        partial.recovery.latest().unwrap().diagnostic,
+        "operator inspection"
+    );
+    assert_eq!(partial.tasks.len(), 1);
+    assert!(partial.terminal.is_none());
+}

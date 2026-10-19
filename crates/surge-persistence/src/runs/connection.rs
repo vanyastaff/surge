@@ -9,15 +9,12 @@ use std::{ops::Deref, path::Path};
 pub struct RetainedConnection {
     connection: Option<Connection>,
     #[cfg(windows)]
-    _namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
+    namespace: Option<std::sync::Arc<crate::state_home::SqliteNamespaceOwner>>,
 }
 impl RetainedConnection {
     #[cfg(all(windows, any(test, feature = "test-support")))]
     pub(crate) fn settlement_marker(&self) -> Option<std::sync::Weak<()>> {
-        let Self {
-            _namespace: namespace,
-            ..
-        } = self;
+        let Self { namespace, .. } = self;
         namespace.as_ref().map(|owner| owner.settlement_marker())
     }
 
@@ -27,6 +24,14 @@ impl RetainedConnection {
             .map(|owner| PoolSettlement { owner })
     }
 
+    #[cfg(windows)]
+    pub(crate) fn verify_namespace(&self) -> rusqlite::Result<()> {
+        #[cfg(windows)]
+        if let Some(namespace) = &self.namespace {
+            namespace.verify().map_err(native_error)?;
+        }
+        Ok(())
+    }
     pub(crate) fn read_only(path: &Path) -> rusqlite::Result<Self> {
         Self::open_existing(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
     }
@@ -112,7 +117,7 @@ impl RetainedConnection {
         surge_process::owner_panic::install_owner_panic_protection();
         Self {
             connection: Some(connection),
-            _namespace: namespace,
+            namespace,
         }
     }
     pub(crate) fn open_owned(

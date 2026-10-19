@@ -2489,9 +2489,45 @@ async fn record_suppressed_error(
     Ok(suppressed)
 }
 
+/// Pure debug-selector check. A bare node retains the original first-entry
+/// behavior; `node@N` selects a positive durable occurrence. Release tests
+/// exercise the same input while proving that no selector can request an exit.
+#[cfg(any(debug_assertions, test))]
+fn route_commit_occurrence_matches(
+    selector: Option<&str>,
+    node: &str,
+    current_entry: u64,
+    entries: &[u64],
+    route_committed: bool,
+) -> bool {
+    if !cfg!(debug_assertions) || !route_committed {
+        return false;
+    }
+    let Some(selector) = selector else {
+        return false;
+    };
+    let (target, occurrence) = match selector.rsplit_once('@') {
+        Some((target, count)) => {
+            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+                return false;
+            }
+            let Ok(count) = count.parse::<usize>() else {
+                return false;
+            };
+            (target, count)
+        },
+        None => (selector, 1),
+    };
+    !target.is_empty()
+        && target == node
+        && occurrence > 0
+        && entries.len() == occurrence
+        && entries.last() == Some(&current_entry)
+}
+
 /// Debug-only crash seam after an authenticated route and snapshot commit.
-/// Only the first actual durable entry of the selected node can terminate this
-/// isolated test host. Release builds do not read the selector or exit.
+/// Count only durable entries through this committed prefix. Release builds
+/// do not read the selector or invoke this wrapper.
 #[cfg(debug_assertions)]
 async fn route_commit_exit_if_requested(
     params: &RunTaskParams,
@@ -2500,7 +2536,7 @@ async fn route_commit_exit_if_requested(
     committed: surge_persistence::runs::EventSeq,
 ) {
     let target = std::env::var("SURGE_ROUTE_COMMIT_EXIT").ok();
-    if !checkpoint_exit_matches(target.as_deref(), node.as_str()) {
+    if target.is_none() {
         return;
     }
     let Ok(events) = params
@@ -2510,12 +2546,34 @@ async fn route_commit_exit_if_requested(
     else {
         return;
     };
-    let mut entries = events.iter().filter(|row| {
-        matches!(
-            &row.payload.payload, EventPayload::StageEntered {node:actual,..} if actual==node
-        )
+    let entries: Vec<_> = events
+        .iter()
+        .filter_map(|row| match &row.payload.payload {
+            EventPayload::StageEntered { node: actual, .. } if actual == node => {
+                Some(row.seq.as_u64())
+            },
+            _ => None,
+        })
+        .collect();
+    // The route must be in the actual committed tail, bound to the selected
+    // entry (gate) or to that entry's accepted invocation (agent).
+    let route_committed = events.last().is_some_and(|tail| {
+        tail.seq == committed && match tail.payload.payload() {
+            EventPayload::GateStageRouteCommitted { stage_entry_seq, .. } => *stage_entry_seq == entry.as_u64(),
+            EventPayload::StageRouteCommitted { invocation, outcome_commit_seq } => events.iter().any(|row| {
+                row.seq.as_u64() == *outcome_commit_seq && row.seq > entry && matches!(row.payload.payload(),
+                    EventPayload::StageOutcomeCommitted { commit } if commit.invocation() == *invocation && &commit.context().node == node)
+            }),
+            _ => false,
+        }
     });
-    if entries.next().is_some_and(|row| row.seq == entry) && entries.next().is_none() {
+    if route_commit_occurrence_matches(
+        target.as_deref(),
+        node.as_str(),
+        entry.as_u64(),
+        &entries,
+        route_committed,
+    ) {
         tracing::warn!(target: "engine::fault_injection", %node,
             "SURGE_ROUTE_COMMIT_EXIT hit after committed route; exiting uncleanly (99)");
         std::process::exit(99);
@@ -3486,6 +3544,92 @@ mod tests {
         assert!(!checkpoint_exit_matches(Some("impl_1"), "review_1"));
         assert!(!checkpoint_exit_matches(None, "impl_1"));
         assert!(!checkpoint_exit_matches(Some(""), "impl_1"));
+    }
+
+    #[test]
+    fn route_commit_selector_requires_exact_durable_occurrence_and_route() {
+        let enabled = cfg!(debug_assertions);
+        assert_eq!(
+            route_commit_occurrence_matches(
+                Some("flow_generator"),
+                "flow_generator",
+                10,
+                &[10],
+                true
+            ),
+            enabled
+        );
+        assert_eq!(
+            route_commit_occurrence_matches(
+                Some("flow_generator@1"),
+                "flow_generator",
+                10,
+                &[10],
+                true
+            ),
+            enabled
+        );
+        assert_eq!(
+            route_commit_occurrence_matches(
+                Some("flow_generator@2"),
+                "flow_generator",
+                40,
+                &[10, 40],
+                true
+            ),
+            enabled
+        );
+        assert!(!route_commit_occurrence_matches(
+            Some("flow_generator"),
+            "flow_generator",
+            40,
+            &[10, 40],
+            true
+        ));
+        assert!(!route_commit_occurrence_matches(
+            Some("flow_generator@2"),
+            "flow_generator",
+            10,
+            &[10],
+            true
+        ));
+        assert!(!route_commit_occurrence_matches(
+            Some("flow_generator@2"),
+            "flow_generator",
+            10,
+            &[10, 40],
+            true
+        ));
+        assert!(!route_commit_occurrence_matches(
+            Some("flow_generator@2"),
+            "flow_generator",
+            40,
+            &[10, 40],
+            false
+        ));
+        assert!(!route_commit_occurrence_matches(
+            Some("flow_generator@2"),
+            "flow_gate",
+            40,
+            &[10, 40],
+            true
+        ));
+        for selector in [
+            None,
+            Some(""),
+            Some("@2"),
+            Some("flow_generator@0"),
+            Some("flow_generator@-1"),
+            Some("flow_generator@+2"),
+            Some("flow_generator@"),
+            Some("flow_generator@two"),
+            Some("flow_generator@184467440737095516160"),
+        ] {
+            assert!(
+                !route_commit_occurrence_matches(selector, "flow_generator", 40, &[10, 40], true),
+                "{selector:?}"
+            );
+        }
     }
 
     #[test]

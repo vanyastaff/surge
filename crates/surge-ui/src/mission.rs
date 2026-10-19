@@ -28,6 +28,8 @@ use crate::flow_diagram::{Lane, lane_of};
 pub enum StepState {
     Working,
     WaitingOnYou,
+    /// Recorded refusal stopped this unfinished work.
+    RecoveryRequired,
     Done(String),
     Failed(String),
     /// A journal gap may have changed this unfinished occurrence.
@@ -112,6 +114,33 @@ pub struct PlanStep {
     pub state: PlanState,
 }
 
+/// Whether the recorded parent graph establishes this occurrence's node configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanningAttribution {
+    Available,
+    Unavailable,
+}
+
+/// Actual planning stage identity; attempts are display counters only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanningStep {
+    pub entered: u64,
+    pub(crate) attribution: PlanningAttribution,
+    pub step: Step,
+    pub sessions: Vec<RecordedParticipant>,
+}
+
+/// Independent planning journal facts, never implementation or operation state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanningExecution {
+    pub run: RunId,
+    pub steps: Vec<PlanningStep>,
+    pub through: Option<u64>,
+    pub end: Option<RunEnd>,
+    pub caveats: Vec<String>,
+    pub recovery: surge_core::recovery_observation::RecoveryObservation,
+}
+
 /// How the implementation run ended, if it did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunEnd {
@@ -123,6 +152,7 @@ pub enum RunEnd {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mission {
     pub plan: Vec<PlanStep>,
+    pub planning: Option<PlanningExecution>,
     /// Steps outside any loop (before and after the milestones).
     pub steps: Vec<Step>,
     pub milestones: Vec<MilestoneView>,
@@ -131,6 +161,8 @@ pub struct Mission {
     pub now: Option<String>,
     /// Journal coverage and attribution limitations.
     pub caveats: Vec<String>,
+    /// Shared journal observation, independent of a current subscription.
+    pub recovery: surge_core::recovery_observation::RecoveryObservation,
 }
 
 /// Every node in the graph, subgraphs included.
@@ -270,20 +302,24 @@ pub fn fold(
     implementation: &[RunEvent],
     roadmap: Option<&RoadmapArtifact>,
 ) -> Result<Mission, TaskExecutionError> {
-    if let Some(first) = planning.first() {
-        TaskExecutionView::compile(first.run_id, planning)?;
-    }
     let view = TaskExecutionView::compile(run, implementation)?;
-    Ok(from_execution(planning, &view, implementation, roadmap))
+    from_execution(planning, &view, implementation, roadmap)
 }
 
-/// Present an already compiled execution view; planning seeds are not execution evidence.
+/// Compose a compiled implementation with one validated planning prefix.
 pub(crate) fn from_execution(
     planning: &[RunEvent],
     view: &TaskExecutionView,
     implementation: &[RunEvent],
     roadmap: Option<&RoadmapArtifact>,
-) -> Mission {
+) -> Result<Mission, TaskExecutionError> {
+    let planning_view = planning
+        .first()
+        .map(|first| TaskExecutionView::compile(first.run_id, planning))
+        .transpose()?;
+    let planning_execution = planning_view
+        .as_ref()
+        .map(|view| planning_execution(view, planning));
     let plan_events: Vec<_> = if planning.is_empty() {
         implementation
     } else {
@@ -292,7 +328,17 @@ pub(crate) fn from_execution(
     .iter()
     .map(|event| event.payload.clone())
     .collect();
+    let recovery = if implementation.is_empty() {
+        planning_view
+            .as_ref()
+            .map_or(&view.recovery, |view| &view.recovery)
+            .clone()
+    } else {
+        view.recovery.clone()
+    };
     let mut mission = Mission {
+        recovery,
+        planning: planning_execution,
         plan: fold_plan(&plan_events),
         milestones: seed(roadmap),
         caveats: view
@@ -383,17 +429,201 @@ pub(crate) fn from_execution(
             },
         }
     }
-    mission.end = implementation
-        .iter()
-        .rev()
-        .find_map(|event| match &event.payload {
-            EventPayload::RunCompleted { .. } => Some(RunEnd::Completed),
-            EventPayload::RunFailed { error } => Some(RunEnd::Failed(error.clone())),
-            EventPayload::RunAborted { reason } => Some(RunEnd::Aborted(reason.clone())),
-            _ => None,
-        });
+    mission.end = run_end(implementation);
+    if mission.end.is_none() {
+        let state = if mission.recovery.active().is_some() {
+            Some(StepState::RecoveryRequired)
+        } else if !mission.recovery.is_complete() {
+            Some(StepState::Unknown)
+        } else {
+            None
+        };
+        if let Some(state) = state {
+            pause_unfinished(&mut mission.steps, &state);
+            for milestone in &mut mission.milestones {
+                pause_unfinished(&mut milestone.steps, &state);
+                pause_tasks(&mut milestone.tasks, &state);
+            }
+        }
+    }
     mission.now = now(&mission);
-    mission
+    Ok(mission)
+}
+
+fn run_end(events: &[RunEvent]) -> Option<RunEnd> {
+    events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::RunCompleted { .. } => Some(RunEnd::Completed),
+        EventPayload::RunFailed { error } => Some(RunEnd::Failed(error.clone())),
+        EventPayload::RunAborted { reason } => Some(RunEnd::Aborted(reason.clone())),
+        _ => None,
+    })
+}
+
+fn planning_execution(view: &TaskExecutionView, events: &[RunEvent]) -> PlanningExecution {
+    let graphs = planning_graphs_at_entry(events);
+    let end = run_end(events);
+    let mut caveats: Vec<String> = view.caveats.iter().map(ToString::to_string).collect();
+    if !view.recovery.is_complete() {
+        caveats.push("Planning review records are historical; current review state is unconfirmed after incomplete journal coverage.".into());
+    }
+    let steps = view
+        .stages
+        .iter()
+        .map(|stage| {
+            // Every StageEntered is visible, including unclassifiable/wiring nodes.
+            // The neutral label never infers a bootstrap author role from a profile.
+            let mut step = stage_step(stage, None, end.is_some());
+            step.lane = Lane::Result;
+            step.label = humanize(stage.node.as_str());
+            let node = graphs
+                .get(&stage.entered)
+                .and_then(|graph| graph.find_node(&stage.node));
+            let attribution = if node.is_some() {
+                PlanningAttribution::Available
+            } else {
+                PlanningAttribution::Unavailable
+            };
+            if let Some(node) = node {
+                step.lane = match node.config {
+                    NodeConfig::HumanGate(_) => Lane::Approve,
+                    NodeConfig::Agent(_) => Lane::Plan,
+                    _ => Lane::Result,
+                };
+            } else {
+                caveats.push(format!(
+                    "Planning event {} has no authenticated node configuration attribution.",
+                    stage.entered
+                ));
+            }
+            if end.is_none() && matches!(step.state, StepState::Working | StepState::WaitingOnYou) {
+                if view.recovery.active().is_some() {
+                    step.state = StepState::RecoveryRequired;
+                } else if !view.recovery.is_complete() {
+                    step.state = StepState::Unknown;
+                }
+            }
+            PlanningStep {
+                entered: stage.entered,
+                attribution,
+                step,
+                sessions: stage
+                    .sessions
+                    .iter()
+                    .map(|session| RecordedParticipant {
+                        profile: session.profile.clone(),
+                        runtime: session.runtime.clone(),
+                        session: session.connection,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    PlanningExecution {
+        run: view.run,
+        steps,
+        through: events.last().map(|event| event.seq),
+        end,
+        caveats,
+        recovery: view.recovery.clone(),
+    }
+}
+
+/// The first parent graph is an immutable anchor. Child artifacts cannot replace
+/// it, including after a coverage gap; only a validated predecessor revision can.
+fn planning_graphs_at_entry(events: &[RunEvent]) -> HashMap<u64, Arc<Graph>> {
+    let mut first_seen = false;
+    let mut continuous = true;
+    let mut current: Option<(surge_core::ContentHash, Arc<Graph>)> = None;
+    let mut entries = HashMap::new();
+    let mut previous = 0;
+    for event in events {
+        if event.seq != previous + 1 {
+            current = None;
+            continuous = false;
+        }
+        previous = event.seq;
+        match &event.payload {
+            EventPayload::PipelineMaterialized { graph, graph_hash } if !first_seen => {
+                first_seen = true;
+                if graph.identity().ok() == Some(*graph_hash) && continuous {
+                    current = Some((
+                        *graph_hash,
+                        Arc::new(surge_core::escalation::with_default_escalation_gates(graph)),
+                    ));
+                }
+            },
+            EventPayload::GraphRevisionAccepted {
+                graph,
+                graph_hash,
+                previous_graph_hash,
+                ..
+            } => {
+                current = match current {
+                    Some((hash, _))
+                        if hash == *previous_graph_hash
+                            && graph.identity().ok() == Some(*graph_hash) =>
+                    {
+                        Some((
+                            *graph_hash,
+                            Arc::new(surge_core::escalation::with_default_escalation_gates(graph)),
+                        ))
+                    },
+                    _ => None,
+                };
+            },
+            EventPayload::StageEntered { .. } => {
+                if let Some((_, graph)) = &current {
+                    entries.insert(event.seq, Arc::clone(graph));
+                }
+            },
+            _ => {},
+        }
+    }
+    entries
+}
+
+/// Literal journal problem text, with independent confirmation/coverage caveats.
+pub(crate) fn recovery_problem(
+    recovery: &surge_core::recovery_observation::RecoveryObservation,
+    confirmation_unknown: bool,
+) -> Option<String> {
+    let recorded = recovery.latest()?;
+    let status = if !recovery.is_complete() {
+        "Recorded recovery request · current state unconfirmed (partial history)"
+    } else if confirmation_unknown {
+        "Recorded recovery request · outcome and cleanup confirmation unconfirmed"
+    } else if recovery.active().is_some() {
+        "Recovery requires review"
+    } else {
+        "Historical recovery request"
+    };
+    Some(format!(
+        "{status} · event {}\n{}",
+        recorded.seq,
+        surge_core::recovery_observation::recovery_diagnostic(&recorded.diagnostic)
+    ))
+}
+
+fn pause_unfinished(steps: &mut [Step], state: &StepState) {
+    for step in steps {
+        if matches!(step.state, StepState::Working | StepState::WaitingOnYou) {
+            step.state = state.clone();
+        }
+    }
+}
+
+fn pause_tasks(tasks: &mut [TaskView], state: &StepState) {
+    for task in tasks {
+        pause_unfinished(&mut task.steps, state);
+        if task.iteration == IterationState::Running {
+            task.iteration = if *state == StepState::Unknown {
+                IterationState::Unknown
+            } else {
+                IterationState::Unfinished
+            };
+        }
+        pause_tasks(&mut task.subtasks, state);
+    }
 }
 
 fn graphs_at_entry(events: &[RunEvent]) -> HashMap<u64, Arc<Graph>> {
@@ -528,6 +758,10 @@ fn step_view(stage: &StageExecution, graph: Option<&Graph>, terminal: bool) -> O
     if node.is_some_and(|node| !is_work(node)) {
         return None;
     }
+    Some(stage_step(stage, node, terminal))
+}
+
+fn stage_step(stage: &StageExecution, node: Option<&Node>, terminal: bool) -> Step {
     let state = if let Some(error) = &stage.failure {
         StepState::Failed(error.clone())
     } else if let Some((_, outcome)) = &stage.result {
@@ -546,7 +780,7 @@ fn step_view(stage: &StageExecution, graph: Option<&Graph>, terminal: bool) -> O
         runtime: session.runtime.clone(),
         session: session.connection,
     });
-    Some(Step {
+    Step {
         node: stage.node.as_str().into(),
         label: step_label(stage.node.as_str(), node),
         lane: node.map_or(Lane::Build, lane_of),
@@ -556,7 +790,7 @@ fn step_view(stage: &StageExecution, graph: Option<&Graph>, terminal: bool) -> O
         participant,
         inputs: stage.inputs.clone(),
         skills: stage.skills.clone(),
-    })
+    }
 }
 fn push_step(steps: &mut Vec<Step>, step: Step) {
     if steps.last().is_some_and(|previous| {
@@ -578,8 +812,24 @@ pub(crate) fn fixture_fold(
 ) -> Mission {
     let run: RunId = "run-00000000000000000000000001".parse().unwrap();
     let envelopes = |events: &[EventPayload]| {
-        events
-            .iter()
+        if events.is_empty() {
+            return Vec::new();
+        }
+        let startup = EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: "/project".into(),
+            initial_prompt: "mission fixture".into(),
+            config: surge_core::RunConfig {
+                budget: Default::default(),
+                sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                auto_pr: false,
+                mcp_servers: Vec::new(),
+                bootstrap_edit_loop_cap: None,
+            },
+        };
+        std::iter::once(&startup)
+            .chain(events.iter())
             .enumerate()
             .map(|(index, payload)| RunEvent {
                 run_id: run,
@@ -657,6 +907,122 @@ mod tests {
     use surge_core::keys::{NodeKey, OutcomeKey};
     use surge_core::roadmap::RoadmapStatus;
     use surge_core::{BootstrapDecision, BootstrapStage, ContentHash, EventPayload};
+
+    #[test]
+    fn recovery_observability_mission_pauses_preserving_nonterminal_history() {
+        let mission = fold(
+            &[],
+            &[
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph()),
+                    graph_hash: ContentHash::compute(b"mission"),
+                },
+                EventPayload::StageEntered {
+                    node: key("impl_task"),
+                    attempt: 1,
+                },
+                EventPayload::RunRecoveryRequired {
+                    control_generation: 0,
+                    diagnostic: "durable conflict [click](https://example.test)".into(),
+                },
+            ],
+            None,
+        );
+        assert!(mission.end.is_none());
+        assert!(mission.now.is_none());
+        assert!(
+            mission
+                .steps
+                .iter()
+                .chain(
+                    mission
+                        .milestones
+                        .iter()
+                        .flat_map(|milestone| &milestone.steps)
+                )
+                .any(|step| step.state == StepState::RecoveryRequired)
+        );
+        let problem = super::recovery_problem(&mission.recovery, true).unwrap();
+        assert!(problem.contains("confirmation unconfirmed"));
+        assert!(problem.contains("durable conflict [click](https://example.test)"));
+        assert!(problem.contains("event 4"));
+    }
+
+    #[test]
+    fn recovery_observability_missing_start_and_gap_never_claim_current_worker() {
+        let run = surge_core::RunId::new();
+        let event = |seq, payload| surge_core::RunEvent {
+            run_id: run,
+            seq,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            payload,
+        };
+        for sequences in [[1, 2, 3], [2, 3, 5]] {
+            let events = [
+                event(
+                    sequences[0],
+                    EventPayload::PipelineMaterialized {
+                        graph: Box::new(graph()),
+                        graph_hash: ContentHash::compute(b"partial"),
+                    },
+                ),
+                event(
+                    sequences[1],
+                    EventPayload::StageEntered {
+                        node: key("impl_task"),
+                        attempt: 1,
+                    },
+                ),
+                event(
+                    sequences[2],
+                    EventPayload::RunRecoveryRequired {
+                        control_generation: 0,
+                        diagnostic: "retained partial diagnostic".into(),
+                    },
+                ),
+            ];
+            let mission = super::fold(&[], run, &events, None).unwrap();
+            assert!(mission.now.is_none());
+            assert!(mission.end.is_none());
+            assert!(
+                mission
+                    .steps
+                    .iter()
+                    .chain(
+                        mission
+                            .milestones
+                            .iter()
+                            .flat_map(|milestone| &milestone.steps)
+                    )
+                    .any(|step| step.state == StepState::Unknown)
+            );
+            assert!(mission.recovery.active().is_none());
+            assert!(
+                super::recovery_problem(&mission.recovery, false)
+                    .unwrap()
+                    .contains("partial history")
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_observability_planning_only_problem_survives_without_child() {
+        let mission = fold(
+            &[EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: "planning refused".into(),
+            }],
+            &[],
+            None,
+        );
+        assert!(mission.recovery.active().is_some());
+        assert!(
+            super::recovery_problem(&mission.recovery, false)
+                .unwrap()
+                .contains("planning refused")
+        );
+        assert!(mission.end.is_none());
+    }
 
     fn graph() -> surge_core::graph::Graph {
         toml::from_str(include_str!("../testdata/nested_loops_flow.toml")).expect("fixture parses")
@@ -1347,5 +1713,346 @@ mod tests {
         assert_eq!(second_child.participant.as_ref().unwrap().session, second);
         assert_eq!(second_child.inputs.as_ref().unwrap(), &["second-context"]);
         assert_eq!(second_child.skills, ["second-skill"]);
+    }
+}
+
+#[cfg(test)]
+mod planning_tests {
+    use super::*;
+    use surge_core::{ContentHash, SessionId};
+
+    fn envelope(run: RunId, seq: u64, payload: EventPayload) -> RunEvent {
+        RunEvent {
+            run_id: run,
+            seq,
+            timestamp: chrono::Utc::now(),
+            payload,
+        }
+    }
+    fn enter(node: &str, attempt: u32) -> EventPayload {
+        EventPayload::StageEntered {
+            node: node.parse().unwrap(),
+            attempt,
+        }
+    }
+    fn materialized(graph: &Graph) -> EventPayload {
+        EventPayload::PipelineMaterialized {
+            graph: Box::new(graph.clone()),
+            graph_hash: graph.identity().unwrap(),
+        }
+    }
+    fn revision(previous: ContentHash, graph: &Graph) -> EventPayload {
+        EventPayload::GraphRevisionAccepted {
+            patch_id: surge_core::roadmap_patch::RoadmapPatchId::new("rpatch-planning").unwrap(),
+            target: surge_core::roadmap_patch::RoadmapPatchTarget::ProjectRoadmap {
+                roadmap_path: "roadmap.toml".into(),
+            },
+            previous_graph_hash: previous,
+            graph: Box::new(graph.clone()),
+            graph_hash: graph.identity().unwrap(),
+            active_pickup: surge_core::roadmap_patch::ActivePickupPolicy::Allowed,
+        }
+    }
+    fn rows(payloads: Vec<EventPayload>) -> Vec<RunEvent> {
+        let run = RunId::new();
+        payloads
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| envelope(run, i as u64 + 1, p))
+            .collect()
+    }
+    fn compose(events: &[RunEvent]) -> Mission {
+        super::fold(events, RunId::new(), &[], None).unwrap()
+    }
+    fn parent() -> Graph {
+        surge_core::BundledFlows::by_name_latest("bootstrap")
+            .unwrap()
+            .graph
+    }
+    fn collision(parent: &Graph) -> Graph {
+        let mut child = parent.clone();
+        child.metadata.name = "Generated child same node IDs".into();
+        let gate = parent
+            .nodes
+            .values()
+            .find(|n| matches!(n.config, NodeConfig::HumanGate(_)))
+            .unwrap()
+            .config
+            .clone();
+        child
+            .nodes
+            .get_mut(&"description_author".parse().unwrap())
+            .unwrap()
+            .config = gate;
+        child
+    }
+
+    #[test]
+    fn planning_keeps_each_reentry_and_all_sessions_without_inferred_approval() {
+        let first = SessionId::new();
+        let second = SessionId::new();
+        let opened = |session| EventPayload::SessionOpened {
+            opened: None,
+            handoff: None,
+            node: "description_author".parse().unwrap(),
+            session,
+            agent: "actual-recorded-profile@1.0".into(),
+            agent_id: Some("runtime".into()),
+        };
+        let events = rows(vec![
+            materialized(&parent()),
+            enter("description_author", 1),
+            opened(first),
+            opened(second),
+            EventPayload::StageCompleted {
+                node: "description_author".parse().unwrap(),
+                outcome: "pass".parse().unwrap(),
+            },
+            enter("description_author", 2),
+        ]);
+        let mission = compose(&events);
+        let planning = mission.planning.unwrap();
+        assert_eq!(planning.run, events[0].run_id);
+        assert_eq!(planning.through, Some(6));
+        assert_eq!(
+            planning.steps.iter().map(|s| s.entered).collect::<Vec<_>>(),
+            [2, 6]
+        );
+        assert_eq!(
+            planning.steps[0]
+                .sessions
+                .iter()
+                .map(|s| s.session)
+                .collect::<Vec<_>>(),
+            [first, second]
+        );
+        assert_eq!(planning.steps[0].step.label, "Description author");
+        assert_eq!(planning.steps[1].step.attempts, 2);
+        assert_eq!(planning.steps[0].step.state, StepState::Done("pass".into()));
+        assert_eq!(mission.plan[0].state, PlanState::NotStarted);
+    }
+
+    #[test]
+    fn planning_child_materializations_never_replace_parent_or_restore_after_gap() {
+        let parent = parent();
+        let child = collision(&parent);
+        let events = rows(vec![
+            materialized(&parent),
+            enter("description_author", 1),
+            materialized(&child),
+            enter("description_author", 2),
+        ]);
+        let planning = compose(&events).planning.unwrap();
+        assert_eq!(planning.steps[0].step.lane, Lane::Plan);
+        assert_eq!(planning.steps[1].step.lane, Lane::Plan);
+        let mut gap = events.clone();
+        gap[2].seq = 8;
+        gap[3].seq = 9;
+        let planning = compose(&gap).planning.unwrap();
+        assert_eq!(
+            planning.steps[1].step.lane,
+            Lane::Result,
+            "unavailable planning attribution must remain neutral"
+        );
+        assert!(
+            planning
+                .caveats
+                .iter()
+                .any(|c| c.contains("no authenticated node configuration"))
+        );
+        assert!(
+            planning
+                .caveats
+                .iter()
+                .any(|c| c.contains("current review state is unconfirmed"))
+        );
+    }
+
+    #[test]
+    fn planning_revision_needs_exact_predecessor_and_content_hash() {
+        let parent = parent();
+        let revised = collision(&parent);
+        let events = rows(vec![
+            materialized(&parent),
+            enter("description_author", 1),
+            revision(parent.identity().unwrap(), &revised),
+            enter("description_author", 2),
+        ]);
+        let planning = compose(&events).planning.unwrap();
+        assert_eq!(planning.steps[0].step.lane, Lane::Plan);
+        assert_eq!(planning.steps[1].step.lane, Lane::Approve);
+        for corrupt_hash in [false, true] {
+            let mut events = events.clone();
+            let EventPayload::GraphRevisionAccepted {
+                graph_hash,
+                previous_graph_hash,
+                ..
+            } = &mut events[2].payload
+            else {
+                panic!("revision")
+            };
+            if corrupt_hash {
+                *graph_hash = ContentHash::compute(b"corrupt");
+            } else {
+                *previous_graph_hash = ContentHash::compute(b"foreign lineage");
+            }
+            let planning = compose(&events).planning.unwrap();
+            assert_eq!(
+                planning.steps[1].step.lane,
+                Lane::Result,
+                "invalid predecessor/content withdraws role attribution"
+            );
+            assert!(
+                planning
+                    .caveats
+                    .iter()
+                    .any(|c| c.contains("event 4 has no authenticated"))
+            );
+        }
+    }
+
+    #[test]
+    fn planning_failure_terminal_and_recovery_remain_independent_of_child() {
+        let events = rows(vec![
+            enter("author", 1),
+            EventPayload::StageFailed {
+                node: "author".parse().unwrap(),
+                reason: "recorded author failure".into(),
+                retry_available: true,
+            },
+            enter("author", 2),
+            EventPayload::RunCompleted {
+                terminal_node: "end".parse().unwrap(),
+            },
+        ]);
+        let mission = compose(&events);
+        let planning = mission.planning.unwrap();
+        assert_eq!(
+            planning.steps[0].step.state,
+            StepState::Failed("recorded author failure".into())
+        );
+        assert_eq!(planning.steps[1].step.state, StepState::Unfinished);
+        assert_eq!(planning.end, Some(RunEnd::Completed));
+        assert_eq!(mission.end, None);
+        let events = rows(vec![
+            enter("author", 1),
+            EventPayload::RunRecoveryRequired {
+                control_generation: 0,
+                diagnostic: "planning recovery reason".into(),
+            },
+        ]);
+        let planning = compose(&events).planning.unwrap();
+        assert_eq!(planning.steps[0].step.state, StepState::Unknown);
+        assert!(
+            !planning.recovery.is_complete(),
+            "missing RunStarted is not a complete prefix"
+        );
+        let payloads: Vec<_> = events.iter().map(|event| event.payload.clone()).collect();
+        let planning = super::fixture_fold(&payloads, &[], None).planning.unwrap();
+        assert_eq!(planning.steps[0].step.state, StepState::RecoveryRequired);
+        assert!(planning.recovery.active().is_some());
+    }
+
+    #[test]
+    fn planning_reviews_are_typed_historical_facts_with_legacy_drafting_control() {
+        let mut events = rows(vec![
+            enter("author", 1),
+            EventPayload::BootstrapStageStarted {
+                stage: BootstrapStage::Description,
+            },
+            EventPayload::BootstrapApprovalRequested {
+                stage: BootstrapStage::Description,
+                channel: surge_core::approvals::ApprovalChannel::Email {
+                    to_ref: "reviewer".into(),
+                },
+            },
+            EventPayload::BootstrapApprovalDecided {
+                stage: BootstrapStage::Description,
+                decision: BootstrapDecision::Edit,
+                comment: None,
+            },
+            enter("author", 2),
+            EventPayload::BootstrapApprovalDecided {
+                stage: BootstrapStage::Description,
+                decision: BootstrapDecision::Approve,
+                comment: None,
+            },
+        ]);
+        assert_eq!(
+            compose(&events[..2]).plan[0].state,
+            PlanState::Drafting { edits: 0 }
+        );
+        assert_eq!(
+            compose(&events[..3]).plan[0].state,
+            PlanState::AwaitingYou { edits: 0 }
+        );
+        assert_eq!(
+            compose(&events[..4]).plan[0].state,
+            PlanState::Drafting { edits: 1 }
+        );
+        assert_eq!(
+            compose(&events).plan[0].state,
+            PlanState::Approved { edits: 1 }
+        );
+        events[5].seq = 9;
+        let mission = compose(&events);
+        assert_eq!(mission.plan[0].state, PlanState::Approved { edits: 1 });
+        assert!(
+            mission
+                .planning
+                .unwrap()
+                .caveats
+                .iter()
+                .any(|c| c.contains("historical"))
+        );
+        events.push(envelope(
+            events[0].run_id,
+            10,
+            EventPayload::BootstrapApprovalDecided {
+                stage: BootstrapStage::Description,
+                decision: BootstrapDecision::Reject,
+                comment: None,
+            },
+        ));
+        assert_eq!(compose(&events).plan[0].state, PlanState::Rejected);
+    }
+
+    #[test]
+    fn planning_repair4_missing_configuration_is_neutral_without_session_role_inference() {
+        let mission = super::fixture_fold(&[enter("unknown_work", 1)], &[], None);
+        let planning = mission.planning.unwrap();
+        let occurrence = &planning.steps[0];
+        assert_eq!(occurrence.entered, 2);
+        assert_eq!(occurrence.step.node, "unknown_work");
+        assert_eq!(occurrence.step.label, "Unknown work");
+        assert_eq!(occurrence.step.state, StepState::Working);
+        assert!(occurrence.sessions.is_empty());
+        assert!(occurrence.step.participant.is_none());
+        assert!(planning.recovery.is_complete());
+        assert_eq!(occurrence.attribution, PlanningAttribution::Unavailable);
+        assert!(
+            planning
+                .caveats
+                .iter()
+                .any(|c| c.contains("no authenticated node configuration attribution"))
+        );
+        assert_eq!(occurrence.step.lane, Lane::Result);
+    }
+
+    #[test]
+    fn shared_adapter_propagates_planning_envelope_errors() {
+        let mut events = rows(vec![enter("author", 1), enter("author", 2)]);
+        let child = TaskExecutionView::compile(RunId::new(), &[]).unwrap();
+        events[1].run_id = RunId::new();
+        assert!(matches!(
+            from_execution(&events, &child, &[], None),
+            Err(TaskExecutionError::ForeignRun { seq: 2 })
+        ));
+        events[1].run_id = events[0].run_id;
+        events[1].seq = 1;
+        assert!(matches!(
+            from_execution(&events, &child, &[], None),
+            Err(TaskExecutionError::Sequence { .. })
+        ));
     }
 }

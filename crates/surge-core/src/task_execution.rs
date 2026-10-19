@@ -262,6 +262,9 @@ pub struct TaskExecutionView {
     pub caveats: Vec<ExecutionCaveat>,
     /// Terminal event, when observed; never evidence of verified task completion.
     pub terminal: Option<(u64, String)>,
+    /// Shared recovery history; absent legacy data is explicitly not loaded.
+    #[serde(default)]
+    pub recovery: crate::recovery_observation::RecoveryObservation,
 }
 impl TaskExecutionView {
     /// Compile only recorded envelopes, without I/O, randomness or live state.

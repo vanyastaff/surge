@@ -350,7 +350,14 @@ impl RunRow {
         self.live_stream = stream.live;
         let display = stream.display();
         self.status_label = display.label();
-        self.waiting_detail = display.next_action().map(ToOwned::to_owned);
+        self.waiting_detail = if display == surge_core::run_display::RunDisplayState::Unknown {
+            stream
+                .recorded_host_loss_detail()
+                .or_else(|| display.next_action())
+        } else {
+            display.next_action()
+        }
+        .map(ToOwned::to_owned);
         if let Some((until, basis)) = display.wake()
             && let Some(detail) = &mut self.waiting_detail
         {
@@ -373,6 +380,24 @@ impl RunRow {
         }
         if !stream.stages.is_empty() {
             self.stages = stream.stages.iter().map(stage_from_stream).collect();
+        }
+        if matches!(
+            display,
+            surge_core::run_display::RunDisplayState::Waiting(
+                surge_core::run_display::WaitingReason::RecoveryRequired
+            ) | surge_core::run_display::RunDisplayState::Unknown
+        ) {
+            for stage in &mut self.stages {
+                if stage.state == StageState::Running {
+                    stage.state = StageState::Unfinished;
+                    stage.sub = if stream.recovery().active().is_some() {
+                        "paused · recovery requires review"
+                    } else {
+                        "last recorded progress · current state unconfirmed"
+                    }
+                    .into();
+                }
+            }
         }
         if !stream.log.is_empty() {
             self.event_rows = stream
@@ -476,6 +501,10 @@ pub struct RunsScreen {
     guidance: HashMap<GuidanceKey, GuidanceDraft>,
     #[cfg(test)]
     controlled_guidance: Option<ControlledGuidance>,
+    #[cfg(test)]
+    results_home: Option<PathBuf>,
+    #[cfg(test)]
+    results_active_loads: std::rc::Rc<std::cell::Cell<usize>>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
     tab: RunTab,
@@ -504,7 +533,7 @@ pub enum RunsEvent {
 impl EventEmitter<RunsEvent> for RunsScreen {}
 
 /// Plain-language bootstrap phase.
-fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'static str {
+pub(crate) fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'static str {
     use surge_core::bootstrap_operation::BootstrapPhase as P;
     match phase {
         P::QueuedPlanning => "waiting to plan",
@@ -517,7 +546,7 @@ fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'stat
 }
 
 /// Why a build stopped for you, and what fixes it.
-fn attention_reason(
+pub(crate) fn attention_reason(
     reason: surge_core::bootstrap_operation::BootstrapAttentionReason,
 ) -> (&'static str, &'static str) {
     use surge_core::bootstrap_operation::BootstrapAttentionReason as R;
@@ -550,9 +579,13 @@ fn attention_reason(
             "The remaining budget could not be confirmed",
             "Check the agent's quota or budget, then retry.",
         ),
+        R::RecoveryRequired => (
+            "Recovery requires review",
+            "Inspect recorded history before choosing how to recover. No retry has been authorized.",
+        ),
         R::StorageUnconfirmed => (
-            "The result could not be recorded",
-            "Check free disk space in the Surge home folder, then retry.",
+            "The run outcome is unconfirmed",
+            "Inspect recorded history and the connection or storage error before retrying.",
         ),
     }
 }
@@ -589,6 +622,10 @@ impl RunsScreen {
             guidance: HashMap::new(),
             #[cfg(test)]
             controlled_guidance: None,
+            #[cfg(test)]
+            results_home: None,
+            #[cfg(test)]
+            results_active_loads: Default::default(),
             action_note: None,
             tab: RunTab::Overview,
             recorded_target: None,
@@ -667,19 +704,6 @@ impl RunsScreen {
                 row
             })
             .collect();
-        // One idea is one entry: a planning run whose build run is listed is
-        // shown through that build run (Overview shows both).
-        let listed: std::collections::HashSet<RunId> =
-            rows.iter().filter_map(|r| r.run_id).collect();
-        rows.retain(|r| {
-            let Some(id) = r.run_id else { return true };
-            Some(id) == self.selected
-                || !state.bootstrap_operations.values().any(|op| {
-                    op.planning_run == id
-                        && op.implementation_run != id
-                        && listed.contains(&op.implementation_run)
-                })
-        });
         rows.sort_by_key(|r| r.rank);
         let sel = match self.selected {
             Some(id) => rows.iter().position(|row| row.run_id == Some(id)),
@@ -940,14 +964,27 @@ impl RunsScreen {
         for (i, row) in rows.iter().enumerate() {
             let is_sel = Some(i) == sel;
             let run_id = row.run_id;
+            let kind = self.selected_bootstrap(row, cx).map(|(_, status)| {
+                if row.run_id == Some(status.planning_run) {
+                    "Planning"
+                } else {
+                    "Implementation"
+                }
+            });
             let item = div()
                 .id(SharedString::from(format!(
                     "run-row-{}",
                     row.run_id
                         .map_or_else(|| row.id_label.clone(), |id| id.to_string())
                 )))
+                .test_support()
                 .role(Role::Button)
-                .aria_label(format!("{}, {}", row.title, row.status_label))
+                .aria_label(format!(
+                    "{}{}, {}",
+                    kind.map_or(String::new(), |kind| format!("{kind} · ")),
+                    row.title,
+                    row.status_label
+                ))
                 .v_flex()
                 .gap(px(4.0))
                 .px(px(10.0))
@@ -993,6 +1030,7 @@ impl RunsScreen {
                                 .child(row.title.clone()),
                         ),
                 )
+                .children(kind.map(ui::meta))
                 .child(
                     div()
                         .h_flex()
@@ -1030,7 +1068,14 @@ impl RunsScreen {
                     .px(px(16.0))
                     .pt(px(14.0))
                     .pb(px(10.0))
-                    .child(ui::section_label(format!("Missions · {}", rows.len())).flex_1())
+                    .child(
+                        ui::section_label(format!("Runs · {}", rows.len()))
+                            .id("runs-count")
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(format!("Runs · {}", rows.len()))
+                            .flex_1(),
+                    )
                     .when(needs > 0, |el| {
                         el.child(ui::role_badge(
                             format!("{needs} need you"),
@@ -1053,55 +1098,55 @@ impl RunsScreen {
         surge_core::bootstrap_operation::BootstrapOperationStatus,
     )> {
         let id = row.run_id?;
-        self.state
-            .read(cx)
+        let state = self.state.read(cx);
+        let mut matching = state
             .bootstrap_operations
-            .iter()
-            .find_map(|(operation_id, status)| {
-                (status.planning_run == id || status.implementation_run == id)
-                    .then_some((*operation_id, status.clone()))
+            .values()
+            .filter(|status| [status.planning_run, status.implementation_run].contains(&id));
+        let cached = matching.next();
+        if matching.next().is_some() {
+            return None;
+        }
+        cached
+            .cloned()
+            .or_else(|| {
+                self.mission
+                    .as_ref()
+                    .and_then(|panel| {
+                        let panel = panel.read(cx);
+                        (panel.request().project == state.project_path)
+                            .then(|| panel.operation_for(id))
+                            .flatten()
+                    })
+                    .cloned()
             })
+            .map(|status| (status.operation_id, status))
     }
 
-    /// The planning + implementation runs this row stands for.
-    fn mission_runs(&self, row: &RunRow, cx: &Context<Self>) -> Option<run_mission::MissionRuns> {
-        let run = row.run_id?;
-        Some(match self.selected_bootstrap(row, cx) {
-            Some((_, status)) => run_mission::MissionRuns {
-                planning: Some(status.planning_run),
-                implementation: status.implementation_run,
-            },
-            None => run_mission::MissionRuns {
-                planning: None,
-                implementation: run,
-            },
+    /// Resolve operation ownership from disk when Results loads, including cold history.
+    fn mission_request(
+        &self,
+        row: &RunRow,
+        cx: &Context<Self>,
+    ) -> Option<run_mission::MissionRequest> {
+        Some(run_mission::MissionRequest {
+            selected: row.run_id?,
+            project: self.state.read(cx).project_path.clone(),
         })
     }
 
-    /// Title, one status, one line of facts, and the actions — nothing
-    /// said twice.
+    /// Selected run lifecycle and independently attributed operation phase.
     fn render_header(&self, row: &RunRow, live: bool, cx: &mut Context<Self>) -> Div {
-        use surge_core::bootstrap_operation::BootstrapState as B;
         let bootstrap = self.selected_bootstrap(row, cx);
 
-        // One status: the build's when this run belongs to one, else the run's.
-        let (status_text, status_color) = match bootstrap.as_ref().map(|(_, s)| &s.state) {
-            Some(B::Pending { phase }) => (phase_label(*phase).to_string(), theme::accent()),
-            Some(B::NeedsAttention { .. }) => ("needs you".to_string(), theme::warning()),
-            Some(B::Cancelling { .. }) => ("cancelling".to_string(), theme::warning()),
-            _ => (row.status_label.to_string(), row.color),
-        };
-        let (status_text, status_color) = if row.waiting_detail.is_some() {
-            (row.status_label.to_string(), row.color)
-        } else {
-            (status_text, status_color)
-        };
+        let (status_text, status_color) = (row.status_label.to_string(), row.color);
         let cancellable = bootstrap
             .as_ref()
             .is_some_and(|(_, s)| s.state.phase().is_some() && !s.cancel_requested);
 
         let mut facts: Vec<String> = vec![
-            row.id_label.clone(),
+            row.run_id
+                .map_or_else(|| row.id_label.clone(), |id| id.to_string()),
             format!("started {}", row.started),
             format!("{} elapsed", row.elapsed),
             format!("{} events", row.events),
@@ -1198,14 +1243,33 @@ impl RunsScreen {
                                     .truncate()
                                     .child(row.title.clone()),
                             )
-                            .child(ui::pill(
-                                status_text,
-                                status_color,
-                                theme::tint(status_color),
-                            )),
+                            .child(
+                                ui::pill(
+                                    status_text.clone(),
+                                    status_color,
+                                    theme::tint(status_color),
+                                )
+                                .id("selected-run-status")
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(status_text),
+                            ),
                     )
+                    .children(bootstrap.as_ref().map(|(_, status)| {
+                        let message = run_mission::operation_message(status);
+                        div()
+                            .id("selected-operation-status")
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(message.clone())
+                            .child(ui::meta(message))
+                    }))
                     .child(
                         div()
+                            .id("run-header-facts")
+                            .test_support()
+                            .role(Role::Group)
+                            .aria_label(facts.join("  ·  "))
                             .text_size(px(10.5))
                             .text_color(theme::text_dim())
                             .child(facts.join("  ·  ")),
@@ -1219,10 +1283,25 @@ impl RunsScreen {
     fn render_attention(&self, row: &RunRow, cx: &mut Context<Self>) -> Option<Div> {
         use surge_core::bootstrap_operation::BootstrapState as B;
         let (operation_id, status) = self.selected_bootstrap(row, cx)?;
-        let B::NeedsAttention { phase, reason, .. } = status.state else {
+        let B::NeedsAttention {
+            phase,
+            reason,
+            run_id,
+        } = status.state
+        else {
             return None;
         };
         let (what, fix) = attention_reason(reason);
+        let recovery = run_id.and_then(|run_id| self.state.read(cx).run_streams.get(&run_id))
+            .and_then(|stream| crate::mission::recovery_problem(stream.recovery(),
+                reason == surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed));
+        let recovery = recovery.or_else(|| {
+            (reason == surge_core::bootstrap_operation::BootstrapAttentionReason::RecoveryRequired)
+                .then(|| {
+                    "Recorded recovery diagnostic is unavailable; inspect the run history."
+                        .to_string()
+                })
+        });
         let revision = status.revision;
         Some(
             ui::node_card(theme::warning())
@@ -1256,7 +1335,19 @@ impl RunsScreen {
                                 .text_size(px(11.0))
                                 .text_color(theme::text_muted())
                                 .child(fix),
-                        ),
+                        )
+                        .when_some(recovery, |el, message| {
+                            el.child(
+                                div()
+                                    .id("run-recovery-problem")
+                                    .test_support()
+                                    .role(Role::Group)
+                                    .aria_label(message.clone())
+                                    .text_size(px(11.0))
+                                    .text_color(theme::warning())
+                                    .child(message),
+                            )
+                        }),
                 )
                 .when(!status.cancel_requested, |el| {
                     el.child(
@@ -1361,6 +1452,7 @@ impl RunsScreen {
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("run-tab-{label}")))
+                    .test_support()
                     .role(Role::Tab)
                     .aria_label(label)
                     .h_flex()
@@ -1648,6 +1740,7 @@ impl RunsScreen {
                 body = body.child(
                     div()
                         .id(("run-event", index))
+                        .test_support()
                         .role(Role::Label)
                         .aria_label(format!("{} {} {}", e.t, e.kind, e.text))
                         .h_flex()
@@ -1849,19 +1942,32 @@ impl Render for RunsScreen {
                     if matches!(self.recorded_target,Some((run,RecordedTarget::Stage{..})) if row.run_id==Some(run))
                     {
                         main = main.child(self.render_recorded_stage(cx));
-                    } else if let Some(runs) = self.mission_runs(row, cx) {
+                    } else if let Some(request) = self.mission_request(row, cx) {
                         let stale = self
                             .mission
                             .as_ref()
-                            .is_none_or(|panel| panel.read(cx).runs() != runs);
+                            .is_none_or(|panel| panel.read(cx).request() != &request);
                         if stale {
+                            let home = surge_core::home::surge_home_dir();
+                            #[cfg(test)]
+                            let home = self.results_home.clone().or(home);
                             self.mission = Some(cx.new(|cx| {
-                                run_mission::MissionPanel::new(runs, self.task_focus.clone(), cx)
+                                run_mission::MissionPanel::new(
+                                    home,
+                                    request,
+                                    self.task_focus.clone(),
+                                    #[cfg(test)]
+                                    self.results_active_loads.clone(),
+                                    cx,
+                                )
                             }));
                         }
                         if let Some(panel) = &self.mission {
-                            let seq = row.events.clone();
-                            panel.update(cx, |panel, cx| panel.sync(&seq, cx));
+                            let state = self.state.clone();
+                            panel.update(cx, |panel, cx| {
+                                let refresh = panel.refresh_key(state.read(cx));
+                                panel.sync(refresh, cx);
+                            });
                             main = main.child(panel.clone());
                         }
                     }
@@ -2406,5 +2512,226 @@ mod usage_completeness_tests {
         let usage = RunUsage::from_stream(&stream);
         assert_eq!(usage.token_label(), "10 in · 5 out tokens");
         assert_eq!(usage.cost_label(), "$0.50");
+    }
+}
+
+#[cfg(test)]
+mod recovery_observability_tests {
+    #[gpui_kit::test]
+    fn recovery_observability_known_crash_and_stream_error_keep_native_recorded_fact(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+        use surge_orchestrator::engine::handle::EngineRunEvent;
+        cx.update(gpui_kit::init);
+        let run = surge_core::RunId::new();
+        let mut stream = crate::run_stream::RunStreamState::default();
+        stream.live = true;
+        stream.apply(&EngineRunEvent::StreamError {
+            message: "journal read unavailable".into(),
+        });
+        stream.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        assert!(!stream.live);
+        assert_eq!(stream.display().label(), "Run state is unconfirmed");
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let screen = cx.new(|cx| {
+            let mut screen = super::RunsScreen::new(state, cx);
+            screen.selected = Some(run);
+            screen.tab = super::RunTab::Log;
+            screen
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            let rail = window
+                .find(format!("run-row-{run}"))
+                .label()
+                .unwrap()
+                .to_owned();
+            assert!(rail.contains("Run state is unconfirmed"));
+            let facts = window.find("run-header-facts").label().unwrap().to_owned();
+            assert!(
+                facts.contains("Recorded loss of daemon ownership"),
+                "known registry fact missing from rendered card: {facts}"
+            );
+            assert!(facts.contains("current observation is unconfirmed"));
+            screen.update(cx, |screen, cx| {
+                let (rows, _, _) = screen.rows(cx);
+                let row = rows.iter().find(|row| row.run_id == Some(run)).unwrap();
+                assert!(!row.live_stream);
+                assert!(
+                    row.stages
+                        .iter()
+                        .all(|stage| stage.state != super::StageState::Running)
+                );
+                assert!(!row.status_label.contains("Running"));
+                assert!(!row.waiting_detail.as_ref().unwrap().contains("settled"));
+            });
+        });
+    }
+
+    #[test]
+    fn recovery_observability_known_crash_detail_preserves_neutral_fresh_and_terminal_states() {
+        use surge_core::EventPayload;
+        use surge_orchestrator::engine::handle::{EngineRunEvent, RunStatus};
+        let run = surge_core::RunId::new();
+        let row_for = |stream: &crate::run_stream::RunStreamState| {
+            let mut row = super::RunRow::from_run(
+                &crate::app_state::UiRun {
+                    run_id: run,
+                    status: RunStatus::Active,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                },
+                None,
+            );
+            row.attach_stream(stream);
+            row
+        };
+        let mut neutral = crate::run_stream::RunStreamState::default();
+        neutral.apply(&EngineRunEvent::StreamError {
+            message: "read failed".into(),
+        });
+        let row = row_for(&neutral);
+        assert_eq!(row.status_label, "Run state is unconfirmed");
+        assert_eq!(
+            row.waiting_detail.as_deref(),
+            Some("Inspect the run journal before taking action.")
+        );
+        let mut fresh_crash = crate::run_stream::RunStreamState::default();
+        fresh_crash.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        let row = row_for(&fresh_crash);
+        assert_eq!(row.status_label, "Recovery requires an operator");
+        assert_eq!(
+            row.waiting_detail.as_deref(),
+            Some("Inspect the run and choose whether to resume or abort.")
+        );
+        let mut terminal = crate::run_stream::RunStreamState::default();
+        terminal.begin_display_history(run, Some(surge_core::RunStatus::Crashed));
+        for (seq, payload) in [
+            (
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: "/project".into(),
+                    initial_prompt: "terminal".into(),
+                    config: surge_core::RunConfig {
+                        budget: Default::default(),
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                        bootstrap_edit_loop_cap: None,
+                    },
+                },
+            ),
+            (
+                2,
+                EventPayload::RunAborted {
+                    reason: "recorded stop".into(),
+                },
+            ),
+        ] {
+            terminal.apply(&EngineRunEvent::Persisted {
+                seq,
+                payload: Box::new(payload),
+            });
+        }
+        terminal.apply(&EngineRunEvent::StreamError {
+            message: "later read failed".into(),
+        });
+        let row = row_for(&terminal);
+        assert_eq!(row.status_label, "Aborted");
+        assert!(
+            row.waiting_detail.is_none(),
+            "independent crash/error detail cannot replace durable terminal outcome"
+        );
+        assert!(!row.live_stream);
+    }
+
+    #[test]
+    fn recovery_observability_actual_run_card_and_problem_log_use_shared_state() {
+        use surge_core::EventPayload;
+        use surge_orchestrator::engine::handle::EngineRunEvent;
+        let run = surge_core::RunId::new();
+        let mut stream = crate::run_stream::RunStreamState::default();
+        stream.begin_display_history(run, None);
+        for (seq, payload) in [
+            (
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: "/project".into(),
+                    initial_prompt: "card".into(),
+                    config: surge_core::RunConfig {
+                        budget: Default::default(),
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                        bootstrap_edit_loop_cap: None,
+                    },
+                },
+            ),
+            (
+                2,
+                EventPayload::RunRecoveryRequired {
+                    control_generation: 0,
+                    diagnostic: "card durable conflict".into(),
+                },
+            ),
+        ] {
+            stream.apply(&EngineRunEvent::Persisted {
+                seq,
+                payload: Box::new(payload),
+            });
+        }
+        stream.finish_display_history(2);
+        let mut row = super::RunRow::from_run(
+            &crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: Some(2),
+                ended_at: None,
+            },
+            None,
+        );
+        row.attach_stream(&stream);
+        assert_eq!(row.status_label, "Recovery requires an operator");
+        assert!(!row.live_stream);
+        assert!(row.event_rows.iter().any(|row| row.kind == "RECOVERY"
+            && row.problem
+            && row.text == "card durable conflict"));
+        assert!(
+            row.stages
+                .iter()
+                .all(|stage| stage.state != super::StageState::Running)
+        );
+    }
+
+    #[test]
+    fn recovery_observability_unknown_storage_copy_does_not_invent_disk_diagnosis() {
+        let (title, detail) = super::attention_reason(
+            surge_core::bootstrap_operation::BootstrapAttentionReason::StorageUnconfirmed,
+        );
+        assert!(title.contains("unconfirmed"));
+        assert!(!detail.contains("free disk"));
+        assert!(detail.contains("history"));
     }
 }

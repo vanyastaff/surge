@@ -25,12 +25,14 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::facade::EngineFacade as _;
-use surge_orchestrator::engine::handle::RunStatus;
 
 use crate::app_state::AppState;
 use crate::run_stream::DecisionKind;
 use crate::theme;
 use crate::ui;
+
+#[cfg(test)]
+type InboxEvidence = (String, Vec<(String, String)>, Vec<RunId>);
 
 /// What the Inbox can ask the app shell to do.
 #[derive(Clone)]
@@ -64,6 +66,66 @@ enum Source {
     FailedRun { run_id: RunId },
     /// Unconfirmed outcome or confirmed daemon loss; inspection only.
     Inspection { run_id: RunId },
+    Operation {
+        operation_id: RunId,
+        related: Vec<RunId>,
+    },
+}
+
+fn operation_problem_text(
+    operation: &surge_core::bootstrap_operation::BootstrapOperationStatus,
+) -> (String, Vec<(String, String)>) {
+    use surge_core::bootstrap_continuation::{BootstrapFailure, BootstrapTerminal};
+    use surge_core::bootstrap_operation::BootstrapState;
+    if let BootstrapState::NeedsAttention { phase, reason, .. } = operation.state {
+        let (reason, guidance) = crate::screens::runs::attention_reason(reason);
+        return (
+            reason.into(),
+            vec![
+                (
+                    "Application phase".into(),
+                    crate::screens::runs::phase_label(phase).into(),
+                ),
+                ("What needs review".into(), guidance.into()),
+            ],
+        );
+    }
+    let (title, reason) = match &operation.result {
+        Some(BootstrapTerminal::Failed {
+            reason: BootstrapFailure::BudgetExhausted,
+            ..
+        }) => (
+            "Configured execution budget reached",
+            "The application operation reached its configured execution allowance. Recorded run outcomes remain separate.",
+        ),
+        Some(BootstrapTerminal::Failed {
+            reason: BootstrapFailure::RunFailed,
+            ..
+        }) => (
+            "Application operation reported a run error",
+            "The operation reported an error. Inspect recorded run history to confirm that run's outcome.",
+        ),
+        Some(BootstrapTerminal::Failed {
+            reason: BootstrapFailure::RunAborted,
+            ..
+        }) => (
+            "Application operation reported a stopped run",
+            "The operation reported that a run stopped. Inspect its recorded history to confirm the outcome.",
+        ),
+        Some(BootstrapTerminal::Completed { .. }) => (
+            "Application operation needs inspection",
+            "Completion was recorded for the application operation; its current history observation needs inspection.",
+        ),
+        Some(BootstrapTerminal::Cancelled) => (
+            "Cancelled application operation needs inspection",
+            "Cancellation was recorded for the operation. It does not establish an outcome for every reserved run.",
+        ),
+        None => (
+            "Application operation needs inspection",
+            "The operation requires review; no confirmed run outcome is available from this observation.",
+        ),
+    };
+    (title.into(), vec![("What happened".into(), reason.into())])
 }
 
 /// One decision unit in the queue.
@@ -89,6 +151,7 @@ impl InboxItem {
             Source::Live { run_id, seq, .. } => format!("live-{run_id}-{seq}"),
             Source::FailedRun { run_id } => format!("failed-{run_id}"),
             Source::Inspection { run_id } => format!("inspection-{run_id}"),
+            Source::Operation { operation_id, .. } => format!("operation-{operation_id}"),
         }
     }
 }
@@ -242,6 +305,31 @@ impl InboxScreen {
         .detach();
     }
 
+    #[cfg(test)]
+    pub(crate) fn queue_for_test(&self, cx: &Context<Self>) -> Vec<(String, &'static str)> {
+        self.items(cx)
+            .0
+            .iter()
+            .map(|item| (item.identity(), item.badge))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evidence_for_test(&self, cx: &Context<Self>) -> Vec<InboxEvidence> {
+        self.items(cx)
+            .0
+            .iter()
+            .map(|item| {
+                let links = match &item.source {
+                    Source::Operation { related, .. } => related.clone(),
+                    Source::Inspection { run_id } => vec![*run_id],
+                    _ => Vec::new(),
+                };
+                (item.identity(), item.evidence.clone(), links)
+            })
+            .collect()
+    }
+
     /// Assemble the queue from actual decisions, reviews, and failed runs.
     fn items(&self, cx: &Context<Self>) -> (Vec<InboxItem>, bool) {
         let state = self.state.read(cx);
@@ -369,10 +457,10 @@ impl InboxScreen {
 
         // 2. Failed / aborted runs — failure triage.
         for run in state.unacknowledged_failures() {
-            if !matches!(run.status, RunStatus::Failed | RunStatus::Aborted) {
+            let Some(terminal) = state.failure_terminal(run.run_id) else {
                 continue;
-            }
-            let label = if matches!(run.status, RunStatus::Failed) {
+            };
+            let label = if terminal == surge_core::TerminalReason::Failed {
                 "failed"
             } else {
                 "aborted"
@@ -403,6 +491,9 @@ impl InboxScreen {
                         format!("```text\n{}\n```", tail.join("\n")),
                     ));
                 }
+            }
+            for operation in state.bootstrap_operations.values().filter(|operation| matches!(&operation.result, Some(surge_core::bootstrap_continuation::BootstrapTerminal::Failed { run_id, .. }) if *run_id == run.run_id)) {
+                evidence.push(("Application operation".into(), format!("{} · {:?}", operation.operation_id, operation.result)));
             }
             let headline = reason.as_deref().map_or(
                 if label == "failed" {
@@ -440,14 +531,64 @@ impl InboxScreen {
                 mission: state.run_mission_title(&run_id).map(ToOwned::to_owned),
                 meta: run_id.to_string(),
                 age: String::new(),
-                evidence: vec![(
-                    "Next action".into(),
-                    display.next_action().unwrap_or_default().into(),
-                )],
+                evidence: state.run_inspection_evidence(run_id),
                 source: Source::Inspection { run_id },
             });
         }
 
+        for operation in state.operation_problems() {
+            let related = state.operation_related_links(operation);
+            let (title, mut evidence) = operation_problem_text(operation);
+            if let Some(error) = state.operation_inspection_reason(operation.operation_id) {
+                evidence.push(("Inspection".into(), error));
+            }
+            for run in &related {
+                for (label, text) in state.run_inspection_evidence(*run) {
+                    if !evidence.iter().any(|(_, existing)| existing == &text) {
+                        evidence.push((format!("Run {} · {label}", run.short()), text));
+                    }
+                }
+            }
+            items.push(InboxItem {
+                rank: 6,
+                badge: "operation",
+                badge_color: theme::warning(),
+                title,
+                mission: None,
+                meta: operation.operation_id.to_string(),
+                age: String::new(),
+                evidence,
+                source: Source::Operation {
+                    operation_id: operation.operation_id,
+                    related,
+                },
+            });
+        }
+        for (operation_id, error) in state
+            .operation_inspections
+            .keys()
+            .filter(|id| !state.bootstrap_operations.contains_key(id))
+            .filter_map(|id| {
+                state
+                    .operation_inspection_reason(*id)
+                    .map(|reason| (id, reason))
+            })
+        {
+            items.push(InboxItem {
+                rank: 6,
+                badge: "inspect operation",
+                badge_color: theme::warning(),
+                title: "Operation history is unconfirmed".into(),
+                mission: None,
+                meta: operation_id.to_string(),
+                age: String::new(),
+                evidence: vec![("Inspection".into(), error)],
+                source: Source::Operation {
+                    operation_id: *operation_id,
+                    related: Vec::new(),
+                },
+            });
+        }
         let live = state.daemon_state.facade().is_some();
         items.sort_by_key(|a| a.rank);
         (items, live)
@@ -612,8 +753,16 @@ impl InboxScreen {
             ..
         } = &item.source
         else {
-            if let Source::FailedRun { run_id } | Source::Inspection { run_id } = item.source {
-                cx.emit(InboxAction::OpenRun(run_id));
+            match &item.source {
+                Source::FailedRun { run_id } | Source::Inspection { run_id } => {
+                    cx.emit(InboxAction::OpenRun(*run_id))
+                },
+                Source::Operation { related, .. } => {
+                    if let Some(run) = related.first() {
+                        cx.emit(InboxAction::OpenRun(*run));
+                    }
+                },
+                _ => {},
             }
             return;
         };
@@ -711,6 +860,7 @@ impl InboxScreen {
             let is_sel = i == self.selected.min(items.len().saturating_sub(1));
             let row = div()
                 .id(SharedString::from(format!("inbox-item-{}", item.identity())))
+                .test_support().debug_selector(|| format!("inbox-item-{}", item.identity()))
                 .role(Role::Button)
                 .aria_label(item.title.clone())
                 .h_flex()
@@ -941,7 +1091,7 @@ impl InboxScreen {
         );
         let is_failure = matches!(
             &item.source,
-            Source::FailedRun { .. } | Source::Inspection { .. }
+            Source::FailedRun { .. } | Source::Inspection { .. } | Source::Operation { .. }
         );
 
         // The document scrolls; the response field and decision buttons live
@@ -1250,14 +1400,29 @@ impl InboxScreen {
             |o: &str| o.contains("reject") || o.contains("abort") || o.contains("fail");
 
         if is_failure {
-            let item_open = item.clone();
-            actions = actions.child(
-                primary("inbox-open-run".into(), "Open cockpit".to_string()).on_click(cx.listener(
-                    move |this, _e, window, cx| {
-                        this.decide(&item_open, "open", window, cx);
-                    },
-                )),
-            );
+            if let Source::Operation { related, .. } = &item.source {
+                for run in related {
+                    let run = *run;
+                    actions = actions.child(
+                        primary(
+                            format!("inbox-open-{run}").into(),
+                            format!("Open recorded {}", run.short()),
+                        )
+                        .on_click(
+                            cx.listener(move |_, _, _, cx| cx.emit(InboxAction::OpenRun(run))),
+                        ),
+                    );
+                }
+            } else {
+                let item_open = item.clone();
+                actions = actions.child(
+                    primary("inbox-open-run".into(), "Open cockpit".to_string()).on_click(
+                        cx.listener(move |this, _e, window, cx| {
+                            this.decide(&item_open, "open", window, cx)
+                        }),
+                    ),
+                );
+            }
             if let Source::FailedRun { run_id } = item.source {
                 actions = actions.child(
                     secondary("inbox-dismiss-failure".into(), "Dismiss".to_string()).on_click(

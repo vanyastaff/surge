@@ -458,31 +458,7 @@ async fn handle_command(
             let _ = reply.send(result);
         },
         WriterCommand::RebuildViews { reply } => {
-            let result = (|| -> Result<(), WriterError> {
-                let tx = conn.transaction()?;
-                views::rebuild(&tx)?;
-
-                // Replay all events through views::maintain.
-                let mut stmt =
-                    tx.prepare("SELECT seq, timestamp, payload FROM events ORDER BY seq")?;
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        EventSeq(row.get::<_, i64>(0)? as u64),
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                    ))
-                })?;
-                let collected: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
-                drop(stmt);
-
-                for (seq, ts, blob) in collected {
-                    let versioned: VersionedEventPayload = serde_json::from_slice(&blob)?;
-                    views::maintain(&tx, seq, ts, versioned.payload())?;
-                }
-
-                tx.commit()?;
-                Ok(())
-            })();
+            let result = super::projection::rebuild_owned(conn);
             let _ = reply.send(result);
         },
         WriterCommand::Shutdown { reply } => return Some(Stop::Shutdown(reply)),

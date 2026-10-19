@@ -290,8 +290,12 @@ impl RunReader {
     pub async fn task_ledger(&self) -> Result<Vec<TaskLedgerRow>, StorageError> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
-            views::task_ledger(&conn)
+            let mut conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            let tx = conn.transaction()?;
+            super::projection::require_current(&tx)?;
+            let ledger = views::task_ledger(&tx)?;
+            tx.commit()?;
+            Ok(ledger)
         })
         .await
         .map_err(|e| StorageError::Pool(e.to_string()))?

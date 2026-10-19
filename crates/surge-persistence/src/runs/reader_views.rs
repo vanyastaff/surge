@@ -178,9 +178,7 @@ pub fn roadmap_patches(
 }
 
 /// Read all rows of the per-run `task_ledger` materialized view.
-pub fn task_ledger(
-    conn: &PooledConnection<SqliteConnectionManager>,
-) -> Result<Vec<TaskLedgerRow>, StorageError> {
+pub fn task_ledger(conn: &rusqlite::Connection) -> Result<Vec<TaskLedgerRow>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT task_id, status, verified, discovered_from, last_authority_node, updated_seq,
                 accepted_by_human, requirement_revised

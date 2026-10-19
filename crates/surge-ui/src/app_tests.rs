@@ -440,7 +440,7 @@ fn fleet_submission_fixture() -> (
 }
 
 #[test]
-fn fleet_acknowledgment_after_leaving_does_not_navigate() {
+fn recovery_observability_fleet_acceptance_does_not_claim_subscription() {
     let (mut cx, app, fleet, operation_id) = fleet_submission_fixture();
     let planning_id = RunId::new();
     app.update(&mut cx, |app, cx| {
@@ -454,7 +454,18 @@ fn fleet_acknowledgment_after_leaving_does_not_navigate() {
         );
         assert_eq!(app.active_screen, Screen::Settings);
         assert!(app.pending_run_selection.is_none());
-        assert!(app.state.read(cx).run_streams[&planning_id].live);
+        assert!(
+            !app.state.read(cx).run_streams.contains_key(&planning_id),
+            "acceptance does not create a reserved run stream"
+        );
+        assert!(
+            !app.state
+                .read(cx)
+                .runs
+                .iter()
+                .any(|run| run.run_id == planning_id),
+            "acceptance does not create a reserved lifecycle row"
+        );
     });
 }
 
@@ -769,3 +780,209 @@ mod home_planning;
 
 #[path = "app_tests/recorded_navigation.rs"]
 mod recorded_navigation;
+
+#[test]
+fn recovery_observability_attention_status_does_not_mutate_actual_run_observation() {
+    run_isolated_app_probe(
+        "recovery",
+        "app::tests::recovery_observability_attention_status_child_probe",
+    );
+}
+
+#[test]
+fn recovery_observability_attention_status_child_probe() {
+    if std::env::var("SURGE_TEST_PROJECT_HOME_ENTRY").as_deref() != Ok("recovery") {
+        return;
+    }
+    use surge_core::bootstrap_operation::{
+        BootstrapAttentionReason as R, BootstrapOperationStatus, BootstrapPhase, BootstrapState,
+    };
+    let (mut cx, app, _, _) = fixture();
+    let planning = RunId::new();
+    let implementation = RunId::new();
+    app.update(&mut cx, |app, cx| {
+        for (revision, reason) in [(1, R::StorageUnconfirmed), (2, R::RecoveryRequired)] {
+            app.state.update(cx, |state, _| {
+                state.run_streams.entry(planning).or_default().live = true
+            });
+            app.update_bootstrap_view(
+                RunId::nil(),
+                BootstrapOperationStatus {
+                    operation_id: RunId::nil(),
+                    planning_run: planning,
+                    implementation_run: implementation,
+                    state: BootstrapState::NeedsAttention {
+                        phase: BootstrapPhase::Planning,
+                        run_id: Some(planning),
+                        reason,
+                    },
+                    result: None,
+                    revision,
+                    cancel_requested: false,
+                    queue_sequence: 1,
+                    payload_version: 1,
+                },
+                std::path::Path::new(PROJECT),
+                cx,
+            );
+            assert!(
+                app.state.read(cx).run_streams[&planning].live,
+                "operation attention does not own the actual run pump"
+            );
+        }
+    });
+}
+
+#[cfg(unix)]
+#[path = "app_recovery_subscription_tests.rs"]
+mod recovery_subscription_tests;
+
+#[test]
+fn operation_failure_does_not_turn_completed_parent_into_inbox_failure() {
+    use surge_core::bootstrap_operation::{BootstrapOperationStatus, BootstrapState};
+    use surge_core::run_event::EventPayload;
+    use surge_orchestrator::engine::handle::{EngineRunEvent, RunStatus};
+    let root = tempfile::tempdir().unwrap();
+    let mut cx = TestAppContext::single();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init();
+        crate::theme::sync_component_theme(cx);
+    });
+    let parent = RunId::new();
+    let child = RunId::new();
+    let operation = RunId::new();
+    let started = chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+    let ended = chrono::DateTime::from_timestamp_millis(1_700_000_001_000).unwrap();
+    let state = cx.new(|_| {
+        let mut state = AppState::new();
+        state.project_path = Some(PROJECT.into());
+        for (id, status, terminal) in [
+            (
+                parent,
+                RunStatus::Completed,
+                EventPayload::RunCompleted {
+                    terminal_node: surge_core::keys::NodeKey::try_from("bootstrap_complete")
+                        .unwrap(),
+                },
+            ),
+            (
+                child,
+                RunStatus::Failed,
+                EventPayload::RunFailed {
+                    error: "implementation failed".into(),
+                },
+            ),
+        ] {
+            let mut stream = crate::run_stream::RunStreamState::default();
+            stream.begin_display_history(id, None);
+            stream.apply_recorded(
+                &EngineRunEvent::Persisted {
+                    seq: 1,
+                    payload: Box::new(EventPayload::RunStarted {
+                        pipeline_template: None,
+                        project_path: PROJECT.into(),
+                        initial_prompt: "build timer".into(),
+                        config: surge_core::RunConfig {
+                            budget: Default::default(),
+                            sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                            approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                            auto_pr: false,
+                            mcp_servers: Vec::new(),
+                            bootstrap_edit_loop_cap: None,
+                        },
+                    }),
+                },
+                started.timestamp_millis(),
+            );
+            stream.apply_recorded(
+                &EngineRunEvent::Persisted {
+                    seq: 2,
+                    payload: Box::new(terminal),
+                },
+                ended.timestamp_millis(),
+            );
+            stream.finish_display_history(2);
+            assert_eq!(
+                stream.display(),
+                surge_core::run_display::RunDisplayState::Done(if id == parent {
+                    surge_core::TerminalReason::Completed
+                } else {
+                    surge_core::TerminalReason::Failed
+                })
+            );
+            state.run_streams.insert(id, stream);
+            state.runs.push(crate::app_state::UiRun {
+                run_id: id,
+                status,
+                started_at: started,
+                ended_at: Some(ended),
+                last_event_seq: Some(2),
+            });
+        }
+        state
+    });
+    let app = cx.new(|cx| {
+        SurgeApp::new_shell_at(
+            state.clone(),
+            Some(root.path().join("desktop/index.json")),
+            cx,
+        )
+    });
+    app.update(&mut cx, |app, cx| {
+        app.update_bootstrap_view(
+            operation,
+            BootstrapOperationStatus {
+                operation_id: operation,
+                planning_run: parent,
+                implementation_run: child,
+                state: BootstrapState::Failed,
+                result: Some(
+                    surge_core::bootstrap_continuation::BootstrapTerminal::Failed {
+                        run_id: child,
+                        reason: surge_core::bootstrap_continuation::BootstrapFailure::RunFailed,
+                    },
+                ),
+                revision: 3,
+                cancel_requested: false,
+                queue_sequence: 1,
+                payload_version: 1,
+            },
+            std::path::Path::new(PROJECT),
+            cx,
+        );
+        app.navigate(Screen::Inbox, cx);
+    });
+    app.update(&mut cx, |app, cx| {
+        let _ = app.render_screen_content(cx);
+    });
+    let inbox = cx.read(|cx| app.read(cx).inbox.clone().unwrap());
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(inbox.clone(), window, cx));
+    assert!(
+        window
+            .debug_bounds(Box::leak(
+                format!("inbox-item-failed-{child}").into_boxed_str()
+            ))
+            .is_some()
+    );
+    assert!(
+        window
+            .debug_bounds(Box::leak(
+                format!("inbox-item-failed-{parent}").into_boxed_str()
+            ))
+            .is_none(),
+        "completed planning must never render as failed"
+    );
+    cx.read(|cx| {
+        let state = state.read(cx);
+        assert_eq!(state.needs_you_count(), 1);
+        let parent = state.runs.iter().find(|run| run.run_id == parent).unwrap();
+        assert_eq!(parent.status, RunStatus::Completed);
+        assert_eq!(parent.started_at, started);
+        assert_eq!(parent.ended_at, Some(ended));
+    });
+}
+
+#[path = "app_tests/home_inbox_sixth.rs"]
+mod home_inbox_sixth;
