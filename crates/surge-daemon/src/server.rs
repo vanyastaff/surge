@@ -406,6 +406,17 @@ async fn dispatch_bootstrap(
             ..
         } => supervisor.submit(operation_id, &intent).await,
         DaemonRequest::BootstrapStatus { operation_id, .. } => supervisor.status(operation_id),
+        DaemonRequest::ContinueBootstrapImplementation {
+            operation_id,
+            revision,
+            source_run,
+            continuation_id,
+            ..
+        } => {
+            supervisor
+                .continue_implementation(operation_id, revision, source_run, continuation_id)
+                .await
+        },
         DaemonRequest::CancelBootstrap { operation_id, .. } => supervisor.cancel(operation_id),
         DaemonRequest::RetryBootstrap {
             operation_id,
@@ -524,7 +535,8 @@ async fn dispatch(
         request @ (DaemonRequest::StartBootstrap { .. }
         | DaemonRequest::BootstrapStatus { .. }
         | DaemonRequest::CancelBootstrap { .. }
-        | DaemonRequest::RetryBootstrap { .. }) => {
+        | DaemonRequest::RetryBootstrap { .. }
+        | DaemonRequest::ContinueBootstrapImplementation { .. }) => {
             Some(dispatch_bootstrap(request, bootstrap).await)
         },
 

@@ -38,6 +38,7 @@ pub mod agent_rotation;
 pub mod approvals;
 pub mod archetype;
 pub mod artifact_contract;
+pub mod bootstrap_attempt;
 pub mod bootstrap_continuation;
 pub mod bootstrap_operation;
 pub mod branch_config;

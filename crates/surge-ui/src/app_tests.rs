@@ -742,6 +742,7 @@ fn home_exact_run_navigation_preserves_hidden_planning_and_missing_targets() {
                 cancel_requested: false,
                 queue_sequence: 1,
                 payload_version: 1,
+                continuations: Vec::new(),
             },
         );
         state
@@ -821,6 +822,7 @@ fn recovery_observability_attention_status_child_probe() {
                     cancel_requested: false,
                     queue_sequence: 1,
                     payload_version: 1,
+                    continuations: Vec::new(),
                 },
                 std::path::Path::new(PROJECT),
                 cx,
@@ -947,6 +949,7 @@ fn operation_failure_does_not_turn_completed_parent_into_inbox_failure() {
                 cancel_requested: false,
                 queue_sequence: 1,
                 payload_version: 1,
+                continuations: Vec::new(),
             },
             std::path::Path::new(PROJECT),
             cx,
@@ -986,3 +989,6 @@ fn operation_failure_does_not_turn_completed_parent_into_inbox_failure() {
 
 #[path = "app_tests/home_inbox_sixth.rs"]
 mod home_inbox_sixth;
+
+#[path = "app_tests/failed_continuation.rs"]
+mod failed_continuation;

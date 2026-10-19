@@ -857,3 +857,136 @@ async fn exact_operation_inspection_rejects_namespace_object_and_symlink_substit
     }
     home.close().unwrap();
 }
+
+fn failed_attempt_fixture(
+    store: &BootstrapOperationStore,
+    root: &std::path::Path,
+) -> (
+    BootstrapOperationRecord,
+    surge_core::bootstrap_attempt::BootstrapAttempt,
+) {
+    use surge_core::bootstrap_attempt::{BootstrapAttempt, BootstrapAttemptState};
+    let id = RunId::new();
+    store
+        .insert_if_absent(id, &intent(root, "continue"), &capture(root))
+        .unwrap();
+    seed_terminal(store, id, BootstrapState::Completed);
+    let record = store.get(id).unwrap().unwrap();
+    let result = BootstrapTerminal::Failed {
+        run_id: record.status.implementation_run,
+        reason: surge_core::bootstrap_continuation::BootstrapFailure::RunFailed,
+    };
+    store
+        .pool
+        .get()
+        .unwrap()
+        .execute(
+            "UPDATE bootstrap_operations SET state_json=?1,result_json=?2 WHERE operation_id=?3",
+            params![
+                serde_json::to_string(&BootstrapState::Failed).unwrap(),
+                serde_json::to_string(&result).unwrap(),
+                id.to_string()
+            ],
+        )
+        .unwrap();
+    let record = store.get(id).unwrap().unwrap();
+    let attempt = BootstrapAttempt {
+        continuation_id: RunId::new(),
+        operation_id: id,
+        source_run: record.status.implementation_run,
+        run: RunId::new(),
+        boundary: 87,
+        runtime: ContentHash::compute(b"current host"),
+        state: BootstrapAttemptState::Reserved,
+    };
+    (record, attempt)
+}
+
+#[test]
+fn continuation_transitions_publish_new_revision_and_failed_cas_changes_neither() {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let (original, reserved, ready, unchanged) = {
+        let store = open(home.path());
+        let (original, attempt) = failed_attempt_fixture(&store, home.path());
+        store
+            .reserve_attempt(original.status.revision, &attempt)
+            .unwrap();
+        let reserved = store.get(original.status.operation_id).unwrap().unwrap();
+        store
+            .advance_attempt(attempt.continuation_id, A::Reserved, A::ForkReady)
+            .unwrap();
+        let ready = store.get(original.status.operation_id).unwrap().unwrap();
+        assert!(matches!(
+            store.advance_attempt(attempt.continuation_id, A::Reserved, A::NeedsAttention),
+            Err(BootstrapStoreError::InvalidTransition)
+        ));
+        let unchanged = store.get(original.status.operation_id).unwrap().unwrap();
+        (original, reserved, ready, unchanged)
+    };
+    home.close().unwrap();
+    assert_eq!(reserved.status.revision, original.status.revision + 1);
+    assert_eq!(ready.status.revision, reserved.status.revision + 1);
+    assert_eq!(unchanged, ready);
+    assert_eq!(ready.status.result, original.status.result);
+    assert_eq!(ready.status.state, BootstrapState::Failed);
+}
+
+thread_local! {
+    static CONTINUATION_READ_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+fn decode_then_commit_continuation(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRow> {
+    let decoded = stored_row(row)?;
+    CONTINUATION_READ_COMMIT.with(|commit| commit.borrow_mut().take().unwrap()());
+    Ok(decoded)
+}
+#[test]
+fn continuation_status_read_does_not_mix_revision_and_newer_attempt_rows() {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let (before, observed, after) = {
+        let store = open(home.path());
+        let (original, attempt) = failed_attempt_fixture(&store, home.path());
+        store
+            .reserve_attempt(original.status.revision, &attempt)
+            .unwrap();
+        let before = store.get(original.status.operation_id).unwrap().unwrap();
+        let writer = store.pool.get().unwrap();
+        let request = attempt.continuation_id.to_string();
+        let operation = original.status.operation_id.to_string();
+        CONTINUATION_READ_COMMIT.with(|commit| {
+            *commit.borrow_mut() = Some(Box::new(move || {
+                let tx = writer.unchecked_transaction().unwrap();
+                tx.execute(
+                    "UPDATE bootstrap_attempts SET state_json=?1 WHERE continuation_id=?2",
+                    params![serde_json::to_string(&A::ForkReady).unwrap(), request],
+                )
+                .unwrap();
+                tx.execute(
+                    "UPDATE bootstrap_operations SET revision=revision+1 WHERE operation_id=?1",
+                    [operation],
+                )
+                .unwrap();
+                tx.commit().unwrap();
+            }));
+        });
+        let reader = store.pool.get().unwrap();
+        let observed = read_row(
+            &reader,
+            original.status.operation_id,
+            decode_then_commit_continuation,
+        )
+        .unwrap()
+        .unwrap();
+        drop(reader);
+        let after = store.get(original.status.operation_id).unwrap().unwrap();
+        (before, observed, after)
+    };
+    home.close().unwrap();
+    assert_eq!(
+        observed, before,
+        "one exact read snapshot must not combine the old revision with newer continuation rows"
+    );
+    assert_eq!(after.status.revision, before.status.revision + 1);
+    assert_eq!(after.status.continuations[0].state, A::ForkReady);
+}

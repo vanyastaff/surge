@@ -1,4 +1,5 @@
 //! Durable bootstrap ownership: isolate, execute, validate, continue, and settle.
+mod attempts;
 use crate::{
     admission::AdmissionController,
     bootstrap_recovery::{ExpectedBootstrapRun, StartupState, classify_startup},
@@ -61,13 +62,28 @@ pub enum BootstrapError {
     /// New requests are refused while shutdown drains existing work.
     #[error("daemon is shutting down")]
     Shutdown,
+    /// An isolated continuation was refused before execution.
+    #[error("implementation continuation refused: {0}")]
+    Continuation(&'static str),
+    /// A new attempt cannot safely carry a finite inherited budget.
+    #[error("implementation continuation does not support finite budgets")]
+    FiniteContinuationBudget,
+    /// External MCP carryover requires an independent owned restart contract.
+    #[error("implementation continuation does not support external MCP")]
+    ExternalContinuationMcp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum WorkerKey {
+    Operation(RunId),
+    Continuation(RunId),
 }
 
 /// One owner task per operation; journal commits linearize cancellation and admission.
 pub struct BootstrapSupervisor {
     services: BootstrapServices,
     store: BootstrapOperationStore,
-    workers: Mutex<HashMap<RunId, tokio::task::JoinHandle<()>>>,
+    workers: Mutex<HashMap<WorkerKey, tokio::task::JoinHandle<()>>>,
     changed: Notify,
     admission_order: Arc<Mutex<()>>,
 }
@@ -136,7 +152,10 @@ impl BootstrapSupervisor {
     ) -> Result<BootstrapOperationStatus, BootstrapError> {
         // Attention retries share the operation side-effect boundary with reconciliation.
         let workers = self.workers.lock().await;
-        if workers.get(&id).is_some_and(|worker| !worker.is_finished()) {
+        if workers
+            .get(&WorkerKey::Operation(id))
+            .is_some_and(|worker| !worker.is_finished())
+        {
             return Err(BootstrapStoreError::InvalidTransition.into());
         }
         let record = self.record(id)?;
@@ -190,7 +209,12 @@ impl BootstrapSupervisor {
     }
     /// Fence direct/legacy launchers from every reserved bootstrap run.
     pub fn owns_run(&self, run: RunId) -> Result<bool, BootstrapError> {
-        Ok(self.store.reserved_run_ids()?.contains(&run))
+        Ok(self.store.reserved_run_ids()?.contains(&run)
+            || self
+                .store
+                .list()?
+                .iter()
+                .any(|r| r.status.continuations.iter().any(|a| a.run == run)))
     }
 
     fn record(&self, id: RunId) -> Result<Record, BootstrapStoreError> {
@@ -206,7 +230,7 @@ impl BootstrapSupervisor {
             if record.status.state.phase().is_none()
                 || matches!(record.status.state, State::NeedsAttention { .. })
                 || !matches!(record.payload, BootstrapStoredPayload::V1 { .. })
-                || workers.contains_key(&record.status.operation_id)
+                || workers.contains_key(&WorkerKey::Operation(record.status.operation_id))
             {
                 continue;
             }
@@ -215,7 +239,7 @@ impl BootstrapSupervisor {
             let owner = self.clone();
             let id = record.status.operation_id;
             workers.insert(
-                id,
+                WorkerKey::Operation(id),
                 tokio::spawn(async move {
                     if let Err(reason) = owner.process(id, admission_order).await {
                         owner.attention(id, reason);
@@ -223,6 +247,7 @@ impl BootstrapSupervisor {
                 }),
             );
         }
+        self.reconcile_attempts(&mut workers)?;
         // Finish the last worker's admission decision before startup exposes new acceptance.
         let _admission_ready = self.admission_order.lock().await;
         Ok(())

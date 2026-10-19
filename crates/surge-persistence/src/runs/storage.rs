@@ -307,6 +307,34 @@ impl Storage {
         self.start_opened_writer(run_id, lease).await
     }
 
+    /// Borrow the reader of this storage's actual retained writer.
+    ///
+    /// Independently opened storage instances are distinct owners even for the
+    /// same home. Native identity and durable admission are rechecked without
+    /// opening a second reader pool.
+    ///
+    /// # Errors
+    /// Refuses foreign writers, poisoned ownership, invalid native identities,
+    /// and durable run-opening barriers.
+    pub async fn reader_for_writer(&self, writer: &RunWriter) -> Result<RunReader, OpenError> {
+        let run_id = *writer.run_id();
+        if !self
+            .active_writers
+            .owns(run_id, &writer.lease.token)
+            .map_err(|_| OpenError::WriterOwnershipPoisoned)?
+        {
+            return Err(OpenError::WriterOwnerMismatch { run_id });
+        }
+        writer.lease.verify()?;
+        registry_exec::read(&self.registry_pool, move |connection| {
+            super::host_settlement::admit(connection, run_id)
+        })
+        .await
+        .map_err(|error| OpenError::Authority(error.to_string()))?;
+        writer.lease.verify()?;
+        Ok(writer.reader())
+    }
+
     /// Open a read-only handle to an existing run.
     /// This does not upgrade legacy schemas; opening its exclusive writer applies
     /// supported pending migrations before current materialized-view reads.

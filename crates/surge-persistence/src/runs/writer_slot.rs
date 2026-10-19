@@ -14,7 +14,7 @@ pub(crate) struct WriterSlotError;
 /// Shared actual actor and wrapper lifetime, including cancelled caller futures.
 pub(crate) struct WriterLease {
     pub(crate) authority: super::host_settlement::HeldOpening,
-    pub(crate) _token: Arc<WriterToken>,
+    pub(crate) token: Arc<WriterToken>,
     pub(crate) file_lock: FileLock,
     #[cfg(windows)]
     pub(crate) namespace: Arc<crate::state_home::SqliteNamespaceOwner>,
@@ -40,6 +40,19 @@ pub struct ActiveWriters {
 }
 
 impl ActiveWriters {
+    /// Checks actual token association without retaining the bookkeeping mutex.
+    pub(crate) fn owns(
+        &self,
+        run_id: RunId,
+        token: &Arc<WriterToken>,
+    ) -> Result<bool, WriterSlotError> {
+        let state = self.inner.lock().map_err(|_| WriterSlotError)?;
+        Ok(state
+            .get(&run_id)
+            .and_then(Weak::upgrade)
+            .is_some_and(|registered| Arc::ptr_eq(&registered, token)))
+    }
+
     /// Runtime-independent entry sharing precisely the normal writer's token.
     pub(crate) fn try_acquire_sync(
         &self,

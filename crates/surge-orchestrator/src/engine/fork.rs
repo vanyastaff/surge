@@ -116,6 +116,40 @@ pub struct ForkOutcome {
 /// pre-fork edit targets an unknown or non-Agent node, or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
     reject_task_fork(storage, &req)?;
+    let parent_writer = storage
+        .open_run_writer(req.parent)
+        .await
+        .map_err(|error| EngineError::Storage(error.to_string()))?;
+    let operation = fork_with_parent(storage, req.clone(), &parent_writer).await;
+    let close = parent_writer.close().await;
+    settle_fork_result(req.parent, operation, close)
+}
+
+/// Fork under the caller's retained original parent writer.
+/// The caller must close this writer and confirm settlement before publishing readiness.
+///
+/// # Errors
+/// Refuses a mismatched owner or any invalid/unreadable fork prefix.
+pub async fn fork_with_parent(
+    storage: &Arc<Storage>,
+    req: ForkRequest,
+    parent_writer: &RunWriter,
+) -> Result<ForkOutcome, EngineError> {
+    if *parent_writer.run_id() != req.parent {
+        return Err(EngineError::ForkInvalid(
+            "parent writer identity differs".into(),
+        ));
+    }
+    let reader = storage
+        .reader_for_writer(parent_writer)
+        .await
+        .map_err(|error| match error {
+            surge_persistence::runs::OpenError::WriterOwnerMismatch { .. } => {
+                EngineError::ForkInvalid("parent writer belongs to another storage".into())
+            },
+            other => EngineError::Storage(other.to_string()),
+        })?;
+    reject_task_fork(storage, &req)?;
     if storage
         .home()
         .join("runs")
@@ -126,10 +160,6 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
             "destination run already exists".into(),
         ));
     }
-    let reader = storage
-        .open_run_reader(req.parent)
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
     let max = reader
         .current_seq()
         .await
@@ -193,12 +223,7 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     // only residual failure is a usable child without a parent back-ref — never
     // a `ForkCreated` pointing at a child that does not exist. Each fork uses a
     // fresh child id, so a retry creates a distinct run, not a duplicate.
-    let parent_writer = storage
-        .open_run_writer(req.parent)
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    let operation = async {
+    async {
         let prepared = prepare_child_files(
             storage,
             &req,
@@ -242,9 +267,7 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
             cursor_source,
         })
     }
-    .await;
-    let close = parent_writer.close().await;
-    settle_fork_result(req.parent, operation, close)
+    .await
 }
 
 /// The cursor source of the parent's execution state at `at_seq` (#100): the
@@ -1612,5 +1635,210 @@ mod tests {
         );
         drop(storage);
         dir.close().unwrap();
+    }
+
+    async fn seed_borrowed_source(
+        storage: &Arc<Storage>,
+        parent: RunId,
+        label: &str,
+        attempt: u32,
+    ) {
+        let graph = agent_graph();
+        let hash = graph.identity().unwrap();
+        let artifact =
+            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
+                .put(parent, "spec", label.as_bytes())
+                .await
+                .unwrap();
+        let writer = storage
+            .create_run(parent, storage.home(), None)
+            .await
+            .unwrap();
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: storage.home().into(),
+                    initial_prompt: label.into(),
+                    config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        budget: BudgetGuard::default(),
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                    },
+                }),
+                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: hash,
+                }),
+                VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                    node: NodeKey::try_new("impl_1").unwrap(),
+                    artifact: artifact.hash,
+                    path: artifact.path,
+                    name: "spec".into(),
+                    source_path: None,
+                }),
+            ])
+            .await
+            .unwrap();
+        let snapshot = crate::engine::snapshot::EngineSnapshot::new(
+            &surge_core::run_state::Cursor {
+                node: NodeKey::try_new("impl_1").unwrap(),
+                attempt,
+            },
+            3,
+            3,
+        );
+        writer
+            .write_graph_snapshot(EventSeq(3), serde_json::to_vec(&snapshot).unwrap())
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+    }
+
+    fn borrowed_artifacts(storage: &Storage, run: RunId) -> Vec<(std::ffi::OsString, Vec<u8>)> {
+        let mut files: Vec<_> = std::fs::read_dir(
+            storage
+                .home()
+                .join("runs")
+                .join(run.to_string())
+                .join("artifacts"),
+        )
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (entry.file_name(), std::fs::read(entry.path()).unwrap())
+        })
+        .collect();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    }
+
+    async fn borrowed_history(storage: &Arc<Storage>, run: RunId) -> serde_json::Value {
+        serde_json::to_value(
+            read_all(storage, run)
+                .await
+                .into_iter()
+                .map(|event| event.to_run_event(run).unwrap())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    async fn borrowed_snapshot(storage: &Arc<Storage>, run: RunId) -> serde_json::Value {
+        let reader = storage.open_run_reader(run).await.unwrap();
+        let (_, bytes) = reader
+            .latest_snapshot_at_or_before(EventSeq(3))
+            .await
+            .unwrap()
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn observe_borrowed_fork(
+        foreign: bool,
+    ) -> (Result<ForkOutcome, EngineError>, serde_json::Value) {
+        let home_a = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let home_b = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let a = Storage::open(home_a.path()).await.unwrap();
+        let b = Storage::open(home_b.path()).await.unwrap();
+        let parent = RunId::new();
+        let child = RunId::new();
+        seed_borrowed_source(&a, parent, "home A artifact and prompt", 11).await;
+        seed_borrowed_source(&b, parent, "home B artifact and prompt", 22).await;
+        let before_a = borrowed_history(&a, parent).await;
+        let before_b = borrowed_history(&b, parent).await;
+        let snapshots = [
+            borrowed_snapshot(&a, parent).await,
+            borrowed_snapshot(&b, parent).await,
+        ];
+        let artifacts_a = borrowed_artifacts(&a, parent);
+        let artifacts_b = borrowed_artifacts(&b, parent);
+        let owner = if foreign { &b } else { &a };
+        let writer = owner.open_run_writer(parent).await.unwrap();
+        let result = fork_with_parent(&a, ForkRequest::new(parent, child, 3), &writer).await;
+        writer.close().await.unwrap();
+        let after_a = borrowed_history(&a, parent).await;
+        let after_b = borrowed_history(&b, parent).await;
+        let child_a = a.get_run(&child).await.unwrap().is_some();
+        let child_b = b.get_run(&child).await.unwrap().is_some();
+        let paths = [
+            a.home().join("runs").join(child.to_string()).exists(),
+            b.home().join("runs").join(child.to_string()).exists(),
+        ];
+        let child_history = if child_a {
+            borrowed_history(&a, child).await
+        } else {
+            serde_json::Value::Null
+        };
+        let child_snapshot = if child_a {
+            borrowed_snapshot(&a, child).await
+        } else {
+            serde_json::Value::Null
+        };
+        let child_bytes = if child_a {
+            Some(std::fs::read(child_history[2]["payload"]["path"].as_str().unwrap()).unwrap())
+        } else {
+            None
+        };
+        let facts = serde_json::json!({"snapshots_before":snapshots,
+            "snapshots_after":[borrowed_snapshot(&a,parent).await,borrowed_snapshot(&b,parent).await],
+            "child_snapshot":child_snapshot,"child_artifact":child_bytes,
+            "before_a":before_a,"before_b":before_b,"after_a":after_a,"after_b":after_b,
+            "artifacts_unchanged_a":borrowed_artifacts(&a,parent)==artifacts_a,
+            "artifacts_unchanged_b":borrowed_artifacts(&b,parent)==artifacts_b,
+            "child_a":child_a,"child_b":child_b,"paths":paths,"child_history":child_history});
+        drop(a);
+        drop(b);
+        home_a.close().unwrap();
+        home_b.close().unwrap();
+        (result, facts)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn borrowed_writer_other_storage_same_run_refuses_before_all_fork_effects() {
+        let (result, facts) = observe_borrowed_fork(true).await;
+        assert!(
+            matches!(result, Err(EngineError::ForkInvalid(ref reason)) if reason == "parent writer belongs to another storage"),
+            "{result:?}; {facts}"
+        );
+        assert_eq!(facts["snapshots_after"], facts["snapshots_before"]);
+        assert_eq!(facts["after_a"], facts["before_a"]);
+        assert_eq!(facts["after_b"], facts["before_b"]);
+        assert_eq!(facts["child_a"], false);
+        assert_eq!(facts["child_b"], false);
+        assert_eq!(facts["paths"], serde_json::json!([false, false]));
+        assert_eq!(facts["artifacts_unchanged_a"], true);
+        assert_eq!(facts["artifacts_unchanged_b"], true);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn borrowed_writer_matching_storage_keeps_lineage_in_original_home() {
+        let (result, facts) = observe_borrowed_fork(false).await;
+        assert!(result.is_ok(), "{result:?}; {facts}");
+        assert_eq!(facts["after_b"], facts["before_b"]);
+        assert_eq!(facts["after_a"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            &facts["after_a"].as_array().unwrap()[..3],
+            facts["before_a"].as_array().unwrap()
+        );
+        assert_eq!(facts["child_a"], true);
+        assert_eq!(facts["child_b"], false);
+        assert_eq!(facts["paths"], serde_json::json!([true, false]));
+        assert_eq!(
+            facts["child_history"][0]["payload"]["initial_prompt"],
+            "home A artifact and prompt"
+        );
+        assert_eq!(facts["snapshots_after"], facts["snapshots_before"]);
+        assert_eq!(facts["child_snapshot"], facts["snapshots_before"][0]);
+        assert_eq!(facts["child_snapshot"]["cursor"]["attempt"], 11);
+        assert_eq!(
+            facts["child_artifact"],
+            serde_json::to_value(b"home A artifact and prompt".to_vec()).unwrap()
+        );
+        assert_eq!(facts["artifacts_unchanged_a"], true);
+        assert_eq!(facts["artifacts_unchanged_b"], true);
     }
 }

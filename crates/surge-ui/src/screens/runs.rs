@@ -40,6 +40,18 @@ use crate::app_state::{AppState, UiRun};
 use crate::theme;
 use crate::ui;
 
+fn continuation_label(state: surge_core::bootstrap_attempt::BootstrapAttemptState) -> &'static str {
+    use surge_core::bootstrap_attempt::BootstrapAttemptState as A;
+    match state {
+        A::Reserved => "creation pending",
+        A::ForkReady => "ready",
+        A::Running => "running",
+        A::NeedsAttention => "needs attention",
+        A::Completed => "completed",
+        A::Failed => "failed",
+    }
+}
+
 /// One stage chip in the pipeline strip.
 #[derive(Clone, Copy, PartialEq)]
 enum StageState {
@@ -507,6 +519,8 @@ pub struct RunsScreen {
     results_active_loads: std::rc::Rc<std::cell::Cell<usize>>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
+    continuation_pending: bool,
+    continuation_requests: HashMap<RunId, RunId>,
     tab: RunTab,
     recorded_target: Option<(RunId, RecordedTarget)>,
     session_pages: HashMap<RunId, usize>,
@@ -525,9 +539,15 @@ pub struct RunsScreen {
 
 /// What the Runs screen asks the app to do.
 #[derive(Clone, Debug, PartialEq)]
-pub enum RunsEvent {
+pub(crate) enum RunsEvent {
     /// Empty state: go describe an app.
     DescribeApp,
+    /// The App owns scoped status publication and successor observation.
+    BootstrapContinuationAccepted {
+        operation: RunId,
+        status: Box<surge_core::bootstrap_operation::BootstrapOperationStatus>,
+        scope: crate::run_observation::Scope,
+    },
 }
 
 impl EventEmitter<RunsEvent> for RunsScreen {}
@@ -591,6 +611,11 @@ pub(crate) fn attention_reason(
 }
 
 impl RunsScreen {
+    #[cfg(all(test, unix))]
+    pub(crate) fn continuation_pending_for_test(&self) -> bool {
+        self.continuation_pending
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
 
@@ -627,6 +652,8 @@ impl RunsScreen {
             #[cfg(test)]
             results_active_loads: Default::default(),
             action_note: None,
+            continuation_pending: false,
+            continuation_requests: HashMap::new(),
             tab: RunTab::Overview,
             recorded_target: None,
             session_pages: HashMap::new(),
@@ -1099,10 +1126,10 @@ impl RunsScreen {
     )> {
         let id = row.run_id?;
         let state = self.state.read(cx);
-        let mut matching = state
-            .bootstrap_operations
-            .values()
-            .filter(|status| [status.planning_run, status.implementation_run].contains(&id));
+        let mut matching = state.bootstrap_operations.values().filter(|status| {
+            [status.planning_run, status.implementation_run].contains(&id)
+                || status.continuations.iter().any(|attempt| attempt.run == id)
+        });
         let cached = matching.next();
         if matching.next().is_some() {
             return None;
@@ -1151,6 +1178,17 @@ impl RunsScreen {
             format!("{} elapsed", row.elapsed),
             format!("{} events", row.events),
         ];
+        if let Some((_, status)) = &bootstrap
+            && let Some(attempt) = status
+                .continuations
+                .iter()
+                .find(|attempt| Some(attempt.run) == row.run_id)
+        {
+            facts.push(format!(
+                "Continuation: {} · original operation remains failed",
+                continuation_label(attempt.state)
+            ));
+        }
         if let Some(detail) = &row.waiting_detail {
             facts.push(detail.clone());
         }
@@ -1169,6 +1207,46 @@ impl RunsScreen {
                     .text_color(theme::text_muted())
                     .child(note.clone()),
             );
+        }
+        if let Some((operation, status)) = &bootstrap
+            && status.state == surge_core::bootstrap_operation::BootstrapState::Failed
+            && let Some(source) = row.run_id
+            && source != status.planning_run
+            && (matches!(&status.result, Some(surge_core::bootstrap_continuation::BootstrapTerminal::Failed { run_id, .. }) if *run_id == source)
+                || status.continuations.iter().any(|attempt| {
+                    attempt.run == source
+                        && attempt.state
+                            == surge_core::bootstrap_attempt::BootstrapAttemptState::Failed
+                }))
+        {
+            let operation = *operation;
+            let revision = status.revision;
+            let existing = status
+                .continuations
+                .iter()
+                .find(|attempt| attempt.source_run == source);
+            if let Some(attempt) = existing {
+                let run = attempt.run;
+                actions = actions.child(
+                    Button::new("open-bootstrap-continuation")
+                        .debug_selector(|| "open-bootstrap-continuation".into())
+                        .label(format!("Successor · {}", continuation_label(attempt.state)))
+                        .small()
+                        .on_click(cx.listener(move |this, _, _, cx| this.select_run(run, cx))),
+                );
+            } else {
+                actions = actions.child(div().v_flex()
+                    .child(div().text_size(px(10.0)).child("Isolated saved checkpoint, using current project settings. Later source edits stay in the original folder."))
+                    .child(Button::new("continue-bootstrap").debug_selector(|| "continue-bootstrap".into())
+                        .label("Continue from saved checkpoint")
+                        .small()
+                        .disabled(self.continuation_pending)
+                        .accessibility_id("continue-bootstrap")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.continue_bootstrap(operation, revision, source, cx)
+                        }))),
+                );
+            }
         }
         if let Some(run_id) = row.run_id {
             actions = actions.child(
@@ -1399,6 +1477,54 @@ impl RunsScreen {
             });
         })
         .detach();
+    }
+
+    fn continue_bootstrap(
+        &mut self,
+        operation: RunId,
+        revision: u64,
+        source: RunId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.continuation_pending {
+            return;
+        }
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.action_note = Some("Daemon offline; continuation was not submitted".into());
+            cx.notify();
+            return;
+        };
+        let Some(scope) = self.state.update(cx, |state, _| state.observation_scope()) else {
+            self.action_note =
+                Some("Project observation is unavailable; continuation was not submitted".into());
+            cx.notify();
+            return;
+        };
+        let request = *self.continuation_requests.entry(source).or_default();
+        self.continuation_pending = true;
+        self.action_note = Some("Creating an isolated saved-checkpoint successor; later source edits remain in the original folder".into());
+        let state = self.state.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = facade.continue_bootstrap_implementation(operation, revision, source, request).await;
+            cx.update(|cx| { let _ = this.update(cx, |screen, cx| {
+                screen.continuation_pending = false;
+                if state.update(cx, |state, _| state.observation_scope()).as_ref() != Some(&scope) {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(status) => {
+                        let successor = status.continuations.iter().find(|attempt| attempt.continuation_id == request).map(|attempt| attempt.run);
+                        cx.emit(RunsEvent::BootstrapContinuationAccepted { operation, status: Box::new(status), scope });
+                        screen.action_note = Some("Successor reserved; inspect its actual progress. Original failed history and later source edits are retained.".into());
+                        if let Some(run) = successor { screen.select_run(run, cx); }
+                    },
+                    Err(error) => screen.action_note = Some(format!("Continuation unconfirmed: {error}. Retry uses the same request.")),
+                }
+                cx.notify();
+            }); });
+        }).detach();
+        cx.notify();
     }
 
     fn retry_bootstrap(&mut self, operation_id: RunId, revision: u64, cx: &mut Context<Self>) {
@@ -2735,3 +2861,7 @@ mod recovery_observability_tests {
         assert!(detail.contains("history"));
     }
 }
+
+#[cfg(test)]
+#[path = "runs/continuation_tests.rs"]
+mod continuation_tests;

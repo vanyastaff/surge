@@ -354,6 +354,9 @@ pub struct BootstrapOperationStatus {
     pub queue_sequence: u64,
     /// Stored payload format; future versions can be inspected but not executed.
     pub payload_version: u32,
+    /// Separately owned successors; original terminal result remains unchanged.
+    #[serde(default)]
+    pub continuations: Vec<crate::bootstrap_attempt::BootstrapAttempt>,
 }
 
 #[cfg(test)]

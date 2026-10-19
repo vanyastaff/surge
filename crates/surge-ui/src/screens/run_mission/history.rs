@@ -84,6 +84,30 @@ pub(super) async fn load_observed(
             .await
             .map_err(|error| error.to_string())?;
     let result = match &record {
+        Some(record)
+            if record
+                .status
+                .continuations
+                .iter()
+                .any(|attempt| attempt.run == request.selected) =>
+        {
+            let BootstrapStoredPayload::V1 { capture, .. } = &record.payload else {
+                return Err("Unsupported operation capture".into());
+            };
+            if !same_project(request.project.as_deref(), &capture.fields().repository).await? {
+                return Err("This continuation belongs to a different project".into());
+            }
+            let roadmap =
+                crate::roadmap_source::read_run_roadmap(&home, record.status.planning_run)
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .and_then(|text| toml::from_str(&text).ok());
+            recorded(&home, request.selected, roadmap.as_ref())
+                .await
+                .map(|mut snapshot| {
+                    snapshot.operation = Some(record.status.clone());
+                    snapshot
+                })
+        },
         Some(record) => bootstrap(&home, &request, record).await,
         None => ordinary(&home, request.selected).await,
     };
@@ -100,6 +124,13 @@ pub(super) async fn load_observed(
 }
 
 async fn ordinary(home: &Path, run: RunId) -> Result<MissionSnapshot, String> {
+    recorded(home, run, None).await
+}
+async fn recorded(
+    home: &Path,
+    run: RunId,
+    roadmap: Option<&surge_core::roadmap::RoadmapArtifact>,
+) -> Result<MissionSnapshot, String> {
     let rows = Storage::inspect_existing_run_events(home.join("runs"), run)
         .await
         .map_err(|error| error.to_string())?;
@@ -111,7 +142,7 @@ async fn ordinary(home: &Path, run: RunId) -> Result<MissionSnapshot, String> {
         .map(|row| row.to_run_event(run).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(MissionSnapshot {
-        mission: mission::fold(&[], run, &events, None).map_err(|error| error.to_string())?,
+        mission: mission::fold(&[], run, &events, roadmap).map_err(|error| error.to_string())?,
         implementation: ImplementationHistory::Ordinary,
         operation: None,
     })

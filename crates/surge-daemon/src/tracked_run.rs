@@ -132,6 +132,18 @@ impl TrackingContext {
         let handle = facade.resume_run(id, path).await?;
         Ok(TrackedRun { handle, prepared })
     }
+    /// Track a host-scoped continuation through the same durable event subscription.
+    pub async fn resume_scoped(
+        &self,
+        engine: &Engine,
+        id: RunId,
+        path: PathBuf,
+        catalog: Arc<surge_acp::Registry>,
+    ) -> Result<TrackedRun, EngineError> {
+        let prepared = self.prepare(id, true).await?;
+        let handle = engine.resume_run_scoped(id, path, catalog).await?;
+        Ok(TrackedRun { handle, prepared })
+    }
 }
 
 enum Prepared {

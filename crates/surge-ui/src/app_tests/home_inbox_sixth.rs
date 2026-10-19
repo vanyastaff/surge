@@ -66,6 +66,7 @@ fn status(
         cancel_requested: false,
         queue_sequence: 1,
         payload_version: 1,
+        continuations: Vec::new(),
     }
 }
 struct Harness {

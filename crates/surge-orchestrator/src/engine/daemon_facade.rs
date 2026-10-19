@@ -343,6 +343,27 @@ impl DaemonEngineFacade {
         .await
     }
 
+    /// Ask the durable native owner to continue a failed implementation in isolation.
+    pub async fn continue_bootstrap_implementation(
+        &self,
+        operation_id: RunId,
+        revision: u64,
+        source_run: RunId,
+        continuation_id: RunId,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        self.bootstrap_rpc(
+            |request_id| DaemonRequest::ContinueBootstrapImplementation {
+                request_id,
+                operation_id,
+                revision,
+                source_run,
+                continuation_id,
+            },
+        )
+        .await
+    }
+
     async fn bootstrap_rpc(
         &self,
         request: impl FnOnce(RequestId) -> DaemonRequest,

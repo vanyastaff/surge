@@ -6,6 +6,7 @@
 use crate::SqliteConnectionManager;
 use r2d2::Pool;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+mod attempts;
 use surge_core::bootstrap_continuation::{BootstrapContinuation, BootstrapTerminal};
 use surge_core::bootstrap_operation::{
     BOOTSTRAP_VERSION, BootstrapAttentionReason, BootstrapCapture, BootstrapInputError,
@@ -189,17 +190,19 @@ impl BootstrapOperationStore {
     /// All journal records in durable admission order, including attention and future versions.
     pub fn list(&self) -> Result<Vec<BootstrapOperationRecord>, BootstrapStoreError> {
         let connection = self.pool.get().map_err(|_| BootstrapStoreError::Pool)?;
-        let mut statement = connection
-            .prepare("SELECT operation_id FROM bootstrap_operations ORDER BY queue_sequence")?;
-        let ids = statement
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        ids.into_iter()
-            .map(|id| {
-                let id = id.parse().map_err(|_| BootstrapStoreError::CorruptRecord)?;
-                read(&connection, id)?.ok_or(BootstrapStoreError::CorruptRecord)
-            })
-            .collect()
+        with_read_snapshot(&connection, |connection| {
+            let mut statement = connection
+                .prepare("SELECT operation_id FROM bootstrap_operations ORDER BY queue_sequence")?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            ids.into_iter()
+                .map(|id| {
+                    let id = id.parse().map_err(|_| BootstrapStoreError::CorruptRecord)?;
+                    read(connection, id)?.ok_or(BootstrapStoreError::CorruptRecord)
+                })
+                .collect()
+        })
     }
 
     /// Confirm valid startup evidence for the already-claimed reserved run.
@@ -624,9 +627,22 @@ pub(super) fn read_record_for_run(
     connection: &Connection,
     run_id: RunId,
 ) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
-    let mut statement = connection.prepare(
-        "SELECT operation_id FROM bootstrap_operations WHERE planning_run=?1 OR implementation_run=?1 LIMIT 2",
-    )?;
+    with_read_snapshot(connection, |connection| {
+        read_record_for_run_in_snapshot(connection, run_id)
+    })
+}
+
+fn read_record_for_run_in_snapshot(
+    connection: &Connection,
+    run_id: RunId,
+) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
+    let has_attempts: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='bootstrap_attempts' AND type='table')", [], |row| row.get(0))?;
+    let query = if has_attempts {
+        "SELECT operation_id FROM bootstrap_operations WHERE planning_run=?1 OR implementation_run=?1 OR operation_id IN (SELECT operation_id FROM bootstrap_attempts WHERE run=?1) LIMIT 2"
+    } else {
+        "SELECT operation_id FROM bootstrap_operations WHERE planning_run=?1 OR implementation_run=?1 LIMIT 2"
+    };
+    let mut statement = connection.prepare(query)?;
     let ids = statement
         .query_map([run_id.to_string()], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -683,11 +699,40 @@ fn read_row(
     id: RunId,
     decoder: fn(&rusqlite::Row<'_>) -> rusqlite::Result<StoredRow>,
 ) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
+    with_read_snapshot(connection, |connection| {
+        read_row_in_snapshot(connection, id, decoder)
+    })
+}
+
+// Existing transactional callers retain their transaction and connection. Public
+// reads pin both the operation revision and attempt rows to one DEFERRED snapshot.
+fn with_read_snapshot<T>(
+    connection: &Connection,
+    read: impl FnOnce(&Connection) -> Result<T, BootstrapStoreError>,
+) -> Result<T, BootstrapStoreError> {
+    if !connection.is_autocommit() {
+        return read(connection);
+    }
+    let transaction = connection.unchecked_transaction()?;
+    let result = read(&transaction)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+fn read_row_in_snapshot(
+    connection: &Connection,
+    id: RunId,
+    decoder: fn(&rusqlite::Row<'_>) -> rusqlite::Result<StoredRow>,
+) -> Result<Option<BootstrapOperationRecord>, BootstrapStoreError> {
     let row = connection.query_row(
         "SELECT planning_run, implementation_run, payload_version, intent_fingerprint, capture_fingerprint, intent_json, capture_json, state_json, revision, cancel_requested, queue_sequence, child_json, result_json FROM bootstrap_operations WHERE operation_id=?",
         [id.to_string()], decoder,
     ).optional()?;
-    row.map(|row| decode(id, row)).transpose()
+    let mut record = row.map(|row| decode(id, row)).transpose()?;
+    if let Some(record) = &mut record {
+        record.status.continuations = attempts::attempts(connection, Some(id))?;
+    }
+    Ok(record)
 }
 
 fn stored_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRow> {
@@ -763,6 +808,7 @@ fn decode(id: RunId, row: StoredRow) -> Result<BootstrapOperationRecord, Bootstr
             cancel_requested: row.cancelled,
             queue_sequence: row.sequence,
             payload_version: row.version,
+            continuations: Vec::new(),
         },
         intent_fingerprint,
         capture_fingerprint,

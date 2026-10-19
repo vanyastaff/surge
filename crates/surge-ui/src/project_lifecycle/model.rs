@@ -296,7 +296,8 @@ fn append_bootstrap(
     operations.sort_by_key(|operation| std::cmp::Reverse(operation.record.status.queue_sequence));
     for operation in operations {
         let status = &operation.record.status;
-        let runs = vec![status.planning_run, status.implementation_run];
+        let mut runs = vec![status.planning_run, status.implementation_run];
+        runs.extend(status.continuations.iter().map(|attempt| attempt.run));
         associated.extend(runs.iter().copied());
         register_owner(
             &mut result.owners,
@@ -314,6 +315,16 @@ fn append_bootstrap(
                 planning: false,
             },
         );
+        for attempt in &status.continuations {
+            register_owner(
+                &mut result.owners,
+                attempt.run,
+                RunOwnership::Bootstrap {
+                    operation: status.operation_id,
+                    planning: false,
+                },
+            );
+        }
         let asked=match &operation.record.payload {
                 surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload::V1{intent,..}=>Some(intent.prompt().into()),
                 surge_persistence::runs::bootstrap_operations::BootstrapStoredPayload::Unsupported{..}=>None,

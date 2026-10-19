@@ -42,6 +42,41 @@ use surge_persistence::runs::Storage;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_continue_bootstrap_request_is_recognized_without_launch_authority() {
+    use interprocess::local_socket::tokio::prelude::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let fixture = Fixture::new().await;
+    let stream = LocalSocketStream::connect(
+        surge_orchestrator::engine::ipc::local_socket_name_from_path(&fixture.socket).unwrap(),
+    )
+    .await
+    .unwrap();
+    let (read, mut write) = stream.split();
+    let request = serde_json::json!({"method":"continue_bootstrap_implementation",
+        "request_id":871,"operation_id":RunId::new(),"revision":1,
+        "source_run":RunId::new(),"continuation_id":RunId::new()});
+    write
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut line = String::new();
+    let received = tokio::time::timeout(
+        Duration::from_secs(3),
+        BufReader::new(read).read_line(&mut line),
+    )
+    .await;
+    drop(write);
+    fixture.close().await;
+    assert!(
+        matches!(received, Ok(Ok(n)) if n > 0),
+        "native continuation must receive an explicit authority refusal, not an unknown-frame disconnect: {received:?}"
+    );
+    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(response["method"], "error");
+    assert_eq!(response["code"], "not_ready");
+}
+
 struct ParkOnce {
     sent: AtomicBool,
     events: broadcast::Sender<BridgeEvent>,
